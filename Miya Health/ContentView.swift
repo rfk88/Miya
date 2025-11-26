@@ -138,9 +138,20 @@ struct LandingView: View {
 struct SuperadminOnboardingView: View {
     @Environment(\.dismiss) private var dismiss
     
+    // Access the managers from the environment
+    @EnvironmentObject var authManager: AuthManager
+    @EnvironmentObject var onboardingManager: OnboardingManager
+    
+    // Form fields
+    @State private var firstName: String = ""
     @State private var email: String = ""
     @State private var password: String = ""
     @State private var confirmPassword: String = ""
+    
+    // Navigation and error state
+    @State private var navigateToNextStep: Bool = false
+    @State private var showError: Bool = false
+    @State private var errorMessage: String = ""
     
     private let totalSteps: Int = 8
     private let currentStep: Int = 1
@@ -150,7 +161,8 @@ struct SuperadminOnboardingView: View {
     }
     
     private var isFormValid: Bool {
-        guard !email.isEmpty,
+        guard !firstName.trimmingCharacters(in: .whitespaces).isEmpty,
+              !email.isEmpty,
               !password.isEmpty,
               !confirmPassword.isEmpty else { return false }
         guard password.count >= 8 else { return false }
@@ -170,7 +182,7 @@ struct SuperadminOnboardingView: View {
                 
                 // Title + subtitle
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Secure your family’s health hub")
+                    Text("Secure your family's health hub")
                         .font(.system(size: 24, weight: .bold))
                         .foregroundColor(.miyaTextPrimary)
                         .multilineTextAlignment(.leading)
@@ -184,6 +196,25 @@ struct SuperadminOnboardingView: View {
                 
                 // Form
                 VStack(spacing: 16) {
+                    // First Name
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Your first name")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.miyaTextPrimary)
+                        
+                        TextField("e.g., Sarah", text: $firstName)
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled(true)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(Color.white)
+                            .cornerRadius(12)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1)
+                            )
+                    }
+                    
                     // Email
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Email address")
@@ -242,7 +273,7 @@ struct SuperadminOnboardingView: View {
                                 Image(systemName: passwordsMatch ? "checkmark.circle.fill" : "xmark.octagon.fill")
                                     .font(.system(size: 12, weight: .bold))
                                 
-                                Text(passwordsMatch ? "Passwords match" : "Passwords don’t match")
+                                Text(passwordsMatch ? "Passwords match" : "Passwords don't match")
                                     .font(.system(size: 12, weight: .medium))
                             }
                             .padding(.horizontal, 10)
@@ -258,6 +289,17 @@ struct SuperadminOnboardingView: View {
                 }
                 
                 Spacer()
+                
+                // Error message (if any)
+                if showError {
+                    Text(errorMessage)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.red)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(8)
+                }
                 
                 // Buttons
                 HStack(spacing: 12) {
@@ -275,23 +317,102 @@ struct SuperadminOnboardingView: View {
                                     .stroke(Color.miyaBackground, lineWidth: 1)
                             )
                     }
+                    .disabled(authManager.isLoading)
 
-                    NavigationLink {
-                        FamilySetupView()
+                    Button {
+                        print("🟢 Continue button tapped!")
+                        print("🟢 isFormValid: \(isFormValid)")
+                        print("🟢 isLoading: \(authManager.isLoading)")
+                        Task {
+                            await signUp()
+                        }
                     } label: {
-                        Text("Continue")
-                            .font(.system(size: 16, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(isFormValid ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
-                            .foregroundColor(.white)
-                            .cornerRadius(16)
+                        HStack(spacing: 8) {
+                            if authManager.isLoading {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.8)
+                            }
+                            Text(authManager.isLoading ? "Creating account..." : "Continue")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(isFormValid && !authManager.isLoading ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
+                        .foregroundColor(.white)
+                        .cornerRadius(16)
                     }
-                    .disabled(!isFormValid)
+                    .disabled(!isFormValid || authManager.isLoading)
                 }
                 .padding(.bottom, 16)
+                
+                // Hidden NavigationLink for programmatic navigation
+                NavigationLink(
+                    destination: FamilySetupView(),
+                    isActive: $navigateToNextStep
+                ) {
+                    EmptyView()
+                }
+                .hidden()
             }
             .padding(.horizontal, 24)
+        }
+        .alert("Error", isPresented: $showError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(errorMessage)
+        }
+        .onAppear {
+            print("📱 SuperadminOnboardingView appeared")
+            print("📱 isFormValid: \(isFormValid)")
+        }
+        .onChange(of: firstName) { _ in
+            print("📝 Form valid: \(isFormValid), firstName: '\(firstName)', email: '\(email)', password length: \(password.count)")
+        }
+        .onChange(of: email) { _ in
+            print("📝 Form valid: \(isFormValid)")
+        }
+        .onChange(of: password) { _ in
+            print("📝 Form valid: \(isFormValid), password length: \(password.count), passwords match: \(passwordsMatch)")
+        }
+    }
+    
+    // MARK: - Sign Up Function
+    
+    private func signUp() async {
+        print("🔵 signUp() called")
+        print("📧 Email: \(email)")
+        print("👤 First Name: \(firstName)")
+        
+        showError = false
+        
+        do {
+            print("🔄 Calling authManager.signUp()...")
+            
+            // Call the AuthManager to create the account
+            let userId = try await authManager.signUp(
+                email: email,
+                password: password,
+                firstName: firstName
+            )
+            
+            print("✅ Sign up successful! User ID: \(userId)")
+            
+            // Store the data in OnboardingManager for later steps
+            onboardingManager.firstName = firstName
+            onboardingManager.email = email
+            onboardingManager.password = password
+            onboardingManager.currentUserId = userId
+            
+            // Navigate to the next step
+            navigateToNextStep = true
+            
+        } catch {
+            // Show error to user
+            print("❌ Sign up error: \(error)")
+            print("❌ Error description: \(error.localizedDescription)")
+            errorMessage = error.localizedDescription
+            showError = true
         }
     }
 }
@@ -299,6 +420,8 @@ struct SuperadminOnboardingView: View {
 #Preview {
     NavigationStack {
         SuperadminOnboardingView()
+            .environmentObject(AuthManager())
+            .environmentObject(OnboardingManager())
     }
 }
 
