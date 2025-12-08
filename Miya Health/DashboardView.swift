@@ -21,7 +21,7 @@ struct VitalityFactor: Identifiable {
     let actionPlan: [String]      // List of recommended actions
     let memberScores: [FamilyMemberScore]  // Individual scores for each family member
 }
-// MARK: - SLEEP CHALLENGE UI MODEL
+// MARK: - CHALLENGE UI MODELS
 
 struct SleepChallengeUIModel: Identifiable {
     struct Participant: Identifiable {
@@ -40,6 +40,116 @@ struct SleepChallengeUIModel: Identifiable {
     let currentDay: Int         // 1-based, e.g. 5 means day 5 of 14
     let participants: [Participant]
 
+    var totalWeeks: Int {
+        Int(ceil(Double(totalDays) / 7.0))
+    }
+}
+
+struct StepsChallengeUIModel: Identifiable {
+    struct Participant: Identifiable {
+        let id = UUID()
+        let name: String
+        let dailySteps: [Int]   // Steps per day
+        
+        var totalSteps: Int {
+            dailySteps.reduce(0, +)
+        }
+    }
+    
+    let id = UUID()
+    let title: String
+    let totalDays: Int
+    let currentDay: Int
+    let participants: [Participant]
+    
+    var totalWeeks: Int {
+        Int(ceil(Double(totalDays) / 7.0))
+    }
+}
+
+struct HydrationChallengeUIModel: Identifiable {
+    struct Participant: Identifiable {
+        let id = UUID()
+        let name: String
+        let dailyHits: [Bool]   // Did they hit goal each day?
+        
+        var totalHits: Int {
+            dailyHits.filter { $0 }.count
+        }
+    }
+    
+    let id = UUID()
+    let title: String
+    let totalDays: Int
+    let currentDay: Int
+    let participants: [Participant]
+    
+    var totalWeeks: Int {
+        Int(ceil(Double(totalDays) / 7.0))
+    }
+}
+
+struct MovementChallengeUIModel: Identifiable {
+    struct Participant: Identifiable {
+        let id = UUID()
+        let name: String
+        let dailyMinutes: [Int]   // Active minutes per day
+        
+        var totalMinutes: Int {
+            dailyMinutes.reduce(0, +)
+        }
+    }
+    
+    let id = UUID()
+    let title: String
+    let totalDays: Int
+    let currentDay: Int
+    let participants: [Participant]
+    
+    var totalWeeks: Int {
+        Int(ceil(Double(totalDays) / 7.0))
+    }
+}
+
+struct MeditationChallengeUIModel: Identifiable {
+    struct Participant: Identifiable {
+        let id = UUID()
+        let name: String
+        let dailyHits: [Bool]   // Did they meditate each day?
+        
+        var totalHits: Int {
+            dailyHits.filter { $0 }.count
+        }
+    }
+    
+    let id = UUID()
+    let title: String
+    let totalDays: Int
+    let currentDay: Int
+    let participants: [Participant]
+    
+    var totalWeeks: Int {
+        Int(ceil(Double(totalDays) / 7.0))
+    }
+}
+
+struct NutritionChallengeUIModel: Identifiable {
+    struct Participant: Identifiable {
+        let id = UUID()
+        let name: String
+        let dailyHits: [Bool]   // Hit nutrition goal each day?
+        
+        var totalHits: Int {
+            dailyHits.filter { $0 }.count
+        }
+    }
+    
+    let id = UUID()
+    let title: String
+    let totalDays: Int
+    let currentDay: Int
+    let participants: [Participant]
+    
     var totalWeeks: Int {
         Int(ceil(Double(totalDays) / 7.0))
     }
