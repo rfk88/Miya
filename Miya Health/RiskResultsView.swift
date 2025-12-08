@@ -399,10 +399,19 @@ struct RiskResultsView: View {
                 .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
                 
                 // Continue button
+                // Invited users skip family member invite step
                 NavigationLink {
-                    FamilyMembersInviteView()
-                        .environmentObject(onboardingManager)
-                        .environmentObject(dataManager)
+                    if onboardingManager.isInvitedUser {
+                        // Invited users go directly to Alerts & Champion
+                        AlertsChampionView()
+                            .environmentObject(onboardingManager)
+                            .environmentObject(dataManager)
+                    } else {
+                        // Superadmin can invite family members
+                        FamilyMembersInviteView()
+                            .environmentObject(onboardingManager)
+                            .environmentObject(dataManager)
+                    }
                 } label: {
                     Text("Continue")
                         .font(.headline)
