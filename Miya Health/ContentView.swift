@@ -2972,7 +2972,7 @@ struct SelectableConditionRow: View {
     }
 }
 
-// MARK: - STEP 7: ALERTS & CHAMPION (WHO Risk)
+// MARK: - STEP 8: PRIVACY & ALERTS PREVIEW
 
 struct AlertsChampionView: View {
     @Environment(\.dismiss) private var dismiss
@@ -2980,30 +2980,8 @@ struct AlertsChampionView: View {
     @EnvironmentObject var onboardingManager: OnboardingManager
     
     private let totalSteps: Int = 8
-    private let currentStep: Int = 8  // Final step after family members
+    private let currentStep: Int = 8  // Final step
     
-    // Champion settings
-    @State private var championEnabled: Bool = false
-    @State private var championName: String = ""
-    @State private var championEmail: String = ""
-    @State private var championPhone: String = ""
-    
-    // User notification preferences
-    @State private var notifyInApp: Bool = true
-    @State private var notifyPush: Bool = false
-    @State private var notifyEmail: Bool = false
-    
-    // Champion notification preferences
-    @State private var championNotifyEmail: Bool = true
-    @State private var championNotifySms: Bool = false
-    
-    // Quiet hours
-    @State private var quietHoursStart: Date = Calendar.current.date(from: DateComponents(hour: 22, minute: 0)) ?? Date()
-    @State private var quietHoursEnd: Date = Calendar.current.date(from: DateComponents(hour: 7, minute: 0)) ?? Date()
-    @State private var quietHoursApplyCritical: Bool = false
-    
-    @State private var showError: Bool = false
-    @State private var errorMessage: String = ""
     @State private var navigateToNextStep: Bool = false
     
     var body: some View {
@@ -3017,11 +2995,11 @@ struct AlertsChampionView: View {
                 
                 // Title + subtitle
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Alerts & Champion")
+                    Text("Privacy & Alerts")
                         .font(.system(size: 24, weight: .bold))
                         .foregroundColor(.miyaTextPrimary)
                     
-                    Text("Set up how you and your health champion receive alerts.")
+                    Text("You'll have full control over your health data once your family joins.")
                         .font(.system(size: 15))
                         .foregroundColor(.miyaTextSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -3029,131 +3007,102 @@ struct AlertsChampionView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 20) {
                         
-                        // How Miya Alerts Work
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("How Miya Alerts Work")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.miyaTextPrimary)
+                        // Control What They See
+                        PrivacyFeatureCard(
+                            icon: "eye.circle.fill",
+                            iconColor: .blue,
+                            title: "Control What They See",
+                            description: "Choose which family members can view your vitality scores, sleep patterns, stress levels, and medical data."
+                        )
+                        
+                        // Choose Your Champion
+                        PrivacyFeatureCard(
+                            icon: "heart.circle.fill",
+                            iconColor: .red,
+                            title: "Choose Your Champion",
+                            description: "Select one trusted family member who always sees your data and receives critical alerts on your behalf."
+                        )
+                        
+                        // Smart Alert Timing
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "bell.circle.fill")
+                                    .font(.system(size: 32))
+                                    .foregroundColor(.orange)
+                                
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Smart Alert Timing")
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .foregroundColor(.miyaTextPrimary)
+                                    
+                                    Text("Decide who gets notified and when")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(.miyaTextSecondary)
+                                }
+                            }
                             
-                            VStack(alignment: .leading, spacing: 6) {
-                                AlertExplanationRow(days: "7", description: "Gentle reminder just for you")
-                                AlertExplanationRow(days: "14", description: "Stronger nudge, optional family alert")
-                                AlertExplanationRow(days: "21", description: "Critical alert to you and your champion")
+                            VStack(alignment: .leading, spacing: 8) {
+                                AlertTimingRow(
+                                    day: "7",
+                                    severity: "Gentle",
+                                    description: "Private reminder just for you",
+                                    color: .green
+                                )
+                                
+                                AlertTimingRow(
+                                    day: "14",
+                                    severity: "Moderate",
+                                    description: "Choose who to notify from your family",
+                                    color: .orange
+                                )
+                                
+                                AlertTimingRow(
+                                    day: "21",
+                                    severity: "Critical",
+                                    description: "Alert you and your champion",
+                                    color: .red
+                                )
                             }
                             .padding(12)
-                            .background(Color.miyaPrimary.opacity(0.05))
+                            .background(Color.white)
                             .cornerRadius(12)
                         }
+                        .padding(16)
+                        .background(Color.miyaPrimary.opacity(0.05))
+                        .cornerRadius(16)
                         
-                        // Your Notifications
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Your Notifications")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.miyaTextPrimary)
-                            
-                            NotificationToggleRow(title: "In-App Notifications", isOn: $notifyInApp)
-                            NotificationToggleRow(title: "Push Notifications", isOn: $notifyPush)
-                            NotificationToggleRow(title: "Email Notifications", isOn: $notifyEmail)
-                        }
+                        // Per-Metric Privacy
+                        PrivacyFeatureCard(
+                            icon: "slider.horizontal.3",
+                            iconColor: .purple,
+                            title: "Customize Per Metric",
+                            description: "Set different privacy rules for sleep, movement, stress, and medical data. For example: hide stress from parents but share with your partner."
+                        )
                         
-                        // Health Champion Section
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("Health Champion")
-                                    .font(.system(size: 15, weight: .semibold))
+                        // Info Banner
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "info.circle.fill")
+                                    .foregroundColor(.miyaPrimary)
+                                Text("Configure Later")
+                                    .font(.system(size: 14, weight: .semibold))
                                     .foregroundColor(.miyaTextPrimary)
-                                
-                                Spacer()
-                                
-                                Toggle("", isOn: $championEnabled)
-                                    .labelsHidden()
-                                    .tint(.miyaPrimary)
                             }
                             
-                            Text("Your champion receives alerts when patterns need attention.")
+                            Text("You can set up these preferences from your dashboard once family members accept your invites.")
                                 .font(.system(size: 13))
                                 .foregroundColor(.miyaTextSecondary)
-                            
-                            if championEnabled {
-                                VStack(spacing: 12) {
-                                    TextField("Champion's Name", text: $championName)
-                                        .textFieldStyle(MiyaTextFieldStyle())
-                                    
-                                    TextField("Email", text: $championEmail)
-                                        .textFieldStyle(MiyaTextFieldStyle())
-                                        .keyboardType(.emailAddress)
-                                        .textContentType(.emailAddress)
-                                        .autocapitalization(.none)
-                                    
-                                    TextField("Phone (optional)", text: $championPhone)
-                                        .textFieldStyle(MiyaTextFieldStyle())
-                                        .keyboardType(.phonePad)
-                                        .textContentType(.telephoneNumber)
-                                    
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        Text("Champion receives alerts via:")
-                                            .font(.system(size: 13))
-                                            .foregroundColor(.miyaTextSecondary)
-                                        
-                                        NotificationToggleRow(title: "Email", isOn: $championNotifyEmail)
-                                        NotificationToggleRow(title: "SMS", isOn: $championNotifySms)
-                                    }
-                                }
-                                .padding(.top, 8)
-                            }
                         }
-                        
-                        // Quiet Hours
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Quiet Hours")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.miyaTextPrimary)
-                            
-                            Text("Non-urgent alerts are silenced during these hours.")
-                                .font(.system(size: 13))
-                                .foregroundColor(.miyaTextSecondary)
-                            
-                            HStack(spacing: 16) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("From")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.miyaTextSecondary)
-                                    DatePicker("", selection: $quietHoursStart, displayedComponents: .hourAndMinute)
-                                        .labelsHidden()
-                                }
-                                
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Until")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.miyaTextSecondary)
-                                    DatePicker("", selection: $quietHoursEnd, displayedComponents: .hourAndMinute)
-                                        .labelsHidden()
-                                }
-                                
-                                Spacer()
-                            }
-                            
-                            Toggle("Apply to critical alerts too", isOn: $quietHoursApplyCritical)
-                                .font(.system(size: 14))
-                                .foregroundColor(.miyaTextPrimary)
-                                .tint(.miyaPrimary)
-                        }
+                        .padding(12)
+                        .background(Color.miyaPrimary.opacity(0.1))
+                        .cornerRadius(12)
                     }
                     .padding(.vertical, 4)
                 }
                 
-                // Error message
-                if showError {
-                    Text(errorMessage)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.red)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(8)
-                }
+                Spacer()
                 
                 // Buttons
                 HStack(spacing: 12) {
@@ -3171,29 +3120,18 @@ struct AlertsChampionView: View {
                                     .stroke(Color.miyaBackground, lineWidth: 1)
                             )
                     }
-                    .disabled(dataManager.isLoading)
                     
                     Button {
-                        Task {
-                            await saveAlertSettings()
-                        }
+                        navigateToNextStep = true
                     } label: {
-                        HStack(spacing: 8) {
-                            if dataManager.isLoading {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.8)
-                            }
-                            Text(dataManager.isLoading ? "Saving..." : "Continue")
+                        Text("Finish Setup")
                             .font(.system(size: 16, weight: .semibold))
-                        }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                        .background(!dataManager.isLoading ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
+                            .background(Color.miyaPrimary)
                             .foregroundColor(.white)
                             .cornerRadius(16)
                     }
-                    .disabled(dataManager.isLoading)
                 }
                 .padding(.bottom, 16)
                 
@@ -3210,34 +3148,10 @@ struct AlertsChampionView: View {
             }
             .padding(.horizontal, 24)
         }
-        .alert("Error", isPresented: $showError) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(errorMessage)
-        }
         .onAppear {
-            // Step 8: Alerts & Champion (Final Step)
+            // Step 8: Privacy & Alerts Preview (Final Step)
             onboardingManager.setCurrentStep(8)
         }
-    }
-    
-    private func saveAlertSettings() async {
-        // Save to OnboardingManager
-        onboardingManager.championEnabled = championEnabled
-        onboardingManager.championName = championName
-        onboardingManager.championEmail = championEmail
-        onboardingManager.championPhone = championPhone
-        onboardingManager.notifyInApp = notifyInApp
-        onboardingManager.notifyPush = notifyPush
-        onboardingManager.notifyEmail = notifyEmail
-        onboardingManager.championNotifyEmail = championNotifyEmail
-        onboardingManager.championNotifySms = championNotifySms
-        onboardingManager.quietHoursStart = quietHoursStart
-        onboardingManager.quietHoursEnd = quietHoursEnd
-        onboardingManager.quietHoursApplyCritical = quietHoursApplyCritical
-        
-        // Navigate to completion
-        navigateToNextStep = true
     }
 }
 
@@ -3285,6 +3199,73 @@ struct NotificationToggleRow: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.gray.opacity(0.2), lineWidth: 1)
         )
+    }
+}
+
+// Helper Views for Privacy & Alerts Preview
+
+struct PrivacyFeatureCard: View {
+    let icon: String
+    let iconColor: Color
+    let title: String
+    let description: String
+    
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 32))
+                .foregroundColor(iconColor)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.miyaTextPrimary)
+                
+                Text(description)
+                    .font(.system(size: 14))
+                    .foregroundColor(.miyaTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
+        .cornerRadius(16)
+        .shadow(color: .black.opacity(0.03), radius: 8, x: 0, y: 2)
+    }
+}
+
+struct AlertTimingRow: View {
+    let day: String
+    let severity: String
+    let description: String
+    let color: Color
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(spacing: 2) {
+                Text("Day")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.miyaTextSecondary)
+                Text(day)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(color)
+            }
+            .frame(width: 40)
+            
+            Rectangle()
+                .fill(color.opacity(0.3))
+                .frame(width: 2)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(severity)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.miyaTextPrimary)
+                Text(description)
+                    .font(.system(size: 12))
+                    .foregroundColor(.miyaTextSecondary)
+            }
+        }
     }
 }
 
