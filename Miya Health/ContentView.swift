@@ -5358,8 +5358,11 @@ struct GuidedHealthDataEntryFlow: View {
 struct OnboardingCompleteView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var onboardingManager: OnboardingManager
+    @EnvironmentObject var dataManager: DataManager
     
     let membersCount: Int
+    
+    @State private var navigateToDashboard: Bool = false
     
     var body: some View {
         ZStack {
@@ -5367,7 +5370,7 @@ struct OnboardingCompleteView: View {
             
             VStack(spacing: 24) {
                 VStack(spacing: 8) {
-                    Text("You’re all set!")
+                    Text("You're all set!")
                         .font(.system(size: 28, weight: .bold))
                         .foregroundColor(.miyaTextPrimary)
                     
@@ -5383,7 +5386,7 @@ struct OnboardingCompleteView: View {
                 VStack(spacing: 12) {
                     SummaryRow(
                         title: "Family created",
-                        value: "Your family" // TODO: replace with real family name
+                        value: onboardingManager.familyName.isEmpty ? "Your family" : onboardingManager.familyName
                     )
                     
                     SummaryRow(
@@ -5400,7 +5403,7 @@ struct OnboardingCompleteView: View {
                 
                 // What's next
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("What’s next?")
+                    Text("What's next?")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundColor(.miyaTextPrimary)
                     
@@ -5425,7 +5428,7 @@ struct OnboardingCompleteView: View {
                 // Buttons
                 VStack(spacing: 10) {
                     Button {
-                        print("Launch dashboard tapped")
+                        navigateToDashboard = true
                     } label: {
                         Text("Launch my dashboard")
                             .font(.system(size: 16, weight: .semibold))
@@ -5447,6 +5450,15 @@ struct OnboardingCompleteView: View {
                 .padding(.horizontal, 24)
                 .padding(.bottom, 24)
             }
+            
+            // Navigation to Dashboard
+            NavigationLink(
+                destination: DashboardView(familyName: onboardingManager.familyName.isEmpty ? "Miya" : onboardingManager.familyName),
+                isActive: $navigateToDashboard
+            ) {
+                EmptyView()
+            }
+            .hidden()
         }
         .onAppear {
             // Mark onboarding as complete

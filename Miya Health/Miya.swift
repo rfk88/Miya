@@ -11,6 +11,9 @@ extension Color {
     // Primary brand color - Teal
     static let miyaPrimary = Color(red: 0/255, green: 155/255, blue: 138/255)   // #009B8A
     
+    // Emerald color - Used for dashboard top bar
+    static let miyaEmerald = Color(red: 0/255, green: 155/255, blue: 138/255)   // #009B8A (same as primary)
+    
     // Secondary accent color - Warm gold
     static let miyaSecondary = Color(red: 248/255, green: 207/255, blue: 146/255)
     
