@@ -20,12 +20,17 @@ CREATE TABLE families (
     -- Family name (e.g., "The Johnson Family")
     name TEXT NOT NULL,
     
-    -- Family size - MUST match Swift enum FamilySizeOption.rawValue exactly:
+    -- Family size tier - MUST match Swift enum FamilySizeOption.rawValue exactly:
     -- Valid values: 'twoToFour', 'fourToEight', 'ninePlus'
     size_category TEXT NOT NULL CHECK (size_category IN ('twoToFour', 'fourToEight', 'ninePlus')),
     
+    -- Maximum members allowed (for subscription/pricing logic)
+    -- twoToFour = 4, fourToEight = 8, ninePlus = 15 (capped)
+    max_members INTEGER CHECK (max_members >= 2 AND max_members <= 15),
+    
     -- The user who created this family (superadmin)
-    created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    -- UNIQUE constraint ensures one family per user
+    created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL UNIQUE,
     
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -106,8 +111,8 @@ CREATE TABLE user_profiles (
     date_of_birth DATE,
     
     -- Ethnicity - MUST match Swift enum Ethnicity.rawValue:
-    -- Valid values: 'White', 'Black', 'Asian', 'Hispanic', 'Other'
-    ethnicity TEXT CHECK (ethnicity IN ('White', 'Black', 'Asian', 'Hispanic', 'Other')),
+    -- Valid values: 'White', 'Asian', 'Black', 'Hispanic', 'Other'
+    ethnicity TEXT CHECK (ethnicity IN ('White', 'Asian', 'Black', 'Hispanic', 'Other')),
     
     -- Smoking status - MUST match Swift enum SmokingStatus.rawValue:
     -- Valid values: 'Never', 'Former', 'Current'
@@ -142,21 +147,37 @@ CREATE TABLE health_conditions (
     -- Links to the user account
     user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
     
-    -- The type of condition
-    -- From Step 5 (Heart Health):
-    --   'hypertension', 'diabetes', 'cholesterol', 'prior_heart_stroke'
-    -- From Step 6 (Medical History):
-    --   'ckd', 'atrial_fibrillation', 'family_history_heart'
+    -- The type of condition - EXACT types for accurate WHO risk scoring
+    -- Blood Pressure Status:
+    --   'bp_normal', 'bp_elevated_untreated', 'bp_elevated_treated', 'bp_unknown'
+    -- Diabetes Status:
+    --   'diabetes_none', 'diabetes_pre_diabetic', 'diabetes_type_1', 'diabetes_type_2', 'diabetes_unknown'
+    -- Prior Cardiovascular Events:
+    --   'prior_heart_attack', 'prior_stroke'
+    -- Family History:
+    --   'family_history_heart_early', 'family_history_stroke_early', 'family_history_type2_diabetes'
     -- Special:
     --   'heart_health_unsure', 'medical_history_unsure'
     condition_type TEXT NOT NULL CHECK (condition_type IN (
-        'hypertension',
-        'diabetes', 
-        'cholesterol',
-        'prior_heart_stroke',
-        'ckd',
-        'atrial_fibrillation',
-        'family_history_heart',
+        -- Blood Pressure
+        'bp_normal',
+        'bp_elevated_untreated',
+        'bp_elevated_treated',
+        'bp_unknown',
+        -- Diabetes
+        'diabetes_none',
+        'diabetes_pre_diabetic',
+        'diabetes_type_1',
+        'diabetes_type_2',
+        'diabetes_unknown',
+        -- Prior Events
+        'prior_heart_attack',
+        'prior_stroke',
+        -- Family History
+        'family_history_heart_early',
+        'family_history_stroke_early',
+        'family_history_type2_diabetes',
+        -- Unsure
         'heart_health_unsure',
         'medical_history_unsure'
     )),

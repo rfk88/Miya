@@ -6,37 +6,22 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		696F9C442EE0992500626717 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = 696F9C432EE0992500626717 /* Auth */; };
+		696F9C462EE0992500626717 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = 696F9C452EE0992500626717 /* Functions */; };
+		696F9C482EE0992500626717 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = 696F9C472EE0992500626717 /* PostgREST */; };
+		696F9C4A2EE0992500626717 /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 696F9C492EE0992500626717 /* Realtime */; };
+		696F9C4C2EE0992500626717 /* Storage in Frameworks */ = {isa = PBXBuildFile; productRef = 696F9C4B2EE0992500626717 /* Storage */; };
+		696F9C4E2EE0992500626717 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 696F9C4D2EE0992500626717 /* Supabase */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		366E9A332ED07BE4001C6CA1 /* Miya Health.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Miya Health.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		366E9A432ED08B4C001C6CA1 /* Exceptions for "Miya Health" folder in "Miya Health" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				FamilySetupView,
-			);
-			target = 366E9A322ED07BE3001C6CA1 /* Miya Health */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
-/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
-		366E9A442ED08B4C001C6CA1 /* Exceptions for "Miya Health" folder in "Compile Sources" phase from "Miya Health" target */ = {
-			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
-			buildPhase = 366E9A2F2ED07BE3001C6CA1 /* Sources */;
-			membershipExceptions = (
-				FamilySetupView,
-			);
-		};
-/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		366E9A352ED07BE4001C6CA1 /* Miya Health */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				366E9A432ED08B4C001C6CA1 /* Exceptions for "Miya Health" folder in "Miya Health" target */,
-				366E9A442ED08B4C001C6CA1 /* Exceptions for "Miya Health" folder in "Compile Sources" phase from "Miya Health" target */,
-			);
 			path = "Miya Health";
 			sourceTree = "<group>";
 		};
@@ -47,6 +32,12 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				696F9C482EE0992500626717 /* PostgREST in Frameworks */,
+				696F9C462EE0992500626717 /* Functions in Frameworks */,
+				696F9C4E2EE0992500626717 /* Supabase in Frameworks */,
+				696F9C442EE0992500626717 /* Auth in Frameworks */,
+				696F9C4C2EE0992500626717 /* Storage in Frameworks */,
+				696F9C4A2EE0992500626717 /* Realtime in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -89,6 +80,12 @@
 			);
 			name = "Miya Health";
 			packageProductDependencies = (
+				696F9C432EE0992500626717 /* Auth */,
+				696F9C452EE0992500626717 /* Functions */,
+				696F9C472EE0992500626717 /* PostgREST */,
+				696F9C492EE0992500626717 /* Realtime */,
+				696F9C4B2EE0992500626717 /* Storage */,
+				696F9C4D2EE0992500626717 /* Supabase */,
 			);
 			productName = "Miya Health";
 			productReference = 366E9A332ED07BE4001C6CA1 /* Miya Health.app */;
@@ -118,6 +115,9 @@
 			);
 			mainGroup = 366E9A2A2ED07BE3001C6CA1;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				696F9C422EE0992500626717 /* XCRemoteSwiftPackageReference "supabase-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 366E9A342ED07BE4001C6CA1 /* Products */;
 			projectDirPath = "";
@@ -362,6 +362,50 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		696F9C422EE0992500626717 /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/supabase/supabase-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.5.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		696F9C432EE0992500626717 /* Auth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 696F9C422EE0992500626717 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Auth;
+		};
+		696F9C452EE0992500626717 /* Functions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 696F9C422EE0992500626717 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Functions;
+		};
+		696F9C472EE0992500626717 /* PostgREST */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 696F9C422EE0992500626717 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = PostgREST;
+		};
+		696F9C492EE0992500626717 /* Realtime */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 696F9C422EE0992500626717 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Realtime;
+		};
+		696F9C4B2EE0992500626717 /* Storage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 696F9C422EE0992500626717 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Storage;
+		};
+		696F9C4D2EE0992500626717 /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 696F9C422EE0992500626717 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 366E9A2B2ED07BE3001C6CA1 /* Project object */;
 }

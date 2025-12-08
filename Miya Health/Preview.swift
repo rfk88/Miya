@@ -1,6 +1,15 @@
-// DashboardView+Preview.swift
+//
+//  Preview.swift
+//  Miya Health
+//
+//  Preview providers for SwiftUI canvas.
+//
+
 import SwiftUI
 
 #Preview {
-    DashboardView(familyName: "The Kempton")
+    ContentView()
+        .environmentObject(AuthManager())
+        .environmentObject(DataManager())
+        .environmentObject(OnboardingManager())
 }

@@ -17,6 +17,12 @@ struct Miya_HealthApp: App {
     @StateObject private var dataManager = DataManager()
     @StateObject private var onboardingManager = OnboardingManager()
     
+    init() {
+        // Set up the dataManager reference in onboardingManager
+        // This allows onboardingManager to save to database when step changes
+        _onboardingManager.wrappedValue.dataManager = _dataManager.wrappedValue
+    }
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -24,6 +30,22 @@ struct Miya_HealthApp: App {
                 .environmentObject(authManager)
                 .environmentObject(dataManager)
                 .environmentObject(onboardingManager)
+                .task {
+                    // Restore persisted state first (fast, from UserDefaults)
+                    dataManager.restorePersistedState()
+                    
+                    // Restore user session on app launch
+                    await authManager.restoreSession()
+                    
+                    // If user is authenticated, fetch their family data (source of truth from DB)
+                    if authManager.isAuthenticated {
+                        do {
+                            try await dataManager.fetchFamilyData()
+                        } catch {
+                            print("⚠️ Failed to fetch family data: \(error.localizedDescription)")
+                        }
+                    }
+                }
         }
     }
 }
