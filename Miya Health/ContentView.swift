@@ -3889,6 +3889,7 @@ struct FamilyMembersInviteView: View {
             Text(errorMessage)
         }
         .onAppear {
+            onboardingManager.setCurrentStep(7)
             Task {
                 await loadExistingInvites()
             }
@@ -3961,15 +3962,26 @@ struct FamilyMembersInviteView: View {
     }
     
     private func loadExistingInvites() async {
-        guard let familyId = dataManager.currentFamilyId else { return }
+        guard let familyId = dataManager.currentFamilyId else {
+            print("⚠️ FamilyMembersInviteView: currentFamilyId is nil, cannot load existing invites")
+            return
+        }
+        
+        print("📥 FamilyMembersInviteView: Loading existing invites for family \(familyId)")
+        
         do {
             let records = try await dataManager.fetchPendingFamilyInvites(familyId: familyId)
+            print("✅ FamilyMembersInviteView: Fetched \(records.count) pending invites")
+            
             let mapped: [InvitedMember] = records.compactMap { rec in
                 guard let relStr = rec.relationship,
                       let rel = MemberRelationship(rawValue: relStr),
                       let onboardingStr = rec.onboardingType,
                       let onboarding = MemberOnboardingType(rawValue: onboardingStr),
-                      let code = rec.inviteCode else { return nil }
+                      let code = rec.inviteCode else {
+                    print("⚠️ FamilyMembersInviteView: Skipping record \(rec.id) - missing data")
+                    return nil
+                }
                 return InvitedMember(
                     firstName: rec.firstName,
                     relationship: rel,
@@ -3977,11 +3989,13 @@ struct FamilyMembersInviteView: View {
                     inviteCode: code
                 )
             }
+            
             await MainActor.run {
                 invitedMembers = mapped
+                print("✅ FamilyMembersInviteView: Displaying \(invitedMembers.count) invited members")
             }
         } catch {
-            print("⚠️ Failed to load existing invites: \(error.localizedDescription)")
+            print("❌ FamilyMembersInviteView: Failed to load existing invites: \(error.localizedDescription)")
         }
     }
     
