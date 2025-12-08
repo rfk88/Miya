@@ -1473,6 +1473,8 @@ struct WearableSelectionView: View {
                         // Guided Setup: After wearables, they're done! (Navigate to completion)
                         NavigationLink {
                             OnboardingCompleteView(membersCount: 0) // They're joining, not inviting
+                                .environmentObject(onboardingManager)
+                                .environmentObject(dataManager)
                         } label: {
                             Text("Complete Setup")
                                 .font(.system(size: 16, weight: .semibold))
@@ -3197,7 +3199,9 @@ struct AlertsChampionView: View {
                 
                 // Hidden NavigationLink - goes to Onboarding Complete
                 NavigationLink(
-                    destination: OnboardingCompleteView(membersCount: onboardingManager.invitedMembers.count),
+                    destination: OnboardingCompleteView(membersCount: onboardingManager.invitedMembers.count)
+                        .environmentObject(onboardingManager)
+                        .environmentObject(dataManager),
                     isActive: $navigateToNextStep
                 ) {
                     EmptyView()
@@ -3212,8 +3216,8 @@ struct AlertsChampionView: View {
             Text(errorMessage)
         }
         .onAppear {
-            // Step 7: Family Members / Invites
-            onboardingManager.setCurrentStep(7)
+            // Step 8: Alerts & Champion (Final Step)
+            onboardingManager.setCurrentStep(8)
         }
     }
     
@@ -5372,6 +5376,7 @@ struct GuidedHealthDataEntryFlow: View {
 
 struct OnboardingCompleteView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var onboardingManager: OnboardingManager
     
     let membersCount: Int
     
@@ -5461,6 +5466,11 @@ struct OnboardingCompleteView: View {
                 .padding(.horizontal, 24)
                 .padding(.bottom, 24)
             }
+        }
+        .onAppear {
+            // Mark onboarding as complete
+            onboardingManager.completeOnboarding()
+            print("✅ OnboardingCompleteView: Onboarding marked as complete")
         }
     }
 }
