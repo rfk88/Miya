@@ -1307,6 +1307,7 @@ class DataManager: ObservableObject {
     /// - Parameter memberId: The family_members record ID
     func switchToSelfSetup(memberId: String) async throws {
         do {
+            // Try to update both fields
             let updateData: [String: AnyJSON] = [
                 "onboarding_type": .string("Self Setup"),
                 "guided_setup_status": .null
@@ -1320,6 +1321,26 @@ class DataManager: ObservableObject {
             
             print("✅ DataManager: Switched member \(memberId) to Self Setup")
             
+        } catch let error as PostgrestError {
+            // If guided_setup_status column doesn't exist, retry without it
+            if error.message.contains("guided_setup_status") {
+                print("⚠️ DataManager: guided_setup_status column missing, updating onboarding_type only")
+                
+                let fallbackData: [String: AnyJSON] = [
+                    "onboarding_type": .string("Self Setup")
+                ]
+                
+                try await supabase
+                    .from("family_members")
+                    .update(fallbackData)
+                    .eq("id", value: memberId)
+                    .execute()
+                
+                print("✅ DataManager: Switched member \(memberId) to Self Setup (fallback)")
+            } else {
+                print("❌ DataManager: Failed to switch to self setup: \(error.localizedDescription)")
+                throw DataError.databaseError("Failed to switch to self setup")
+            }
         } catch {
             print("❌ DataManager: Failed to switch to self setup: \(error.localizedDescription)")
             throw DataError.databaseError("Failed to switch to self setup")
