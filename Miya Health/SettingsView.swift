@@ -10,12 +10,14 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject var dataManager: DataManager
+    @EnvironmentObject var onboardingManager: OnboardingManager
     @Environment(\.dismiss) var dismiss
     
     @State private var showingImporter = false
     @State private var importStatus: String = ""
     @State private var showingAlert = false
     @State private var currentVitalityScore: VitalityScore?
+    @State private var showingVitalityUpload = false
     
     var body: some View {
         NavigationStack {
@@ -68,6 +70,30 @@ struct SettingsView: View {
                     }
                     .font(.caption)
                 }
+                
+                #if DEBUG
+                Section {
+                    Button {
+                        showingVitalityUpload = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "tray.and.arrow.up.fill")
+                                .foregroundColor(.miyaPrimary)
+                            Text("Upload vitality data (debug)")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Manual Upload (Debug)")
+                } footer: {
+                    Text("Temporary tool for testing trends/patterns before ROOK webhooks. Saves snapshots and daily scores for the current user.")
+                        .font(.caption)
+                }
+                #endif
                 
                 if let score = currentVitalityScore {
                     Section {
@@ -131,6 +157,13 @@ struct SettingsView: View {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(importStatus)
+            }
+            .sheet(isPresented: $showingVitalityUpload) {
+                NavigationStack {
+                    VitalityImportView()
+                        .environmentObject(onboardingManager)
+                        .environmentObject(dataManager)
+                }
             }
         }
     }

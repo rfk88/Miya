@@ -1,0 +1,52 @@
+[
+  {
+    "date": "2024-12-01",
+    "sleep_hours": 7.5,
+    "steps": 9200,
+    "hrv_ms": 58.0,
+    "resting_hr": 62
+  },
+  {
+    "date": "2024-12-02",
+    "sleep_hours": 6.8,
+    "steps": 8500,
+    "hrv_ms": 55.0,
+    "resting_hr": 64
+  },
+  {
+    "date": "2024-12-03",
+    "sleep_hours": 7.2,
+    "steps": 10100,
+    "hrv_ms": 60.0,
+    "resting_hr": 61
+  },
+  {
+    "date": "2024-12-04",
+    "sleep_hours": 6.5,
+    "steps": 7800,
+    "hrv_ms": 52.0,
+    "resting_hr": 65
+  },
+  {
+    "date": "2024-12-05",
+    "sleep_hours": 8.0,
+    "steps": 9500,
+    "hrv_ms": 62.0,
+    "resting_hr": 60
+  },
+  {
+    "date": "2024-12-06",
+    "sleep_hours": 7.3,
+    "steps": 8900,
+    "hrv_ms": 57.0,
+    "resting_hr": 63
+  },
+  {
+    "date": "2024-12-07",
+    "sleep_hours": 7.0,
+    "steps": 9300,
+    "hrv_ms": 56.0,
+    "resting_hr": 62
+  }
+]
+

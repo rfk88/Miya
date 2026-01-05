@@ -13,10 +13,15 @@
 		696F9C4A2EE0992500626717 /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 696F9C492EE0992500626717 /* Realtime */; };
 		696F9C4C2EE0992500626717 /* Storage in Frameworks */ = {isa = PBXBuildFile; productRef = 696F9C4B2EE0992500626717 /* Storage */; };
 		696F9C4E2EE0992500626717 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 696F9C4D2EE0992500626717 /* Supabase */; };
+		696F9C502EE0992500626718 /* RookSDK in Frameworks */ = {isa = PBXBuildFile; productRef = 696F9C512EE0992500626718 /* RookSDK */; };
+		A1B2C3D4E5F60123456789A0 /* Rook Samples/ROOKConnect-Apple Health-dataset-v2.json in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60123456789A1 /* Rook Samples/ROOKConnect-Apple Health-dataset-v2.json */; };
+		A1B2C3D4E5F60123456789A2 /* Rook Samples/ROOKConnect-Whoop-dataset-v2.json in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60123456789A3 /* Rook Samples/ROOKConnect-Whoop-dataset-v2.json */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		366E9A332ED07BE4001C6CA1 /* Miya Health.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Miya Health.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D4E5F60123456789A1 /* Rook Samples/ROOKConnect-Apple Health-dataset-v2.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "Rook Samples/ROOKConnect-Apple Health-dataset-v2.json"; sourceTree = "<group>"; };
+		A1B2C3D4E5F60123456789A3 /* Rook Samples/ROOKConnect-Whoop-dataset-v2.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "Rook Samples/ROOKConnect-Whoop-dataset-v2.json"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -38,6 +43,7 @@
 				696F9C442EE0992500626717 /* Auth in Frameworks */,
 				696F9C4C2EE0992500626717 /* Storage in Frameworks */,
 				696F9C4A2EE0992500626717 /* Realtime in Frameworks */,
+				696F9C502EE0992500626718 /* RookSDK in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -49,6 +55,7 @@
 			children = (
 				366E9A352ED07BE4001C6CA1 /* Miya Health */,
 				366E9A342ED07BE4001C6CA1 /* Products */,
+				6966C3E22EEF0D6F006389BF /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -58,6 +65,15 @@
 				366E9A332ED07BE4001C6CA1 /* Miya Health.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		6966C3E22EEF0D6F006389BF /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F60123456789A1 /* Rook Samples/ROOKConnect-Apple Health-dataset-v2.json */,
+				A1B2C3D4E5F60123456789A3 /* Rook Samples/ROOKConnect-Whoop-dataset-v2.json */,
+			);
+			name = "Recovered References";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -86,6 +102,7 @@
 				696F9C492EE0992500626717 /* Realtime */,
 				696F9C4B2EE0992500626717 /* Storage */,
 				696F9C4D2EE0992500626717 /* Supabase */,
+				696F9C512EE0992500626718 /* RookSDK */,
 			);
 			productName = "Miya Health";
 			productReference = 366E9A332ED07BE4001C6CA1 /* Miya Health.app */;
@@ -117,6 +134,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				696F9C422EE0992500626717 /* XCRemoteSwiftPackageReference "supabase-swift" */,
+				696F9C4F2EE0992500626718 /* XCRemoteSwiftPackageReference "rook-ios-sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 366E9A342ED07BE4001C6CA1 /* Products */;
@@ -133,6 +151,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1B2C3D4E5F60123456789A0 /* Rook Samples/ROOKConnect-Apple Health-dataset-v2.json in Resources */,
+				A1B2C3D4E5F60123456789A2 /* Rook Samples/ROOKConnect-Whoop-dataset-v2.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -247,6 +267,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_BITCODE = NO;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -263,6 +284,8 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRIP_DEBUG_SYMBOLS_DURING_COPY = NO;
+				STRIP_STYLE = all;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
@@ -273,23 +296,31 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CODE_SIGN_ENTITLEMENTS = "Miya Health/Miya Health.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
+				DEVELOPMENT_TEAM = DG8R472FC7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleIconName = AppIcon;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Miya uses your Apple Health data (sleep, steps, heart rate and related metrics) to calculate your personal and family vitality scores, and to give you tailored guidance.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Miya may write certain health data (for example, workouts or mindfulness sessions you complete in the app) so your Apple Health history stays in one place.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.4;
 				PRODUCT_BUNDLE_IDENTIFIER = "Miya-Health.com.Miya-Health";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -309,24 +340,36 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CODE_SIGN_ENTITLEMENTS = "Miya Health/Miya Health.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = DG8R472FC7;
+				ENABLE_BITCODE = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleIconName = AppIcon;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Miya uses your Apple Health data (sleep, steps, heart rate and related metrics) to calculate your personal and family vitality scores, and to give you tailored guidance.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Miya may write certain health data (for example, workouts or mindfulness sessions you complete in the app) so your Apple Health history stays in one place.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.4;
 				PRODUCT_BUNDLE_IDENTIFIER = "Miya-Health.com.Miya-Health";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				STRIP_DEBUG_SYMBOLS_DURING_COPY = NO;
+				STRIP_STYLE = all;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
@@ -372,6 +415,14 @@
 				minimumVersion = 2.5.1;
 			};
 		};
+		696F9C4F2EE0992500626718 /* XCRemoteSwiftPackageReference "rook-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RookeriesDevelopment/rook-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -404,6 +455,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 696F9C422EE0992500626717 /* XCRemoteSwiftPackageReference "supabase-swift" */;
 			productName = Supabase;
+		};
+		696F9C512EE0992500626718 /* RookSDK */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 696F9C4F2EE0992500626718 /* XCRemoteSwiftPackageReference "rook-ios-sdk" */;
+			productName = RookSDK;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

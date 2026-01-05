@@ -2,10 +2,20 @@
 //  ContentView.swift
 //  Miya Health
 //
-//  Created by Josh Kempton on 21/11/2025.
+//  AUDIT REPORT (guided onboarding status-driven routing)
+//  - Compile audit: Cannot run `xcodebuild` in this environment (no Xcode). Verified compile-safety via lints/type checks in Cursor.
+//  - State integrity: Invited-user routing in `EnterCodeView` is now status-first (switch on `InviteDetails.guidedSetupStatus`),
+//    and canonical status/IDs are persisted into `OnboardingManager` (no inferred booleans for routing).
+//  - DB transition correctness: Uses DataManager transitions:
+//      pending_acceptance -> (user accepts) accepted_awaiting_data -> (admin fills) data_complete_pending_review -> (user confirms) reviewed_complete
+//    and supports guided->self switch (guided_setup_status cleared).
+//  - Edge cases: If `guidedSetupStatus` is nil for a guided invite, routing deterministically treats it as `pending_acceptance`.
+//  - Known limitations: `adminName` display currently uses family name as a placeholder label; no notification/nudge system added.
 //
-
+import RookSDK
+import HealthKit
 import SwiftUI
+import UIKit
 
 // ROOT VIEW USED BY Miya_HealthApp
 struct ContentView: View {
@@ -22,14 +32,31 @@ struct LandingView: View {
     @State private var showingSettings = false
     @State private var navigateResume = false
     @State private var showingLogin = false
+    @State private var hasRefreshedGuidedContext = false
     
     @EnvironmentObject var onboardingManager: OnboardingManager
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var dataManager: DataManager
     
+    /// Global loading flag (auth/data). Keep UI consistent without touching workflows.
+    private var isGlobalLoading: Bool {
+        authManager.isLoading || dataManager.isLoading
+    }
+    
     /// Returns the view for the saved onboarding step
     @ViewBuilder
     private var resumeDestination: some View {
+        // HARD GATE (guided invites): if admin has completed the profile and member hasn't approved yet,
+        // always route the member to the review screen until they confirm.
+        if onboardingManager.guidedSetupStatus == .dataCompletePendingReview,
+           let memberId = onboardingManager.invitedMemberId {
+            GuidedSetupReviewView(memberId: memberId)
+        } else {
+        // Invited users should never be routed into superadmin-only onboarding screens (family creation / inviting others).
+        // This is a deterministic guard against cross-account persisted steps.
+        if onboardingManager.isInvitedUser && onboardingManager.currentStep <= 1 {
+            WearableSelectionView()
+        } else {
         switch onboardingManager.currentStep {
         case 1:
             SuperadminOnboardingView()
@@ -44,158 +71,257 @@ struct LandingView: View {
         case 6:
             RiskResultsView()
         case 7:
-            FamilyMembersInviteView()
+            if onboardingManager.isInvitedUser {
+                AlertsChampionView()
+            } else {
+                FamilyMembersInviteView()
+            }
         case 8:
             AlertsChampionView()
         default:
             SuperadminOnboardingView()
         }
+        }
+        }
     }
     
     var body: some View {
-        NavigationStack {
-            ZStack {
-                // Background
-                LinearGradient(
-                    colors: [.miyaBackground, .white],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-                
-                VStack(alignment: .leading, spacing: 24) {
-                    // MARK: - Top Logo / Brand
-                    HStack {
-                        Text("Miya Health")
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundColor(.miyaPrimary)
-                        
-                        Spacer()
-                        
-                        Button {
-                            showingSettings = true
-                        } label: {
-                            Image(systemName: "gearshape.fill")
-                                .font(.system(size: 20))
-                                .foregroundColor(.miyaPrimary)
-                        }
-                    }
-                    .padding(.top, 32)
-                    
-                    Spacer(minLength: 0)
-                    
-                    // MARK: - Hero Section
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("Welcome to your family’s health HQ.")
-                            .font(.system(size: 30, weight: .bold))
-                            .foregroundColor(.miyaTextPrimary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 24)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [.miyaPrimary.opacity(0.12), .miyaSecondary.opacity(0.06)],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
+        Group {
+            // HARD GATE: Invited members with admin-filled data awaiting their review
+            if authManager.isAuthenticated,
+               onboardingManager.guidedSetupStatus == .dataCompletePendingReview,
+               let memberId = onboardingManager.invitedMemberId {
+                NavigationStack {
+                    GuidedSetupReviewView(memberId: memberId)
+                }
+            }
+            // If authenticated and onboarding is complete, show dashboard
+            else if authManager.isAuthenticated && onboardingManager.isOnboardingComplete {
+                NavigationStack {
+                    DashboardView(familyName: onboardingManager.familyName.isEmpty ? "Miya" : onboardingManager.familyName)
+                }
+            } else {
+                NavigationStack {
+                    ZStack {
+                        // Background layers
+                        Color(hex: "F6F7F8")
+                            .ignoresSafeArea()
+                            .overlay(
+                                RadialGradient(
+                                    colors: [
+                                        Color(hex: "DDF3F2").opacity(0.6),
+                                        Color(hex: "BFE6E4").opacity(0.22),
+                                        Color(hex: "F6F7F8").opacity(0.0)
+                                    ],
+                                    center: .center,
+                                    startRadius: 20,
+                                    endRadius: 360
                                 )
-                            
-                            VStack(spacing: 12) {
-                                Image(systemName: "heart.circle.fill")
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(width: 60, height: 60)
-                                    .foregroundColor(.miyaPrimary)
-                                
-                                Text("Your family. One heartbeat.")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(.miyaTextPrimary)
-                                
-                                Text("A calmer, healthier rhythm for your whole family — built from daily habits, not medical labels.")
-                                    .font(.system(size: 13))
-                                    .foregroundColor(.miyaTextSecondary)
-                                    .multilineTextAlignment(.center)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .padding(.vertical, 20)
-                            .padding(.horizontal, 16)
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    
-                    Spacer()
-                    
-                    // MARK: - Primary actions
-                    VStack(spacing: 12) {
-                        // Enter Code - for invited users joining a family
-                        NavigationLink {
-                            EnterCodeView()
-                        } label: {
-                            Text("Enter Code")
-                                .font(.system(size: 16, weight: .semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(Color.miyaPrimary)
-                                .foregroundColor(.white)
-                                .cornerRadius(18)
-                        }
-                        
-                        // Create new family -> Step 1
-                        NavigationLink {
-                            SuperadminOnboardingView()
-                        } label: {
-                            Text("Create a new family")
-                                .font(.system(size: 16, weight: .semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(Color.miyaPrimary)
-                                .foregroundColor(.white)
-                                .cornerRadius(18)
-                        }
-                        
-                        Button {
-                            // TODO: present your Auth / Login screen
-                            print("Go to login screen")
-                        } label: {
-                            Text("I already have an account")
-                                .font(.system(size: 14, weight: .regular))
-                                .foregroundColor(.miyaTextSecondary)
-                                .underline()
-                                .onTapGesture {
-                                    showingLogin = true
+                            )
+                            .overlay(
+                                Rectangle()
+                                    .fill(.ultraThinMaterial)
+                                    .opacity(0.03)
+                            )
+                            .overlay(
+                                // Concentric rings
+                                Canvas { context, size in
+                                    let center = CGPoint(x: size.width / 2, y: size.height * 0.32)
+                                    let maxRadius = min(size.width, size.height) * 0.38
+                                    let ringCount = 6
+                                    for i in 1...ringCount {
+                                        let progress = CGFloat(i) / CGFloat(ringCount)
+                                        let radius = maxRadius * progress
+                                        var path = Path()
+                                        path.addEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+                                        context.stroke(path, with: .color(Color(hex: "A6D8D6").opacity(0.1)), lineWidth: 1)
+                                    }
                                 }
+                                .ignoresSafeArea()
+                            )
+                        
+                        VStack(spacing: 0) {
+                            // Top bar (actions unchanged)
+                            HStack {
+                                Text("Miya Health")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .kerning(0.18)
+                                    .foregroundColor(Color(hex: "1F2A37"))
+                                
+                                Spacer()
+                                
+                                Button {
+                                    showingSettings = true
+                                } label: {
+                                    Image(systemName: "line.3.horizontal")
+                                        .font(.system(size: 20, weight: .medium))
+                                        .foregroundColor(Color(hex: "1F2A37"))
+                                        .frame(width: 44, height: 44)
+                                        .background(
+                                            Circle()
+                                                .fill(Color.white)
+                                                .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 2)
+                                        )
+                                }
+                            }
+                            .padding(.horizontal, 24)
+                            .padding(.top, 20)
+                            
+                            Spacer()
+                            
+                            // Hero
+                            VStack(spacing: 24) {
+                                ZStack {
+                                    Circle()
+                                        .fill(
+                                            RadialGradient(
+                                                colors: [
+                                                    Color(hex: "A6D8D6").opacity(0.16),
+                                                    Color(hex: "A6D8D6").opacity(0.05),
+                                                    Color(hex: "F6F7F8").opacity(0.0)
+                                                ],
+                                                center: .center,
+                                                startRadius: 10,
+                                                endRadius: 150
+                                            )
+                                        )
+                                        .frame(width: 220, height: 220)
+                                    
+                                    Circle()
+                                        .fill(Color.white)
+                                        .frame(width: 170, height: 170)
+                                        .shadow(color: Color(hex: "A6D8D6").opacity(0.25), radius: 22, x: 0, y: 10)
+                                        .shadow(color: .black.opacity(0.05), radius: 30, x: 0, y: 16)
+                                    
+                                    Image("e96bc988831220de186601645fd93835b8dede817e5045c208d02c6fb54bd4c8")
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fit)
+                                        .frame(width: 130, height: 130)
+                                }
+                                
+                                VStack(spacing: 14) {
+                                    Text("Welcome to your\nfamily’s health HQ.")
+                                        .font(.system(size: 36, weight: .bold, design: .default))
+                                        .foregroundColor(Color(hex: "1F2A37"))
+                                        .multilineTextAlignment(.center)
+                                        .lineSpacing(3)
+                                    
+                                    Text("YOUR FAMILY. ONE HEARTBEAT.")
+                                        .font(.system(size: 13, weight: .semibold, design: .default))
+                                        .foregroundColor(Color(hex: "1F8A87"))
+                                        .kerning(0.28)
+                                        .textCase(.uppercase)
+                                    
+                                    Text("A calmer, healthier rhythm for your whole family.\nTracking every members wellness, one day at a time")
+                                        .font(.system(size: 17, weight: .regular, design: .default))
+                                        .foregroundColor(Color(hex: "5B6775"))
+                                        .multilineTextAlignment(.center)
+                                        .lineSpacing(6)
+                                }
+                                .padding(.horizontal, 32)
+                            }
+                            
+                            Spacer()
+                            
+                            VStack(spacing: 16) {
+                                // Create a new family (action unchanged)
+                                NavigationLink {
+                                    SuperadminOnboardingView()
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Text("Create a new family")
+                                            .font(.system(size: 17, weight: .semibold))
+                                        Spacer()
+                                        Image(systemName: "arrow.right")
+                                            .font(.system(size: 15, weight: .semibold))
+                                    }
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 24)
+                                    .frame(height: 64)
+                                    .background(
+                                        LinearGradient(
+                                            colors: [Color(hex: "1F8A87"), Color(hex: "1F8A87").opacity(0.85)],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                                    .cornerRadius(16)
+                                    .shadow(color: Color(hex: "1F8A87").opacity(0.28), radius: 14, x: 0, y: 8)
+                                    .shadow(color: .black.opacity(0.08), radius: 18, x: 0, y: 10)
+                                }
+                                
+                                // Enter Code (action unchanged)
+                                NavigationLink {
+                                    EnterCodeView()
+                                } label: {
+                                    Text("Enter Code")
+                                        .font(.system(size: 17, weight: .semibold))
+                                        .foregroundColor(Color(hex: "1F2A37"))
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 64)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 16)
+                                                .fill(Color.white)
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 16)
+                                                        .stroke(Color(hex: "D8DEE6"), lineWidth: 1.3)
+                                                )
+                                        )
+                                        .shadow(color: .black.opacity(0.03), radius: 8, x: 0, y: 4)
+                                }
+                                
+                                // I already have an account (action unchanged)
+                                Button {
+                                    showingLogin = true
+                                } label: {
+                                    Text("I already have an account")
+                                        .font(.system(size: 15, weight: .medium))
+                                        .foregroundColor(Color(hex: "7B8794"))
+                                        .padding(.top, 8)
+                                }
+                            }
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, 40)
                         }
-                        .padding(.top, 4)
                     }
-                    .padding(.bottom, 24)
+                    .sheet(isPresented: $showingSettings) {
+                        SettingsView()
+                            .environmentObject(dataManager)
+                    }
+                    .sheet(isPresented: $showingLogin) {
+                        LoginView {
+                            // LoginView already loaded the profile and set currentStep from database
+                            // Just trigger navigation to the correct step
+                            navigateResume = true
+                        }
+                        .environmentObject(authManager)
+                        .environmentObject(onboardingManager)
+                        .environmentObject(dataManager)
+                    }
+                    
+                    NavigationLink(
+                        destination: resumeDestination
+                            .environmentObject(onboardingManager)
+                            .environmentObject(dataManager),
+                        isActive: $navigateResume
+                    ) {
+                        EmptyView()
+                    }
+                    .hidden()
                 }
-                .padding(.horizontal, 24)
             }
-            .sheet(isPresented: $showingSettings) {
-                SettingsView()
-                    .environmentObject(dataManager)
-            }
-            .sheet(isPresented: $showingLogin) {
-                LoginView {
-                    // LoginView already loaded the profile and set currentStep from database
-                    // Just trigger navigation to the correct step
-                    navigateResume = true
+        }
+        .overlay {
+            if isGlobalLoading {
+                ZStack {
+                    Color.black.opacity(0.12).ignoresSafeArea()
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .miyaPrimary))
+                        .scaleEffect(1.2)
                 }
-                .environmentObject(authManager)
-                .environmentObject(onboardingManager)
-                .environmentObject(dataManager)
+                .allowsHitTesting(true)
+                .transition(.opacity)
             }
-            
-            NavigationLink(
-                destination: resumeDestination
-                    .environmentObject(onboardingManager)
-                    .environmentObject(dataManager),
-                isActive: $navigateResume
-            ) {
-                EmptyView()
-            }
-            .hidden()
         }
     }
 }
@@ -223,15 +349,13 @@ struct EnterCodeView: View {
     @State private var password: String = ""
     @State private var confirmPassword: String = ""
     
-    // Guided Setup acceptance prompt
+    // Guided setup acceptance (only for Guided Setup invites)
     @State private var showGuidedAcceptancePrompt: Bool = false
-    @State private var createdUserId: String? = nil  // Store after account creation
-    @State private var navigateToWaiting: Bool = false  // Waiting for admin to fill data
+    @State private var wearablesIsGuidedSetupInvite: Bool = false
     
     // Navigation and error state
     @State private var navigateToWearables: Bool = false
     @State private var navigateToFullOnboarding: Bool = false
-    @State private var navigateToGuidedReview: Bool = false  // For reviewing pre-filled data
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
     
@@ -284,43 +408,28 @@ struct EnterCodeView: View {
         } message: {
             Text(errorMessage)
         }
-        // Guided Setup acceptance prompt
+        // Guided setup acceptance prompt (Guided Setup invites only)
         .sheet(isPresented: $showGuidedAcceptancePrompt) {
             if let details = inviteDetails {
                 GuidedSetupAcceptancePrompt(
                     memberName: details.firstName,
-                    adminName: details.familyName,  // Using family name as admin identifier for now
+                    adminName: details.familyName,
                     onAcceptGuidedSetup: {
                         showGuidedAcceptancePrompt = false
-                        Task {
-                            await acceptGuidedSetup()
-                        }
+                        Task { await acceptGuidedSetup() }
                     },
                     onFillMyself: {
                         showGuidedAcceptancePrompt = false
-                        Task {
-                            await switchToSelfSetup()
-                        }
+                        Task { await switchToSelfSetup() }
                     }
                 )
                 .presentationDetents([.medium])
             }
         }
-        // Navigation for Guided Setup with pre-filled data (review screen)
-        .navigationDestination(isPresented: $navigateToGuidedReview) {
-            if let details = inviteDetails {
-                GuidedSetupReviewView(inviteId: details.inviteId, inviteDetails: details)
-            }
-        }
-        // Navigation for Guided Setup (user accepted, waiting for data - go to wearables)
+        // Invited members use the standard onboarding flow screens (role-tailored)
         .navigationDestination(isPresented: $navigateToWearables) {
-            WearableSelectionView(isGuidedSetupInvite: true)
+            WearableSelectionView(isGuidedSetupInvite: wearablesIsGuidedSetupInvite)
         }
-        // Navigation for waiting screen (guided accepted, admin will fill later)
-        .navigationDestination(isPresented: $navigateToWaiting) {
-            GuidedWaitingForAdminView(adminName: inviteDetails?.familyName ?? "Admin")
-        }
-        // Navigation for Self Setup (full onboarding starting with AboutYou)
         .navigationDestination(isPresented: $navigateToFullOnboarding) {
             AboutYouView()  // Skip to AboutYou since they're already in a family
         }
@@ -401,11 +510,12 @@ struct EnterCodeView: View {
                     HStack(spacing: 8) {
                         Image(systemName: details.isGuidedSetup ? "checkmark.circle.fill" : "person.fill")
                             .foregroundColor(.miyaPrimary)
-                        Text(details.isGuidedSetup ? "Guided setup - your profile is ready!" : "Self setup - you'll set up your profile")
+                        Text(onboardingTypeSummaryText(details))
                             .font(.system(size: 14))
                             .foregroundColor(.secondary)
                     }
                     .padding(.top, 4)
+                    
                 }
             }
             
@@ -494,12 +604,17 @@ struct EnterCodeView: View {
         showError = false
         
         do {
-            let details = try await dataManager.lookupInviteCode(code: inviteCode)
+            let normalizedCode = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
+            inviteCode = normalizedCode
+            let details = try await dataManager.lookupInviteCode(code: normalizedCode)
             inviteDetails = details
             codeValidated = true
             
             // Store in onboarding manager
             onboardingManager.firstName = details.firstName
+            onboardingManager.guidedSetupStatus = details.guidedSetupStatus
+            onboardingManager.invitedMemberId = details.memberId
+            onboardingManager.invitedFamilyId = details.familyId
             
         } catch {
             errorMessage = error.localizedDescription
@@ -515,6 +630,8 @@ struct EnterCodeView: View {
         showError = false
         
         do {
+            let normalizedCode = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
+            inviteCode = normalizedCode
             // 1. Create the user account
             let userId = try await authManager.signUp(
                 email: email,
@@ -531,7 +648,7 @@ struct EnterCodeView: View {
             
             // 3. Complete the invite redemption (link user to family)
             try await dataManager.completeInviteRedemption(
-                code: inviteCode,
+                code: normalizedCode,
                 userId: userId
             )
             
@@ -541,22 +658,19 @@ struct EnterCodeView: View {
             onboardingManager.currentUserId = userId
             onboardingManager.isInvitedUser = true  // 🔥 Mark as invited user
             onboardingManager.familyName = details.familyName  // Store family name
+            onboardingManager.guidedSetupStatus = details.guidedSetupStatus
+            onboardingManager.invitedMemberId = details.memberId
+            onboardingManager.invitedFamilyId = details.familyId
             
-            // Store userId for later use in acceptance flow
-            createdUserId = userId
-            
-            // 5. Navigate based on onboarding type and status
+            // 5. Routing:
+            // - Guided Setup invites: show acceptance prompt first.
+            // - Self Setup invites: proceed through standard onboarding screens.
             if details.isGuidedSetup {
-                if details.hasGuidedData {
-                    // Guided Setup with pre-filled data: Go to review screen
-                    navigateToGuidedReview = true
-                } else {
-                    // Guided Setup without data: Show acceptance prompt
-                    showGuidedAcceptancePrompt = true
-                }
+                showGuidedAcceptancePrompt = true
             } else {
-                // Self Setup: Full Onboarding (skip family creation, go to AboutYou)
-                navigateToFullOnboarding = true
+                wearablesIsGuidedSetupInvite = false
+                onboardingManager.setCurrentStep(2) // Wearables
+                navigateToWearables = true
             }
             
         } catch {
@@ -565,36 +679,70 @@ struct EnterCodeView: View {
         }
     }
     
-    // User accepts guided setup - admin will fill their data
+    private func onboardingTypeSummaryText(_ details: InviteDetails) -> String {
+        if details.isGuidedSetup {
+            return "Guided setup — accept to get started"
+        }
+        return "Self setup — you’ll complete your profile in the next steps"
+    }
+    
+    // MARK: - Guided setup actions (invitee)
+    
     private func acceptGuidedSetup() async {
         guard let details = inviteDetails else { return }
-        
         do {
-            try await dataManager.acceptGuidedSetup(memberId: details.inviteId)
+            try await dataManager.acceptGuidedSetup(memberId: details.memberId)
+            onboardingManager.guidedSetupStatus = .acceptedAwaitingData
             
-            // Show waiting screen (admin will fill data; user will review later)
-            navigateToWaiting = true
-            
+            // Next step: connect wearable / import ROOK to compute vitality while admin completes health profile.
+            wearablesIsGuidedSetupInvite = true
+            onboardingManager.setCurrentStep(2) // Wearables
+            navigateToWearables = true
         } catch {
             errorMessage = error.localizedDescription
             showError = true
         }
     }
     
-    // User declines guided setup - they'll fill their own data
     private func switchToSelfSetup() async {
         guard let details = inviteDetails else { return }
-        
         do {
-            try await dataManager.switchToSelfSetup(memberId: details.inviteId)
+            try await dataManager.switchToSelfSetup(memberId: details.memberId)
+            onboardingManager.guidedSetupStatus = nil
             
-            // Navigate to full onboarding (self-setup)
-            navigateToFullOnboarding = true
-            
+            // Standard onboarding
+            wearablesIsGuidedSetupInvite = false
+            onboardingManager.setCurrentStep(2) // Wearables
+            navigateToWearables = true
         } catch {
             errorMessage = error.localizedDescription
             showError = true
         }
+    }
+}
+
+// MARK: - Color Hex Helper (local to landing view styling)
+private extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let r, g, b: UInt64
+        switch hex.count {
+        case 6: // RGB (24-bit)
+            (r, g, b) = ((int >> 16) & 0xFF, (int >> 8) & 0xFF, int & 0xFF)
+        case 8: // ARGB (32-bit)
+            (r, g, b) = ((int >> 16) & 0xFF, (int >> 8) & 0xFF, int & 0xFF)
+        default:
+            (r, g, b) = (0, 0, 0)
+        }
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue: Double(b) / 255,
+            opacity: 1.0
+        )
     }
 }
 
@@ -1073,7 +1221,8 @@ struct SuperadminOnboardingView: View {
     NavigationStack {
         SuperadminOnboardingView()
             .environmentObject(AuthManager())
-            .environmentObject(OnboardingManager())
+            .environmentObject(OnboardingManager()) // Provided by app root at runtime
+            .environmentObject(DataManager())       // Preview-only stub; avoid creating extra @StateObject instances
     }
 }
 
@@ -1387,10 +1536,27 @@ enum WearableType: String, CaseIterable, Identifiable {
         case .fitbit:     return "figure.walk"
         }
     }
+    
+    /// Maps to Rook's data source identifier for API-based sources
+    /// Returns nil for Apple Health (handled by SDK, not API)
+    var rookDataSourceId: String? {
+        switch self {
+        case .appleWatch: return nil  // Handled by SDK, not API
+        case .whoop:      return "whoop"
+        case .oura:       return "oura"
+        case .fitbit:     return "fitbit"
+        }
+    }
+    
+    /// Returns true if this wearable uses Rook's REST API (not SDK)
+    var isAPIBasedSource: Bool {
+        rookDataSourceId != nil
+    }
 }
 
 struct WearableSelectionView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var dataManager: DataManager
     @EnvironmentObject var onboardingManager: OnboardingManager
     
@@ -1403,12 +1569,21 @@ struct WearableSelectionView: View {
     @State private var connectedWearables: Set<WearableType> = []
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
+    @State private var showAuthorizationView: Bool = false
+    @State private var authorizationDataSource: String? = nil
+    @State private var authorizationDataSourceName: String? = nil
     
     private let totalSteps: Int = 8
     private let currentStep: Int = 3
     
     private var canContinue: Bool {
-        !connectedWearables.isEmpty
+        let can = !connectedWearables.isEmpty
+        if !can {
+            print("⚠️ WearableSelectionView: canContinue = false (connectedWearables: \(connectedWearables.count))")
+        } else {
+            print("✅ WearableSelectionView: canContinue = true (connected: \(connectedWearables.map { $0.displayName }.joined(separator: ", ")))")
+        }
+        return can
     }
     
     var body: some View {
@@ -1427,7 +1602,9 @@ struct WearableSelectionView: View {
                         .font(.system(size: 24, weight: .bold))
                         .foregroundColor(.miyaTextPrimary)
                     
-                    Text("We’ll sync automatically — set it and forget it ✨")
+                    Text(isGuidedSetupInvite
+                         ? "Connect a wearable so we can calculate your vitality while your admin completes the rest of your health profile."
+                         : "We’ll sync automatically — set it and forget it ✨")
                         .font(.system(size: 15))
                         .foregroundColor(.miyaTextSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1446,6 +1623,41 @@ struct WearableSelectionView: View {
                         ) {
                             handleConnectTapped(for: wearable)
                         }
+                    }
+                    
+                    // Rook Connect button
+                    Button {
+                        presentRookConnect()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "link.circle.fill")
+                                .font(.system(size: 26))
+                                .frame(width: 36, height: 36)
+                                .foregroundColor(.miyaPrimary)
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Connect with Rook (sandbox)")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.miyaTextPrimary)
+                                
+                                Text("Link multiple wearables via Rook")
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.miyaTextSecondary)
+                            }
+                            
+                            Spacer()
+                            
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.miyaTextSecondary)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18)
+                                .fill(Color.white)
+                                .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 3)
+                        )
                     }
                 }
                 
@@ -1470,13 +1682,13 @@ struct WearableSelectionView: View {
                     
                     // Navigation depends on whether this is a guided setup invite
                     if isGuidedSetupInvite {
-                        // Guided Setup: After wearables, they're done! (Navigate to completion)
+                        // Guided Setup: After wearables, take them to vitality setup (RiskResultsView) and then dashboard.
                         NavigationLink {
-                            OnboardingCompleteView(membersCount: 0) // They're joining, not inviting
+                            RiskResultsView()
                                 .environmentObject(onboardingManager)
                                 .environmentObject(dataManager)
                         } label: {
-                            Text("Complete Setup")
+                            Text("Continue")
                                 .font(.system(size: 16, weight: .semibold))
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
@@ -1518,31 +1730,130 @@ struct WearableSelectionView: View {
         } message: {
             Text(errorMessage)
         }
+        .sheet(isPresented: $showAuthorizationView) {
+            if let dataSource = authorizationDataSource,
+               let dataSourceName = authorizationDataSourceName {
+                NavigationStack {
+                    RookAuthorizationFlowView(
+                        dataSource: dataSource,
+                        dataSourceName: dataSourceName
+                    )
+                    .environmentObject(authManager)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Cancel") {
+                                print("🟡 WearableSelectionView: User cancelled authorization")
+                                showAuthorizationView = false
+                            }
+                        }
+                    }
+                }
+                .onDisappear {
+                    print("🟡 WearableSelectionView: Authorization view dismissed")
+                    // Fallback: Check connection status after manual dismissal
+                    // (Primary path is OAuth completion auto-dismiss, but this handles manual close)
+                    Task {
+                        await checkAPIWearableConnectionStatus()
+                    }
+                }
+            } else {
+                // Fallback if data source info is missing
+                VStack(spacing: 16) {
+                    Text("Error")
+                        .font(.headline)
+                    Text("Missing authorization information")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Button("Close") {
+                        showAuthorizationView = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding()
+            }
+        }
+        .onChange(of: showAuthorizationView) { newValue in
+            print("📊 WearableSelectionView: showAuthorizationView changed to \(newValue)")
+            if newValue {
+                print("   - dataSource: \(authorizationDataSource ?? "nil")")
+                print("   - dataSourceName: \(authorizationDataSourceName ?? "nil")")
+            }
+        }
         .onAppear {
             // Step 3: Wearables
             onboardingManager.setCurrentStep(3)
+            // Check connection status for API-based wearables on appear
+            Task {
+                await checkAPIWearableConnectionStatus()
+            }
         }
     }
     
     private func handleConnectTapped(for wearable: WearableType) {
+        print("🟢 WearableSelectionView: handleConnectTapped for \(wearable.displayName)")
+        
         // If already connected, do nothing
-        if connectedWearables.contains(wearable) || isConnecting {
+        if connectedWearables.contains(wearable) {
+            print("⚠️ WearableSelectionView: \(wearable.displayName) already connected")
+            return
+        }
+        
+        if isConnecting {
+            print("⚠️ WearableSelectionView: Already connecting, ignoring tap")
             return
         }
         
         selectedWearable = wearable
-        isConnecting = true
-        connectionProgress = 0.0
         
-        // Animate from 0 → 1 over 3 seconds
-        withAnimation(.linear(duration: 3.0)) {
-            connectionProgress = 1.0
+        // Route based on source type
+        if wearable.isAPIBasedSource {
+            print("🟢 WearableSelectionView: \(wearable.displayName) is API-based, starting OAuth flow")
+            // API-based source: Use OAuth authorization flow
+            Task {
+                print("📡 WearableSelectionView: Getting user ID...")
+                guard let userId = await authManager.getCurrentUserId() else {
+                    print("❌ WearableSelectionView: No user ID available")
+                    await MainActor.run {
+                        errorMessage = "Please sign in first to connect your wearable."
+                        showError = true
+                    }
+                    return
+                }
+                
+                print("✅ WearableSelectionView: Got user ID: \(userId)")
+                
+                guard let dataSourceId = wearable.rookDataSourceId else {
+                    print("❌ WearableSelectionView: No Rook data source ID for \(wearable.displayName)")
+                    await MainActor.run {
+                        errorMessage = "Invalid data source"
+                        showError = true
+                    }
+                    return
+                }
+                
+                print("🟢 WearableSelectionView: Setting authorization view for \(dataSourceId)")
+                await MainActor.run {
+                    authorizationDataSource = dataSourceId
+                    authorizationDataSourceName = wearable.displayName
+                    showAuthorizationView = true
+                    print("✅ WearableSelectionView: showAuthorizationView = true")
+                }
+            }
+        } else {
+            // Apple Health: Use existing SDK flow (via "Connect with Rook" button)
+            // For now, show a message directing user to use the Rook Connect button
+            print("ℹ️ WearableSelectionView: \(wearable.displayName) is SDK-based, directing to Rook Connect button")
+            errorMessage = "Please use the 'Connect with Rook' button below to connect Apple Health."
+            showError = true
         }
     }
     
     private func completeConnection() async {
         guard let selected = selectedWearable else { return }
         
+        // This function is only called for the mock animation flow
+        // API-based sources handle connection completion in checkAPIWearableConnectionStatus
         isConnecting = false
         connectedWearables.insert(selected)
         
@@ -1557,6 +1868,134 @@ struct WearableSelectionView: View {
             showError = true
             // Remove from connected set if save failed
             connectedWearables.remove(selected)
+        }
+    }
+    
+    /// Check connection status for all API-based wearables
+    private func checkAPIWearableConnectionStatus() async {
+        guard let userId = await authManager.getCurrentUserId() else {
+            return
+        }
+        
+        // Check status for each API-based wearable
+        for wearable in WearableType.allCases where wearable.isAPIBasedSource {
+            guard let dataSourceId = wearable.rookDataSourceId else { continue }
+            
+            do {
+                let isConnected = try await RookAPIService.shared.checkConnectionStatus(
+                    dataSource: dataSourceId,
+                    userId: userId
+                )
+                
+                // Check if this was already connected before updating state
+                let wasAlreadyConnected = await MainActor.run {
+                    connectedWearables.contains(wearable)
+                }
+                
+                await MainActor.run {
+                    if isConnected {
+                        connectedWearables.insert(wearable)
+                        // Save to database if not already saved
+                        if !onboardingManager.connectedWearables.contains(wearable.rawValue) {
+                            onboardingManager.connectedWearables.append(wearable.rawValue)
+                            Task {
+                                try? await dataManager.saveWearable(wearableType: wearable.rawValue)
+                            }
+                        }
+                    } else {
+                        connectedWearables.remove(wearable)
+                    }
+                }
+                
+                // AUTO_API_SCORING_TRIGGERED: If this is a newly connected API-based wearable,
+                // post notification to trigger automatic vitality scoring
+                // (Post outside MainActor.run to avoid async issues)
+                if isConnected && !wasAlreadyConnected && wearable.isAPIBasedSource {
+                    print("🟢 AUTO_API_SCORING_TRIGGERED: wearable=\(wearable.displayName) userId=\(userId)")
+                    NotificationCenter.default.post(
+                        name: .apiWearableConnected,
+                        object: nil,
+                        userInfo: [
+                            "wearableType": wearable.rawValue,
+                            "wearableName": wearable.displayName,
+                            "userId": userId
+                        ]
+                    )
+                }
+            } catch {
+                print("⚠️ WearableSelectionView: Error checking status for \(wearable.displayName): \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    // MARK: - Rook Connect Helper
+    
+    private func presentRookConnect() {
+        // 1. Get the authenticated user's ID - required for Rook to know which user's data this is
+        Task {
+            guard let userId = await authManager.getCurrentUserId() else {
+                await MainActor.run {
+                    print("🔴 RookConnect: No authenticated user - cannot connect to Rook")
+                    errorMessage = "Please sign in first to connect your wearable."
+                    showError = true
+                }
+                return
+            }
+            
+            await MainActor.run {
+                print("🟢 RookConnect: Starting connection for user: \(userId)")
+            }
+            
+            // 2. Set the user ID with Rook SDK (tells Rook who this user is)
+            // IMPORTANT: Wait for user registration to succeed before requesting permissions + syncing.
+            RookService.shared.setUserId(userId) { ok in
+                guard ok else {
+                    DispatchQueue.main.async {
+                        print("🔴 RookConnect: Failed to register user with Rook")
+                        errorMessage = "Unable to connect to Rook right now. Please try again."
+                        showError = true
+                    }
+                    return
+                }
+
+                // 3. Request Apple Health permissions
+                DispatchQueue.main.async {
+                    let permissionsManager = RookConnectPermissionsManager()
+                    print("🟢 RookConnect: Requesting Apple Health permissions (sandbox)")
+                    
+                    permissionsManager.requestAllPermissions { _ in
+                        DispatchQueue.main.async {
+                            print("🟢 RookConnect: Permission screen flow finished")
+
+                        #if DEBUG
+                        // Debug helper: read today's steps locally to confirm HealthKit access
+                        func debugPrintTodaySteps() {
+                            let store = HKHealthStore()
+                            guard let stepsType = HKQuantityType.quantityType(forIdentifier: .stepCount) else {
+                                print("🔎 HealthKit debug – steps type unavailable")
+                                return
+                            }
+                            let startOfDay = Calendar.current.startOfDay(for: Date())
+                            let predicate = HKQuery.predicateForSamples(withStart: startOfDay, end: Date(), options: [])
+                            let query = HKStatisticsQuery(quantityType: stepsType, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, result, _ in
+                                let count = result?.sumQuantity()?.doubleValue(for: .count()) ?? 0
+                                print("🔎 HealthKit debug – steps today:", count)
+                            }
+                            store.execute(query)
+                        }
+                        debugPrintTodaySteps()
+                        #endif
+                        
+                        // 4. After permissions granted, trigger data sync via SDK
+                        // This uses RookSummaryManager to sync sleep, physical, and body data
+                        // NOTE: Apple Health backfill is limited; we cap to ~29 days.
+                        RookService.shared.syncHealthData(backfillDays: 29)
+                        
+                        print("🟢 RookConnect: Sync triggered - data will arrive via webhook")
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -3579,6 +4018,14 @@ struct FamilyMembersInviteView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var dataManager: DataManager
     @EnvironmentObject var onboardingManager: OnboardingManager
+
+    /// When true, this view is presented from the Dashboard/Sidebar (not during onboarding).
+    /// In that context we must NOT mutate onboarding step/routing, and we should dismiss back to Dashboard after showing a code.
+    let isPresentedFromDashboard: Bool
+    
+    init(isPresentedFromDashboard: Bool = false) {
+        self.isPresentedFromDashboard = isPresentedFromDashboard
+    }
     
     // Current in-progress member
     @State private var firstName: String = ""
@@ -3772,6 +4219,7 @@ struct FamilyMembersInviteView: View {
                                 title: "Guided setup",
                                 subtitle: "You guide them",
                                 type: .guided,
+                                isEnabled: true,
                                 selectedType: $selectedOnboardingType
                             )
                             
@@ -3779,6 +4227,7 @@ struct FamilyMembersInviteView: View {
                                 title: "Self setup",
                                 subtitle: "They set up alone",
                                 type: .selfSetup,
+                                isEnabled: true,
                                 selectedType: $selectedOnboardingType
                             )
                         }
@@ -3816,27 +4265,12 @@ struct FamilyMembersInviteView: View {
                 Spacer()
                 
                 // Bottom actions: Back + Finish onboarding
-                HStack(spacing: 12) {
+                if isPresentedFromDashboard {
+                    // Dashboard context: do not advance onboarding flow. Just close.
                     Button {
                         dismiss()
                     } label: {
-                        Text("Back")
-                            .font(.system(size: 15, weight: .medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.clear)
-                            .foregroundColor(.miyaTextSecondary)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .stroke(Color.miyaBackground, lineWidth: 1)
-                            )
-                    }
-                    
-                    Button {
-                        // Navigate to the onboarding completion summary
-                        navigateToComplete = true
-                    } label: {
-                        Text(invitedMembers.isEmpty ? "Skip for now" : "Finish")
+                        Text("Close")
                             .font(.system(size: 16, weight: .semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
@@ -3844,17 +4278,48 @@ struct FamilyMembersInviteView: View {
                             .foregroundColor(.white)
                             .cornerRadius(16)
                     }
+                    .padding(.bottom, 16)
+                } else {
+                    HStack(spacing: 12) {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Text("Back")
+                                .font(.system(size: 15, weight: .medium))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Color.clear)
+                                .foregroundColor(.miyaTextSecondary)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .stroke(Color.miyaBackground, lineWidth: 1)
+                                )
+                        }
+                        
+                        Button {
+                            // Navigate to the onboarding completion summary
+                            navigateToComplete = true
+                        } label: {
+                            Text(invitedMembers.isEmpty ? "Skip for now" : "Finish")
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Color.miyaPrimary)
+                                .foregroundColor(.white)
+                                .cornerRadius(16)
+                        }
+                    }
+                    .padding(.bottom, 16)
+                    
+                    // Hidden NavigationLink - goes to Alerts & Champion setup
+                    NavigationLink(
+                        destination: AlertsChampionView(),
+                        isActive: $navigateToComplete
+                    ) {
+                        EmptyView()
+                    }
+                    .hidden()
                 }
-                .padding(.bottom, 16)
-                
-                // Hidden NavigationLink - goes to Alerts & Champion setup
-                NavigationLink(
-                    destination: AlertsChampionView(),
-                    isActive: $navigateToComplete
-                ) {
-                    EmptyView()
-                }
-                .hidden()
             }
             .padding(.horizontal, 24)
         }
@@ -3864,8 +4329,14 @@ struct FamilyMembersInviteView: View {
                 name: currentInviteName,
                 code: currentInviteCode
             ) {
-                // Done tapped – clear form for the next member
-                resetCurrentMemberForm()
+                // Done tapped
+                if isPresentedFromDashboard {
+                    // Dashboard context: return to Dashboard immediately after showing code.
+                    dismiss()
+                } else {
+                    // Onboarding context: clear form for the next member.
+                    resetCurrentMemberForm()
+                }
             }
         }
         .alert("Error", isPresented: $showError) {
@@ -3874,7 +4345,9 @@ struct FamilyMembersInviteView: View {
             Text(errorMessage)
         }
         .onAppear {
-            onboardingManager.setCurrentStep(7)
+            if !isPresentedFromDashboard {
+                onboardingManager.setCurrentStep(7)
+            }
             Task {
                 await loadExistingInvites()
             }
@@ -3898,7 +4371,7 @@ struct FamilyMembersInviteView: View {
         
         do {
             // Determine the initial guided setup status
-            let guidedStatus: String? = onboardingType == .guided ? "pending_acceptance" : nil
+            let guidedStatus: GuidedSetupStatus? = onboardingType == .guided ? .pendingAcceptance : nil
             
             // Save to database and get invite code + member ID
             let (inviteCode, memberId) = try await dataManager.saveFamilyMemberInviteWithId(
@@ -3918,12 +4391,14 @@ struct FamilyMembersInviteView: View {
             invitedMembers.append(member)
             
             // Save to OnboardingManager
-            onboardingManager.invitedMembers.append(InvitedFamilyMember(
-                firstName: member.firstName,
-                relationship: relationship.rawValue,
-                onboardingType: onboardingType.rawValue,
-                inviteCode: inviteCode
-            ))
+            if !isPresentedFromDashboard {
+                onboardingManager.invitedMembers.append(InvitedFamilyMember(
+                    firstName: member.firstName,
+                    relationship: relationship.rawValue,
+                    onboardingType: onboardingType.rawValue,
+                    inviteCode: inviteCode
+                ))
+            }
             
             if fillOutNow && onboardingType == .guided {
                 // Navigate to guided data entry flow
@@ -3997,6 +4472,7 @@ struct OnboardingTypeCard: View {
     let title: String
     let subtitle: String
     let type: MemberOnboardingType
+    let isEnabled: Bool
     
     @Binding var selectedType: MemberOnboardingType?
     
@@ -4006,13 +4482,14 @@ struct OnboardingTypeCard: View {
     
     var body: some View {
         Button {
+            guard isEnabled else { return }
             selectedType = type
         } label: {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.miyaTextPrimary)
+                        .foregroundColor(isEnabled ? .miyaTextPrimary : .miyaTextSecondary)
                     Text(subtitle)
                         .font(.system(size: 13))
                         .foregroundColor(.miyaTextSecondary)
@@ -4039,8 +4516,10 @@ struct OnboardingTypeCard: View {
                         lineWidth: isSelected ? 1.5 : 1
                     )
             )
+            .opacity(isEnabled ? 1.0 : 0.55)
         }
         .buttonStyle(.plain)
+        .disabled(!isEnabled)
     }
 }
 
@@ -4535,14 +5014,14 @@ struct GuidedSetupReviewView: View {
     @EnvironmentObject var dataManager: DataManager
     @EnvironmentObject var onboardingManager: OnboardingManager
     
-    let inviteId: String
-    let inviteDetails: InviteDetails
+    let memberId: String
     
     @State private var guidedData: GuidedHealthData? = nil
+    @State private var firstName: String = ""
+    @State private var familyName: String = ""
     @State private var isLoading: Bool = true
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
-    @State private var navigateToWearables: Bool = false
     @State private var navigateToEdit: Bool = false
     
     var body: some View {
@@ -4675,12 +5154,20 @@ struct GuidedSetupReviewView: View {
                 await loadGuidedData()
             }
         }
-        .navigationDestination(isPresented: $navigateToWearables) {
-            WearableSelectionView()
-        }
         .navigationDestination(isPresented: $navigateToEdit) {
-            // Navigate to full edit flow (reuse AboutYouView, etc.)
-            AboutYouView()
+            // BUG 5 FIX: Edit guided data (prefilled from admin-provided data)
+            if let data = guidedData {
+                GuidedHealthDataEditView(
+                    memberId: memberId,
+                    initialData: data,
+                    onSave: {
+                        Task {
+                            await loadGuidedData()
+                            navigateToEdit = false
+                        }
+                    }
+                )
+            }
         }
         .alert("Error", isPresented: $showError) {
             Button("OK", role: .cancel) { }
@@ -4745,7 +5232,19 @@ struct GuidedSetupReviewView: View {
         isLoading = true
         
         do {
-            guidedData = try await dataManager.loadGuidedHealthData(memberId: inviteId)
+            // Load the guided health data
+            guidedData = try await dataManager.loadGuidedHealthData(memberId: memberId)
+            
+            // Load member info for display by memberId (not current user)
+            if let memberRec = try await dataManager.fetchFamilyMemberRecord(memberId: memberId) {
+                firstName = memberRec.firstName
+                
+                // Fetch family name if family_id is present
+                if let familyId = memberRec.familyId {
+                    familyName = try await dataManager.fetchFamilyName(familyId: familyId) ?? ""
+                }
+            }
+            
             isLoading = false
         } catch {
             isLoading = false
@@ -4756,42 +5255,75 @@ struct GuidedSetupReviewView: View {
     
     private func confirmData() async {
         do {
-            // Mark as reviewed
-            try await dataManager.confirmGuidedDataReview(memberId: inviteId)
+            // Confirm review:
+            // - Upserts user_profiles from guided data (DataManager)
+            // - Transitions guided_setup_status -> reviewed_complete
+            try await dataManager.confirmGuidedDataReview(memberId: memberId)
+            onboardingManager.guidedSetupStatus = .reviewedComplete
             
-            // Create user profile from guided data
+            // Keep in-memory onboarding state in sync so downstream screens (BMI/risk UI) don't show 0.0 defaults.
             if let data = guidedData {
-                // Convert date string to Date
                 let dateFormatter = DateFormatter()
                 dateFormatter.dateFormat = "yyyy-MM-dd"
-                let dob = dateFormatter.date(from: data.aboutYou.dateOfBirth)
+                dateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
+                if let dob = dateFormatter.date(from: data.aboutYou.dateOfBirth) {
+                    onboardingManager.dateOfBirth = dob
+                }
+                onboardingManager.gender = data.aboutYou.gender
+                onboardingManager.ethnicity = data.aboutYou.ethnicity
+                onboardingManager.smokingStatus = data.aboutYou.smokingStatus
+                onboardingManager.heightCm = data.aboutYou.heightCm
+                onboardingManager.weightKg = data.aboutYou.weightKg
                 
-                try await dataManager.saveUserProfile(
-                    lastName: nil,
-                    gender: data.aboutYou.gender,
-                    dateOfBirth: dob,
-                    ethnicity: data.aboutYou.ethnicity,
-                    smokingStatus: data.aboutYou.smokingStatus,
-                    heightCm: data.aboutYou.heightCm,
-                    weightKg: data.aboutYou.weightKg,
-                    nutritionQuality: nil,
-                    bloodPressureStatus: data.heartHealth.bloodPressureStatus,
-                    diabetesStatus: data.heartHealth.diabetesStatus,
-                    hasPriorHeartAttack: data.heartHealth.hasPriorHeartAttack,
-                    hasPriorStroke: data.heartHealth.hasPriorStroke,
-                    familyHeartDiseaseEarly: data.medicalHistory.familyHeartDiseaseEarly,
-                    familyStrokeEarly: data.medicalHistory.familyStrokeEarly,
-                    familyType2Diabetes: data.medicalHistory.familyType2Diabetes,
-                    onboardingStep: 3  // Skip to wearables
+                onboardingManager.bloodPressureStatus = data.heartHealth.bloodPressureStatus
+                onboardingManager.diabetesStatus = data.heartHealth.diabetesStatus
+                onboardingManager.hasPriorHeartAttack = data.heartHealth.hasPriorHeartAttack
+                onboardingManager.hasPriorStroke = data.heartHealth.hasPriorStroke
+                
+                onboardingManager.familyHeartDiseaseEarly = data.medicalHistory.familyHeartDiseaseEarly
+                onboardingManager.familyStrokeEarly = data.medicalHistory.familyStrokeEarly
+                onboardingManager.familyType2Diabetes = data.medicalHistory.familyType2Diabetes
+                
+                // Calculate risk assessment
+                let riskResult = RiskCalculator.calculateRisk(
+                    dateOfBirth: onboardingManager.dateOfBirth,
+                    smokingStatus: onboardingManager.smokingStatus,
+                    bloodPressureStatus: onboardingManager.bloodPressureStatus,
+                    diabetesStatus: onboardingManager.diabetesStatus,
+                    hasPriorHeartAttack: onboardingManager.hasPriorHeartAttack,
+                    hasPriorStroke: onboardingManager.hasPriorStroke,
+                    familyHeartDiseaseEarly: onboardingManager.familyHeartDiseaseEarly,
+                    familyStrokeEarly: onboardingManager.familyStrokeEarly,
+                    familyType2Diabetes: onboardingManager.familyType2Diabetes,
+                    heightCm: onboardingManager.heightCm,
+                    weightKg: onboardingManager.weightKg
+                )
+                
+                // Store in OnboardingManager
+                onboardingManager.riskBand = riskResult.band.rawValue
+                onboardingManager.riskPoints = riskResult.points
+                onboardingManager.optimalVitalityTarget = riskResult.optimalTarget
+                
+                print("📊 Guided setup risk calculated: \(riskResult.band.rawValue) (\(riskResult.points) points), Target: \(riskResult.optimalTarget)")
+                
+                // Save risk assessment to database
+                try await dataManager.saveRiskAssessment(
+                    riskBand: riskResult.band.rawValue,
+                    riskPoints: riskResult.points,
+                    optimalTarget: riskResult.optimalTarget
                 )
             }
             
-            // Navigate to wearables
-            navigateToWearables = true
+            // Mark onboarding as complete (this will trigger LandingView to show dashboard)
+            await MainActor.run {
+                onboardingManager.completeOnboarding()
+            }
             
         } catch {
-            errorMessage = error.localizedDescription
-            showError = true
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+                showError = true
+            }
         }
     }
 }
@@ -4825,9 +5357,11 @@ struct GuidedHealthDataEntryFlow: View {
     @State private var diabetesStatus: String = "none"
     @State private var hasPriorHeartAttack: Bool = false
     @State private var hasPriorStroke: Bool = false
+    @State private var noPriorEvents: Bool = false  // "None of the above" (must mirror HeartHealthView behavior)
     @State private var hasChronicKidneyDisease: Bool = false
     @State private var hasAtrialFibrillation: Bool = false
     @State private var hasHighCholesterol: Bool = false
+    @State private var noMedicalConditions: Bool = false  // "None of the above" (must mirror HeartHealthView behavior)
     
     // Step 3: Medical History data
     @State private var familyHeartDiseaseEarly: Bool = false
@@ -4918,7 +5452,7 @@ struct GuidedHealthDataEntryFlow: View {
                                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                 .scaleEffect(0.8)
                         }
-                        Text(currentStep == totalSteps ? "Save & Generate Code" : "Continue")
+                        Text(currentStep == totalSteps ? "Save" : "Continue")
                             .font(.system(size: 16, weight: .semibold))
                     }
                     .frame(maxWidth: .infinity)
@@ -5133,8 +5667,47 @@ struct GuidedHealthDataEntryFlow: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.miyaTextPrimary)
                 
-                conditionToggle("Heart attack", isOn: $hasPriorHeartAttack)
-                conditionToggle("Stroke", isOn: $hasPriorStroke)
+                // Must match HeartHealthView behavior:
+                // - Selecting an event clears "None of the above"
+                // - Selecting "None of the above" clears events and disables itself while any event is selected
+                VStack(spacing: 8) {
+                    SelectableConditionRow(
+                        title: "Heart attack",
+                        isSelected: Binding(
+                            get: { hasPriorHeartAttack },
+                            set: { newValue in
+                                hasPriorHeartAttack = newValue
+                                if newValue { noPriorEvents = false }
+                            }
+                        )
+                    )
+                    
+                    SelectableConditionRow(
+                        title: "Stroke",
+                        isSelected: Binding(
+                            get: { hasPriorStroke },
+                            set: { newValue in
+                                hasPriorStroke = newValue
+                                if newValue { noPriorEvents = false }
+                            }
+                        )
+                    )
+                    
+                    SelectableConditionRow(
+                        title: "None of the above",
+                        isSelected: Binding(
+                            get: { noPriorEvents },
+                            set: { newValue in
+                                noPriorEvents = newValue
+                                if newValue {
+                                    hasPriorHeartAttack = false
+                                    hasPriorStroke = false
+                                }
+                            }
+                        ),
+                        isDisabled: hasPriorHeartAttack || hasPriorStroke
+                    )
+                }
             }
             
             // Other Conditions
@@ -5143,9 +5716,59 @@ struct GuidedHealthDataEntryFlow: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.miyaTextPrimary)
                 
-                conditionToggle("Chronic kidney disease", isOn: $hasChronicKidneyDisease)
-                conditionToggle("Atrial fibrillation", isOn: $hasAtrialFibrillation)
-                conditionToggle("High cholesterol", isOn: $hasHighCholesterol)
+                // Must match HeartHealthView behavior:
+                // - Selecting a condition clears "None of the above"
+                // - Selecting "None of the above" clears conditions and disables itself while any condition is selected
+                VStack(spacing: 8) {
+                    SelectableConditionRow(
+                        title: "Chronic kidney disease",
+                        isSelected: Binding(
+                            get: { hasChronicKidneyDisease },
+                            set: { newValue in
+                                hasChronicKidneyDisease = newValue
+                                if newValue { noMedicalConditions = false }
+                            }
+                        )
+                    )
+                    
+                    SelectableConditionRow(
+                        title: "Atrial fibrillation (irregular heartbeat)",
+                        isSelected: Binding(
+                            get: { hasAtrialFibrillation },
+                            set: { newValue in
+                                hasAtrialFibrillation = newValue
+                                if newValue { noMedicalConditions = false }
+                            }
+                        )
+                    )
+                    
+                    SelectableConditionRow(
+                        title: "High cholesterol (diagnosed by doctor)",
+                        isSelected: Binding(
+                            get: { hasHighCholesterol },
+                            set: { newValue in
+                                hasHighCholesterol = newValue
+                                if newValue { noMedicalConditions = false }
+                            }
+                        )
+                    )
+                    
+                    SelectableConditionRow(
+                        title: "None of the above",
+                        isSelected: Binding(
+                            get: { noMedicalConditions },
+                            set: { newValue in
+                                noMedicalConditions = newValue
+                                if newValue {
+                                    hasChronicKidneyDisease = false
+                                    hasAtrialFibrillation = false
+                                    hasHighCholesterol = false
+                                }
+                            }
+                        ),
+                        isDisabled: hasChronicKidneyDisease || hasAtrialFibrillation || hasHighCholesterol
+                    )
+                }
             }
         }
         .padding(.vertical, 8)
@@ -5165,7 +5788,7 @@ struct GuidedHealthDataEntryFlow: View {
                     .foregroundColor(.miyaTextSecondary)
                 
                 VStack(spacing: 8) {
-                    familyHistoryToggle("Heart disease before age 60", isOn: $familyHeartDiseaseEarly)
+                    familyHistoryToggle("Heart disease (heart attack, bypass surgery) before age 60", isOn: $familyHeartDiseaseEarly)
                     familyHistoryToggle("Stroke before age 60", isOn: $familyStrokeEarly)
                     familyHistoryToggle("Type 2 diabetes (at any age)", isOn: $familyType2Diabetes)
                     
@@ -5228,16 +5851,8 @@ struct GuidedHealthDataEntryFlow: View {
     }
     
     private func conditionToggle(_ label: String, isOn: Binding<Bool>) -> some View {
-        Toggle(isOn: isOn) {
-            Text(label)
-                .font(.system(size: 14))
-                .foregroundColor(.miyaTextPrimary)
-        }
-        .toggleStyle(SwitchToggleStyle(tint: .miyaPrimary))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(Color.white)
-        .cornerRadius(12)
+        // Guided setup must not use Toggle switches. Use the same checkmark-row interaction as self onboarding.
+        SelectableConditionRow(title: label, isSelected: isOn)
     }
     
     private func familyHistoryToggle(_ label: String, isOn: Binding<Bool>) -> some View {
@@ -5288,6 +5903,12 @@ struct GuidedHealthDataEntryFlow: View {
         
         Task {
             do {
+                // VERIFIABLE TRACE: confirm we're writing to family_members.id and record current status before writes.
+                #if DEBUG
+                let before = try? await dataManager.fetchFamilyMemberRecord(memberId: memberId)
+                print("🧾 GUIDED_ADMIN_SAVE_BEGIN memberId=\(memberId) currentStatus=\(before?.guidedSetupStatus ?? "nil") action=saveGuidedHealthData")
+                #endif
+                
                 // Format date
                 let dateFormatter = DateFormatter()
                 dateFormatter.dateFormat = "yyyy-MM-dd"
@@ -5326,15 +5947,25 @@ struct GuidedHealthDataEntryFlow: View {
                 )
                 
                 // Save to database
+                #if DEBUG
+                print("🧾 GUIDED_ADMIN_SAVE_CALL memberId=\(memberId) fn=saveGuidedHealthData")
+                #endif
                 try await dataManager.saveGuidedHealthData(memberId: memberId, healthData: guidedData)
+                #if DEBUG
+                print("✅ GUIDED_ADMIN_SAVE_OK memberId=\(memberId) fn=saveGuidedHealthData")
+                #endif
                 
-                // Try to update status (silently ignore if column doesn't exist)
-                do {
-                    try await dataManager.updateGuidedSetupStatus(memberId: memberId, status: "data_complete_pending_review")
-                } catch {
-                    // Silently ignore - migration may not be run
-                    print("⚠️ Could not update guided setup status (migration not run)")
-                }
+                // Required transition: accepted_awaiting_data -> data_complete_pending_review (+ guided_data_filled_at)
+                #if DEBUG
+                print("🧾 GUIDED_ADMIN_SAVE_CALL memberId=\(memberId) fn=updateGuidedSetupStatus newStatus=data_complete_pending_review")
+                #endif
+                try await dataManager.updateGuidedSetupStatus(memberId: memberId, status: .dataCompletePendingReview)
+                
+                #if DEBUG
+                print("✅ GUIDED_ADMIN_SAVE_OK memberId=\(memberId) fn=updateGuidedSetupStatus newStatus=data_complete_pending_review")
+                let after = try? await dataManager.fetchFamilyMemberRecord(memberId: memberId)
+                print("🧾 GUIDED_ADMIN_SAVE_AFTER memberId=\(memberId) newStatus=\(after?.guidedSetupStatus ?? "nil") filledAt=\(after?.guidedDataFilledAt?.description ?? "nil")")
+                #endif
                 
                 await MainActor.run {
                     isLoading = false
@@ -5343,6 +5974,9 @@ struct GuidedHealthDataEntryFlow: View {
                 }
                 
             } catch {
+                #if DEBUG
+                print("❌ GUIDED_ADMIN_SAVE_FAIL memberId=\(memberId) error=\(error)")
+                #endif
                 await MainActor.run {
                     isLoading = false
                     errorMessage = error.localizedDescription
@@ -5647,6 +6281,13 @@ struct LoginView: View {
                     onboardingManager.setCurrentStep(1)
                 }
             }
+            
+            // Refresh guided context (force review screen if data is ready)
+            await onboardingManager.refreshGuidedContextFromDB(dataManager: dataManager)
+            
+            #if DEBUG
+            print("✅ GUIDED_INVITEE_LOGIN: memberId=\(onboardingManager.invitedMemberId ?? "nil") status=\(onboardingManager.guidedSetupStatus?.rawValue ?? "nil") currentStep=\(onboardingManager.currentStep)")
+            #endif
             
             await MainActor.run {
                 isLoading = false

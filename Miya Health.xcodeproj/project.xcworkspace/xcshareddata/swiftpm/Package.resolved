@@ -1,13 +1,22 @@
 {
-  "originHash" : "5f3436049b395fcbc71828c07d82e81a46af698ebe0b146cdc52345a5a60558d",
+  "originHash" : "e3adadd46d9dc721269b540370194ce3dd1e46b2176ae1d2bf7c9709000ee120",
   "pins" : [
+    {
+      "identity" : "rook-ios-sdk",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/RookeriesDevelopment/rook-ios-sdk",
+      "state" : {
+        "revision" : "04c1d3b80bcffd8b0761eb6745019301d9daa2b1",
+        "version" : "1.8.0"
+      }
+    },
     {
       "identity" : "supabase-swift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/supabase/supabase-swift",
       "state" : {
-        "revision" : "65507b524f0ec09ebb6f6b1db0db1a8e4265436e",
-        "version" : "2.37.0"
+        "revision" : "f633f1ce9ff6dac9f33a1717d191a6c3985148fa",
+        "version" : "2.39.0"
       }
     },
     {
@@ -60,8 +69,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/pointfreeco/xctest-dynamic-overlay",
       "state" : {
-        "revision" : "4c27acf5394b645b70d8ba19dc249c0472d5f618",
-        "version" : "1.7.0"
+        "revision" : "31073495cae9caf243c440eac94b3ab067e3d7bc",
+        "version" : "1.8.0"
       }
     }
   ],

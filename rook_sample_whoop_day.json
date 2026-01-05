@@ -1,0 +1,21 @@
+{
+  "sleep_summary": {
+    "sleep_duration_seconds_int": 28800,
+    "time_in_bed_seconds_int": 30600,
+    "time_awake_during_sleep_seconds_int": 1800,
+    "rem_sleep_duration_seconds_int": 6480,
+    "deep_sleep_duration_seconds_int": 7200,
+    "light_sleep_duration_seconds_int": 14400,
+    "sleep_efficiency_1_100_score_int": 94,
+    "hrv_sdnn_ms_double": 55.3,
+    "hr_resting_bpm_int": 58,
+    "breaths_avg_per_min_int": 14
+  },
+  "physical_summary": {
+    "steps_int": 9234,
+    "active_minutes_total_int": 47,
+    "active_calories_kcal_double": 487.3,
+    "total_calories_kcal_double": 2340.8
+  }
+}
+

@@ -231,17 +231,43 @@ struct RiskCalculator {
     
     // MARK: - Optimal Vitality Target
     
-    /// Calculate optimal vitality target based on age group and risk band
+    /// Calculate optimal vitality target based on risk band
     /// - Parameters:
-    ///   - dateOfBirth: User's date of birth
+    ///   - dateOfBirth: User's date of birth (kept for API compatibility, not used in calculation)
     ///   - riskBand: Calculated risk band
     /// - Returns: Optimal vitality target score (0-100)
+    ///
+    /// Note: This returns a risk-adjusted goal on an age-fair 0-100 scale.
+    /// Age-specific adjustments are handled by the VitalityScoringEngine's age-specific ranges.
+    /// The target is a recommended starting goal (e.g., 85/100 for low risk), not a hard ceiling.
     static func calculateOptimalTarget(dateOfBirth: Date, riskBand: RiskBand) -> Int {
+        let personalMax = 100
+        let factor = riskTargetFactor(for: riskBand)
+        let target = Int((Double(personalMax) * factor).rounded())
+        return target
+    }
+    
+    /// Risk-adjusted target factor
+    /// Higher risk = more conservative starting goal (but same 0-100 scale)
+    private static func riskTargetFactor(for band: RiskBand) -> Double {
+        switch band {
+        case .low:       return 0.90   // 90% of personal max
+        case .moderate:  return 0.85   // 85%
+        case .high:      return 0.80   // 80%
+        case .veryHigh:  return 0.75   // 75%
+        case .critical:  return 0.70   // 70%
+        }
+    }
+    
+    // DEPRECATED: Old age × risk matrix (kept for reference)
+    // This approach treated age as a ceiling, which is unfair.
+    // Age-specific scoring is now handled by VitalityScoringEngine's age-specific ranges.
+    /*
+    private static func calculateOptimalTargetOld(dateOfBirth: Date, riskBand: RiskBand) -> Int {
         let calendar = Calendar.current
         let ageComponents = calendar.dateComponents([.year], from: dateOfBirth, to: Date())
         let age = ageComponents.year ?? 50
         
-        // Age group determines base target
         let ageGroup: String
         switch age {
         case 0..<40: ageGroup = "young"
@@ -250,41 +276,16 @@ struct RiskCalculator {
         default: ageGroup = "elderly"
         }
         
-        // Target matrix: higher risk = lower baseline target (more achievable goals)
-        // But we still want to push toward improvement
         let targetMatrix: [String: [RiskBand: Int]] = [
-            "young": [
-                .low: 85,
-                .moderate: 80,
-                .high: 75,
-                .veryHigh: 70,
-                .critical: 65
-            ],
-            "middle": [
-                .low: 80,
-                .moderate: 75,
-                .high: 70,
-                .veryHigh: 65,
-                .critical: 60
-            ],
-            "senior": [
-                .low: 75,
-                .moderate: 70,
-                .high: 65,
-                .veryHigh: 60,
-                .critical: 55
-            ],
-            "elderly": [
-                .low: 70,
-                .moderate: 65,
-                .high: 60,
-                .veryHigh: 55,
-                .critical: 50
-            ]
+            "young": [.low: 85, .moderate: 80, .high: 75, .veryHigh: 70, .critical: 65],
+            "middle": [.low: 80, .moderate: 75, .high: 70, .veryHigh: 65, .critical: 60],
+            "senior": [.low: 75, .moderate: 70, .high: 65, .veryHigh: 60, .critical: 55],
+            "elderly": [.low: 70, .moderate: 65, .high: 60, .veryHigh: 55, .critical: 50]
         ]
         
         return targetMatrix[ageGroup]?[riskBand] ?? 70
     }
+    */
 }
 
 

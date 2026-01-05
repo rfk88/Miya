@@ -1,0 +1,12 @@
+{
+  "sleep_summary": {
+    "sleep_duration_seconds_int": 25200,
+    "time_in_bed_seconds_int": 27000,
+    "time_awake_during_sleep_seconds_int": 1800
+  },
+  "physical_summary": {
+    "steps_int": 8500,
+    "hr_resting_bpm_int": 62
+  }
+}
+

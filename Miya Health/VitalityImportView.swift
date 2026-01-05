@@ -7,6 +7,7 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import Foundation
 
 struct VitalityImportView: View {
     @EnvironmentObject var onboardingManager: OnboardingManager
@@ -19,8 +20,16 @@ struct VitalityImportView: View {
     @State private var isSaving = false
     @State private var showAlert = false
     
+    /// Optional override for saving on behalf of another user (debug tooling).
+    /// If nil, saves for the authenticated user (normal behavior).
+    let overrideUserId: String?
+    
     private let currentStep: Int = 7  // insert after RiskResults (adjust if needed)
     private let totalSteps: Int = 9
+    
+    init(overrideUserId: String? = nil) {
+        self.overrideUserId = overrideUserId
+    }
     
     var body: some View {
         ZStack {
@@ -111,7 +120,7 @@ struct VitalityImportView: View {
         }
         .fileImporter(
             isPresented: $showingImporter,
-            allowedContentTypes: [.commaSeparatedText, .plainText],
+            allowedContentTypes: [.commaSeparatedText, .plainText, .json],
             allowsMultipleSelection: false
         ) { result in
             handleImport(result)
@@ -121,6 +130,14 @@ struct VitalityImportView: View {
         } message: {
             Text(importStatus)
         }
+        #if DEBUG
+        .onAppear {
+            // Debug-only: compute vitality from a bundled ROOK export (no persistence, no UI changes).
+            Task {
+                await debugLogRookVitalitySnapshotIfAvailable()
+            }
+        }
+        #endif
     }
     
     private func handleImport(_ result: Result<[URL], Error>) {
@@ -133,13 +150,199 @@ struct VitalityImportView: View {
             }
             defer { url.stopAccessingSecurityScopedResource() }
             
+            let ext = url.pathExtension.lowercased()
+            
+            if ext == "json" {
+                // ROOK export JSON simulation (persist snapshot for temporary testing)
+                let data = try Data(contentsOf: url)
+                let dataset = try JSONDecoder().decode(ROOKDataset.self, from: data)
+                
+                let age = Calendar.current.dateComponents([.year], from: onboardingManager.dateOfBirth, to: Date()).year ?? 0
+                let windowRaw = ROOKWindowAggregator.buildWindowRawMetrics(age: age, dataset: dataset)
+                let snapshot = VitalityScoringEngine().score(raw: windowRaw)
+                
+                func pillarScore(_ pillar: VitalityPillar) -> Int {
+                    snapshot.pillarScores.first(where: { $0.pillar == pillar })?.score ?? 0
+                }
+                
+                // Map new engine (0–100 pillar scores) into legacy VitalityScore component scales (35/35/30)
+                let sleepPoints = Int((Double(pillarScore(.sleep)) * 35.0 / 100.0).rounded())
+                let movementPoints = Int((Double(pillarScore(.movement)) * 35.0 / 100.0).rounded())
+                let stressPoints = Int((Double(pillarScore(.stress)) * 30.0 / 100.0).rounded())
+                
+                let legacy = VitalityScore(
+                    date: Date(),
+                    totalScore: snapshot.totalScore,
+                    sleepPoints: sleepPoints,
+                    movementPoints: movementPoints,
+                    stressPoints: stressPoints
+                )
+
+                Task {
+                    do {
+                        isSaving = true
+                        // Save only the "current vitality snapshot" for now.
+                        // We tag it as 'manual' so we can exclude it later when ROOK is live.
+                        if let target = overrideUserId {
+                            try await dataManager.saveVitalitySnapshot(snapshot: snapshot, source: "manual", forUserId: target)
+                        } else {
+                            try await dataManager.saveVitalitySnapshot(snapshot: snapshot, source: "manual")
+                        }
+
+                        // NEW: persist up to last 21 days of daily vitality scores.
+                        // IMPORTANT: We allow partial days (e.g., stress-only) so the trend engine can detect
+                        // up/down patterns per pillar. The trend engine already handles missing pillars.
+                        var dailyRaw = ROOKWindowAggregator.buildDailyRawMetricsByUTCKey(age: age, dataset: dataset)
+                        print("ROOK_IMPORT: Built \(dailyRaw.count) daily raw metric entries from JSON")
+                        
+                        // DEBUG: Shift all dates to last 14 days (latest = today, earliest = 14 days ago)
+                        #if DEBUG
+                        if !dailyRaw.isEmpty {
+                            let dateFormatter = DateFormatter()
+                            dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+                            dateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
+                            dateFormatter.dateFormat = "yyyy-MM-dd"
+                            
+                            // Find latest date in dataset
+                            if let latestDayKey = dailyRaw.map({ $0.dayKey }).sorted().last,
+                               let latestDate = dateFormatter.date(from: latestDayKey) {
+                                // Calculate offset: shift so latest date becomes today
+                                let today = Calendar.current.startOfDay(for: Date())
+                                let offsetDays = Calendar.current.dateComponents([.day], from: latestDate, to: today).day ?? 0
+                                
+                                if offsetDays != 0 {
+                                    // Shift all dayKeys by the offset
+                                    dailyRaw = dailyRaw.map { item in
+                                        guard let originalDate = dateFormatter.date(from: item.dayKey),
+                                              let shiftedDate = Calendar.current.date(byAdding: .day, value: offsetDays, to: originalDate) else {
+                                            return item
+                                        }
+                                        let shiftedDayKey = dateFormatter.string(from: shiftedDate)
+                                        return (dayKey: shiftedDayKey, raw: item.raw)
+                                    }
+                                    
+                                    // Filter to only keep last 14 days (ending today)
+                                    let todayKey = dateFormatter.string(from: today)
+                                    let cutoffDate = Calendar.current.date(byAdding: .day, value: -14, to: today)!
+                                    let cutoffKey = dateFormatter.string(from: cutoffDate)
+                                    dailyRaw = dailyRaw.filter { $0.dayKey >= cutoffKey && $0.dayKey <= todayKey }
+                                    
+                                    print("ROOK_IMPORT: 🔄 Shifted all dates by \(offsetDays) days, filtered to last 14 days (range: \(cutoffKey) to \(todayKey))")
+                                }
+                            } else {
+                                print("ROOK_IMPORT: ⚠️ Could not parse latest date, skipping date shift")
+                            }
+                        }
+                        #endif
+                        
+                        let engine = VitalityScoringEngine()
+                        // Map per-day raw metrics to per-day snapshots, require:
+                        // - total score valid
+                        // - at least one pillar present (sleep OR movement OR stress)
+                        let dailyTuples: [(dayKey: String, snapshot: VitalitySnapshot)] = dailyRaw.compactMap { day in
+                            let snap = engine.score(raw: day.raw)
+                            let pillars = snap.pillarScores.filter { (0...100).contains($0.score) }
+                            let hasAnyPillar = !pillars.isEmpty
+                            guard hasAnyPillar, (0...100).contains(snap.totalScore) else {
+                                #if DEBUG
+                                if !hasAnyPillar {
+                                    print("  ⚠️ Skipped day \(day.dayKey): no valid pillars")
+                                } else if !(0...100).contains(snap.totalScore) {
+                                    print("  ⚠️ Skipped day \(day.dayKey): invalid total score \(snap.totalScore)")
+                                }
+                                #endif
+                                return nil
+                            }
+                            return (dayKey: day.dayKey, snapshot: snap)
+                        }
+                        print("ROOK_IMPORT: Scored \(dailyTuples.count) valid daily snapshots (from \(dailyRaw.count) raw entries)")
+                        // Deduplicate by dayKey, keep most recent 21 days
+                        let uniqueByDay: [String: VitalitySnapshot] = {
+                            var dict: [String: VitalitySnapshot] = [:]
+                            for item in dailyTuples {
+                                dict[item.dayKey] = item.snapshot
+                            }
+                            return dict
+                        }()
+                        let sortedKeys = uniqueByDay.keys.sorted().suffix(21)
+                        let finalDaily = sortedKeys.compactMap { key in
+                            uniqueByDay[key].map { (dayKey: key, snapshot: $0) }
+                        }
+                        if !finalDaily.isEmpty {
+                            // For debug uploads, clear existing daily rows first to avoid overlapping data
+                            let clearFirst = overrideUserId != nil
+                            if let target = overrideUserId {
+                                try await dataManager.saveDailyVitalityPillarScores(finalDaily, source: "manual", forUserId: target, clearExisting: clearFirst)
+                            } else {
+                                try await dataManager.saveDailyVitalityPillarScores(finalDaily, source: "manual", clearExisting: clearFirst)
+                            }
+                            print("ROOK_IMPORT: ✅ saved \(finalDaily.count) daily vitality rows (manual, clearedExisting=\(clearFirst))")
+                        } else {
+                            print("ROOK_IMPORT: ❌ no_valid_daily_rows (filtered from \(dailyRaw.count) raw entries)")
+                        }
+
+                        await MainActor.run {
+                            latestScore = legacy
+                            importStatus = "✅ Imported ROOK export JSON; vitality \(legacy.totalScore)/100"
+                            showAlert = false
+                            isSaving = false
+                        }
+                    } catch {
+                        await MainActor.run {
+                            importStatus = "Error saving vitality snapshot: \(error.localizedDescription)"
+                            showAlert = true
+                            isSaving = false
+                        }
+                    }
+                }
+                return
+            }
+            
+            // Default: CSV flow (unchanged)
             let content = try String(contentsOf: url, encoding: .utf8)
-            let parsed = VitalityCalculator.parseCSV(content: content)
+            var parsed = VitalityCalculator.parseCSV(content: content)
             guard !parsed.isEmpty else {
                 importStatus = "No data rows found in CSV."
                 showAlert = true
                 return
             }
+            
+            // DEBUG: Shift all dates to last 14 days (latest = today, earliest = 14 days ago)
+            #if DEBUG
+            if !parsed.isEmpty {
+                // Find latest date in dataset
+                if let latestDate = parsed.map({ $0.date }).max() {
+                    // Calculate offset: shift so latest date becomes today
+                    let today = Calendar.current.startOfDay(for: Date())
+                    let offsetDays = Calendar.current.dateComponents([.day], from: latestDate, to: today).day ?? 0
+                    
+                    if offsetDays != 0 {
+                        // Shift all dates by the offset
+                        parsed = parsed.map { data in
+                            guard let shiftedDate = Calendar.current.date(byAdding: .day, value: offsetDays, to: data.date) else {
+                                return data
+                            }
+                            // Create new VitalityData with shifted date
+                            return VitalityData(
+                                date: shiftedDate,
+                                sleepHours: data.sleepHours,
+                                steps: data.steps,
+                                hrvMs: data.hrvMs,
+                                restingHr: data.restingHr
+                            )
+                        }
+                        
+                        // Filter to only keep last 14 days (ending today)
+                        let cutoffDate = Calendar.current.date(byAdding: .day, value: -14, to: today)!
+                        parsed = parsed.filter { $0.date >= cutoffDate && $0.date <= today }
+                        
+                        print("CSV_IMPORT: 🔄 Shifted all dates by \(offsetDays) days, filtered to last 14 days")
+                    }
+                } else {
+                    print("CSV_IMPORT: ⚠️ Could not find latest date, skipping date shift")
+                }
+            }
+            #endif
             
             let rollingScores = VitalityCalculator.computeRollingScores(from: parsed, window: 7)
             guard let latest = rollingScores.last else {
@@ -181,6 +384,46 @@ struct VitalityImportView: View {
             showAlert = true
         }
     }
+
+    #if DEBUG
+    private func debugLogRookVitalitySnapshotIfAvailable() async {
+        // Try to load a ROOK export JSON from the app bundle.
+        // Expected resource paths (if added to Copy Bundle Resources):
+        // - "Rook Samples/ROOKConnect-Whoop-dataset-v2.json"
+        // - "Rook Samples/ROOKConnect-Apple Health-dataset-v2.json"
+        let candidates: [(displayName: String, resourceName: String)] = [
+            ("WHOOP", "ROOKConnect-Whoop-dataset-v2"),
+            ("APPLE", "ROOKConnect-Apple Health-dataset-v2")
+        ]
+        
+        guard let (label, url) = candidates.compactMap({ candidate in
+            let u = Bundle.main.url(forResource: candidate.resourceName, withExtension: "json", subdirectory: "Rook Samples")
+            return u.map { (candidate.displayName, $0) }
+        }).first else {
+            print("⚠️ ROOK onboarding debug: No ROOK sample export found in app bundle under 'Rook Samples/'.")
+            return
+        }
+        
+        do {
+            let data = try Data(contentsOf: url)
+            let dataset = try JSONDecoder().decode(ROOKDataset.self, from: data)
+            
+            let age = Calendar.current.dateComponents([.year], from: onboardingManager.dateOfBirth, to: Date()).year ?? 0
+            let windowRaw = ROOKWindowAggregator.buildWindowRawMetrics(age: age, dataset: dataset)
+            let snapshot = VitalityScoringEngine().score(raw: windowRaw)
+            
+            print("=== ROOK onboarding vitality (debug) ===")
+            print("Source:", label, "| Age:", snapshot.age, "| AgeGroup:", snapshot.ageGroup)
+            print("Total:", snapshot.totalScore, "/100")
+            for pillar in snapshot.pillarScores {
+                print("Pillar:", pillar.pillar, "score:", pillar.score, "/100")
+            }
+            print("=== End ROOK onboarding vitality (debug) ===")
+        } catch {
+            print("❌ ROOK onboarding debug: Failed to decode/score ROOK export:", error.localizedDescription)
+        }
+    }
+    #endif
 }
 
 #Preview {

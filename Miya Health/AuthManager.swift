@@ -22,6 +22,10 @@ class AuthManager: ObservableObject {
     
     private let supabase = SupabaseConfig.client
     
+    /// Explicit logout gate: if true, we do NOT auto-restore a previous session on app launch/rebuild.
+    /// This prevents "restoreSession overrides logout" even in edge cases (e.g. token cache timing).
+    private let explicitLogoutKey = "miya.explicit_logout"
+    
     // MARK: - Authentication Methods
     
     /// Sign up a new user
@@ -39,7 +43,7 @@ class AuthManager: ObservableObject {
                 email: email,
                 password: password,
                 data: [
-                    "first_name": .string(firstName)
+                    "first_name": AnyJSON.string(firstName)
                 ]
             )
             
@@ -47,6 +51,7 @@ class AuthManager: ObservableObject {
             let user = response.user
             
             isAuthenticated = true
+            UserDefaults.standard.set(false, forKey: explicitLogoutKey)
             print("✅ AuthManager: User signed up successfully: \(user.id.uuidString)")
             
             return user.id.uuidString
@@ -72,6 +77,7 @@ class AuthManager: ObservableObject {
             )
             
             isAuthenticated = true
+            UserDefaults.standard.set(false, forKey: explicitLogoutKey)
             print("✅ AuthManager: User signed in successfully: \(session.user.id.uuidString)")
             
         } catch {
@@ -82,6 +88,12 @@ class AuthManager: ObservableObject {
     
     /// Restore user session on app launch
     func restoreSession() async {
+        // If user explicitly logged out, do not restore a session automatically.
+        if UserDefaults.standard.bool(forKey: explicitLogoutKey) {
+            isAuthenticated = false
+            print("🧹 AuthManager: Skipping restoreSession() due to explicit logout")
+            return
+        }
         do {
             let session = try await supabase.auth.session
             isAuthenticated = true
@@ -100,10 +112,31 @@ class AuthManager: ObservableObject {
         do {
             try await supabase.auth.signOut()
             isAuthenticated = false
+            UserDefaults.standard.set(true, forKey: explicitLogoutKey)
             print("✅ AuthManager: User signed out successfully")
+            
+            // Notify app to reset all state (zero leakage)
+            NotificationCenter.default.post(name: .userDidLogout, object: nil)
+            
         } catch {
             print("❌ AuthManager: Sign out error: \(error.localizedDescription)")
             throw AuthError.signOutFailed(error.localizedDescription)
+        }
+    }
+    
+    /// Get the current authenticated user's ID
+    /// - Returns: The user's UUID string, or nil if not authenticated
+    func getCurrentUserId() async -> String? {
+        guard isAuthenticated else {
+            return nil
+        }
+        
+        do {
+            let session = try await supabase.auth.session
+            return session.user.id.uuidString
+        } catch {
+            print("⚠️ AuthManager: Failed to get current user ID: \(error.localizedDescription)")
+            return nil
         }
     }
 }
