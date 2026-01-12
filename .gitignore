@@ -92,4 +92,11 @@ iOSInjectionProject/
 # Supabase Configuration (contains sensitive API keys)
 Miya Health/SupabaseConfig.swift
 
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
 
