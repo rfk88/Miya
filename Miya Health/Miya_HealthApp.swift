@@ -15,6 +15,9 @@ extension Notification.Name {
     /// Notification posted when an API-based wearable (Oura/Whoop/Fitbit) successfully connects.
     /// Triggers automatic vitality scoring computation.
     static let apiWearableConnected = Notification.Name("apiWearableConnected")
+    /// Notification posted after a user updates their profile (name, health fields, etc.).
+    /// Used to refresh name-dependent UI like Champions.
+    static let profileDidUpdate = Notification.Name("profileDidUpdate")
 }
 
 @main

@@ -354,6 +354,7 @@ class DataManager: ObservableObject {
             // Only insert bare minimum columns that exist in all database versions
             let profileData: [String: AnyJSON] = [
                 "user_id": .string(userId),
+                "first_name": .string(firstName),
                 "onboarding_step": .integer(step),
                 "onboarding_complete": .bool(false)
             ]
@@ -368,6 +369,32 @@ class DataManager: ObservableObject {
         } catch {
             let userMessage = mapDataError(error)
             print("❌ DataManager: Failed to create initial profile: \(error.localizedDescription)")
+            throw DataError.databaseError(userMessage)
+        }
+    }
+
+    /// Fetch the current user's health condition type strings from `health_conditions`.
+    /// This powers the Edit Profile "Conditions" section.
+    func fetchMyHealthConditions() async throws -> Set<String> {
+        guard let userId = await currentUserId else {
+            throw DataError.notAuthenticated
+        }
+
+        struct ConditionRow: Decodable {
+            let condition_type: String
+        }
+
+        do {
+            let rows: [ConditionRow] = try await supabase
+                .from("health_conditions")
+                .select("condition_type")
+                .eq("user_id", value: userId)
+                .execute()
+                .value
+
+            return Set(rows.map { $0.condition_type })
+        } catch {
+            let userMessage = mapDataError(error)
             throw DataError.databaseError(userMessage)
         }
     }
@@ -536,6 +563,7 @@ class DataManager: ObservableObject {
     
     /// Save user profile data from Step 4
     /// - Parameters:
+    ///   - firstName: User's first name
     ///   - gender: User's gender
     ///   - dateOfBirth: User's date of birth
     ///   - ethnicity: User's ethnicity
@@ -551,6 +579,7 @@ class DataManager: ObservableObject {
     ///   - familyStrokeEarly: Family history of stroke before age 60
     ///   - familyType2Diabetes: Family history of Type 2 diabetes
     func saveUserProfile(
+        firstName: String? = nil,
         lastName: String? = nil,
         gender: String?,
         dateOfBirth: Date?,
@@ -627,6 +656,10 @@ class DataManager: ObservableObject {
                 "user_id": .string(userId)
             ]
             
+            if let firstName = firstName {
+                let trimmed = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { profileData["first_name"] = .string(trimmed) }
+            }
             if let lastName = lastName, !lastName.isEmpty { profileData["last_name"] = .string(lastName) }
             if let gender = gender { profileData["gender"] = .string(gender) }
             if let dateString = dateString { profileData["date_of_birth"] = .string(dateString) }
@@ -671,6 +704,7 @@ class DataManager: ObservableObject {
                     
                     // Keep only base columns that older schemas are expected to have.
                     let baseKeys: Set<String> = [
+                        "first_name",
                         "last_name",
                         "gender",
                         "date_of_birth",
@@ -2173,18 +2207,44 @@ class DataManager: ObservableObject {
         // 3) Build update payload
         let payload: [String: AnyJSON] = ["first_name": .string(safeName)]
         
-        // 4) Run the update directly by user_id
+        // 4) Run the update directly by user_id (fast path)
         do {
             try await supabase
                 .from("family_members")
                 .update(payload)
                 .eq("user_id", value: safeUserId)
                 .execute()
+
+            // Keep canonical profile name in sync as well (best-effort).
+            // Canonical source of truth is now user_profiles.first_name.
+            do {
+                try await supabase
+                    .from("user_profiles")
+                    .update(["first_name": AnyJSON.string(safeName)])
+                    .eq("user_id", value: safeUserId)
+                    .execute()
+            } catch {
+                // Don't block the UI if profile row is missing/blocked; log and continue.
+                #if DEBUG
+                print("⚠️ DataManager: Failed to sync user_profiles.first_name from updateMyMemberName: \(error)")
+                #endif
+            }
             
             print("✅ DataManager: Updated family_members.first_name for user \(safeUserId) -> \(safeName)")
         } catch {
-            print("❌ DataManager: Failed to update member name: \(error.localizedDescription)")
-            throw DataError.databaseError("Failed to update name. Please try again.")
+            // Fallback: use RPC that is safe when RLS is enabled without policies.
+            #if DEBUG
+            print("⚠️ DataManager: family_members update failed; trying RPC fallback. error=\(error)")
+            #endif
+            do {
+                try await supabase
+                    .rpc("update_my_member_first_name", params: ["new_first_name": AnyJSON.string(safeName)])
+                    .execute()
+                print("✅ DataManager: RPC update_my_member_first_name succeeded for user \(safeUserId) -> \(safeName)")
+            } catch {
+                print("❌ DataManager: Failed to update member name (RPC fallback also failed): \(error.localizedDescription)")
+                throw DataError.databaseError("Failed to update name. Please try again.")
+            }
         }
     }
     
@@ -2869,6 +2929,7 @@ struct UserProfileData: Codable {
     let smoking_status: String?
     let height_cm: Double?
     let weight_kg: Double?
+    let nutrition_quality: Int?
     let blood_pressure_status: String?
     let diabetes_status: String?
     let has_prior_heart_attack: Bool?
@@ -2883,6 +2944,20 @@ struct UserProfileData: Codable {
     let optimal_vitality_target: Int?
     let vitality_score_current: Int?
     let vitality_progress_score_current: Int?
+
+    // Champion + notification preferences
+    let champion_name: String?
+    let champion_email: String?
+    let champion_phone: String?
+    let champion_enabled: Bool?
+    let notify_inapp: Bool?
+    let notify_push: Bool?
+    let notify_email: Bool?
+    let champion_notify_email: Bool?
+    let champion_notify_sms: Bool?
+    let quiet_hours_start: String?
+    let quiet_hours_end: String?
+    let quiet_hours_apply_critical: Bool?
 }
 
 // MARK: - Guided Setup Data Models

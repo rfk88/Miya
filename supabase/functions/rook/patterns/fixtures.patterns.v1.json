@@ -1,0 +1,91 @@
+{
+  "version": "1.0",
+  "generatedAt": "2026-01-09T00:00:00Z",
+  "fixtures": [
+    {
+      "id": "insufficient_data_no_alert",
+      "metric": "steps",
+      "endDate": "2026-01-07",
+      "series": [
+        { "date": "2026-01-02", "value": 8000 },
+        { "date": "2026-01-03", "value": 8200 },
+        { "date": "2026-01-04", "value": 7900 },
+        { "date": "2026-01-05", "value": 8100 },
+        { "date": "2026-01-06", "value": 7800 },
+        { "date": "2026-01-07", "value": 7700 }
+      ],
+      "expected": { "hasBaseline": false, "isTrue": false }
+    },
+    {
+      "id": "steps_drop_triggers_3day",
+      "metric": "steps",
+      "endDate": "2026-01-10",
+      "series": [
+        { "date": "2026-01-01", "value": 8000 },
+        { "date": "2026-01-02", "value": 8000 },
+        { "date": "2026-01-03", "value": 8000 },
+        { "date": "2026-01-04", "value": 8000 },
+        { "date": "2026-01-05", "value": 8000 },
+        { "date": "2026-01-06", "value": 8000 },
+        { "date": "2026-01-07", "value": 8000 },
+        { "date": "2026-01-08", "value": 5000 },
+        { "date": "2026-01-09", "value": 5000 },
+        { "date": "2026-01-10", "value": 5000 }
+      ],
+      "expected": {
+        "hasBaseline": true,
+        "baselineAvg": 8000,
+        "recentAvg": 5000,
+        "isTrue": true,
+        "expectedLevelForConsecutiveTrueDays": 3
+      }
+    },
+    {
+      "id": "steps_drop_escalates_7day",
+      "metric": "steps",
+      "endDate": "2026-01-14",
+      "series": [
+        { "date": "2026-01-01", "value": 8000 },
+        { "date": "2026-01-02", "value": 8000 },
+        { "date": "2026-01-03", "value": 8000 },
+        { "date": "2026-01-04", "value": 8000 },
+        { "date": "2026-01-05", "value": 8000 },
+        { "date": "2026-01-06", "value": 8000 },
+        { "date": "2026-01-07", "value": 8000 },
+        { "date": "2026-01-08", "value": 5000 },
+        { "date": "2026-01-09", "value": 5000 },
+        { "date": "2026-01-10", "value": 5000 },
+        { "date": "2026-01-11", "value": 5000 },
+        { "date": "2026-01-12", "value": 5000 },
+        { "date": "2026-01-13", "value": 5000 },
+        { "date": "2026-01-14", "value": 5000 }
+      ],
+      "expected": { "hasBaseline": true, "isTrue": true, "expectedLevelForConsecutiveTrueDays": 7 }
+    },
+    {
+      "id": "resolution_requires_3_false_days",
+      "metric": "steps",
+      "endDate": "2026-01-16",
+      "series": [
+        { "date": "2026-01-01", "value": 8000 },
+        { "date": "2026-01-02", "value": 8000 },
+        { "date": "2026-01-03", "value": 8000 },
+        { "date": "2026-01-04", "value": 8000 },
+        { "date": "2026-01-05", "value": 8000 },
+        { "date": "2026-01-06", "value": 8000 },
+        { "date": "2026-01-07", "value": 8000 },
+        { "date": "2026-01-08", "value": 5000 },
+        { "date": "2026-01-09", "value": 5000 },
+        { "date": "2026-01-10", "value": 5000 },
+        { "date": "2026-01-11", "value": 8000 },
+        { "date": "2026-01-12", "value": 8000 },
+        { "date": "2026-01-13", "value": 8000 },
+        { "date": "2026-01-14", "value": 8000 },
+        { "date": "2026-01-15", "value": 8000 },
+        { "date": "2026-01-16", "value": 8000 }
+      ],
+      "expected": { "hasBaseline": true, "isTrue": false }
+    }
+  ]
+}
+

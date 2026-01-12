@@ -28,6 +28,197 @@ struct ContentView: View {
     ContentView()
 }
 
+// MARK: - Hard-locked Theme Tokens (do not modify)
+enum MiyaTheme {
+    static let bg = Color.white
+
+    // #1D2430
+    static let ink = Color(red: 0.113, green: 0.141, blue: 0.188)
+
+    // #2E7F7B and #7AB9AA
+    static let tealDark = Color(red: 0.145, green: 0.431, blue: 0.416) // deeper teal for visible gradient
+    static let tealLight = Color(red: 0.478, green: 0.725, blue: 0.667)
+
+    // #7DD3C7
+    static let wash = Color(red: 0.490, green: 0.827, blue: 0.780)
+
+    static let hPad: CGFloat = 22
+    static let ctaGap: CGFloat = 14
+    static let buttonH: CGFloat = 60
+    static let radius: CGFloat = 18
+}
+
+// MARK: - Background wash (EXACT positioning)
+struct MiyaBackgroundWash: View {
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                MiyaTheme.bg
+
+                // Radial wash centered at (50% width, 72% height)
+                // Radius x=70% width, y=45% height
+                RadialGradient(
+                    gradient: Gradient(stops: [
+                        .init(color: MiyaTheme.wash.opacity(0.22), location: 0.00),
+                        .init(color: MiyaTheme.wash.opacity(0.12), location: 0.45),
+                        .init(color: Color.white.opacity(0.00), location: 1.00)
+                    ]),
+                    center: .center,
+                    startRadius: 0,
+                    endRadius: 1
+                )
+                // Convert "elliptical radius" into an explicit frame:
+                .frame(width: geo.size.width * 1.40, height: geo.size.height * 0.90) // 2 * rx, 2 * ry
+                .position(x: geo.size.width * 0.50, y: geo.size.height * 0.72)
+                .allowsHitTesting(false)
+            }
+            .ignoresSafeArea()
+        }
+    }
+}
+
+// MARK: - Premium button styles (hard locked)
+struct MiyaPrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(maxWidth: .infinity)
+            .frame(height: MiyaTheme.buttonH)
+            .background(
+                LinearGradient(
+                    colors: [MiyaTheme.tealDark, MiyaTheme.tealLight],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: MiyaTheme.radius, style: .continuous))
+            .shadow(color: .black.opacity(0.12), radius: 18, x: 0, y: 10)
+            .scaleEffect(configuration.isPressed ? 0.99 : 1.0)
+            .opacity(configuration.isPressed ? 0.98 : 1.0)
+    }
+}
+
+struct MiyaSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(maxWidth: .infinity)
+            .frame(height: MiyaTheme.buttonH)
+            .background(Color.white)
+            .overlay(
+                RoundedRectangle(cornerRadius: MiyaTheme.radius, style: .continuous)
+                    .stroke(MiyaTheme.ink.opacity(0.10), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: MiyaTheme.radius, style: .continuous))
+            .opacity(configuration.isPressed ? 0.92 : 1.0)
+    }
+}
+
+struct AuthEntryScreen: View {
+    @Binding var showingSettings: Bool
+    @Binding var showingLogin: Bool
+    
+    var body: some View {
+        ZStack {
+            MiyaBackgroundWash()
+
+            VStack(spacing: 0) {
+                // Top row
+                HStack {
+                    HStack(spacing: 10) {
+                        // Logo - fills entire frame
+                        Image("e96bc988831220de186601645fd93835b8dede817e5045c208d02c6fb54bd4c8")
+                            .resizable()
+                            .renderingMode(.original)
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 40, height: 40)
+                        
+                        Text("Miya Health")
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundStyle(MiyaTheme.ink)
+                            .kerning(-0.2)
+                    }
+
+                    Spacer()
+
+                    Button(action: { showingSettings = true }) {
+                        Image(systemName: "line.3.horizontal")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(MiyaTheme.ink.opacity(0.65))
+                            .frame(width: 44, height: 44)
+                            .background(MiyaTheme.ink.opacity(0.06))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, MiyaTheme.hPad)
+                .padding(.top, 8)
+
+                // Hero
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Your family's\nhealth, at a glance.")
+                        .font(.system(size: 40, weight: .heavy))
+                        .foregroundStyle(MiyaTheme.ink)
+                        .kerning(-0.6)
+                        .lineSpacing(4)
+
+                    Text("Daily insights for lifelong wellbeing.")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(MiyaTheme.ink.opacity(0.55))
+                        .lineSpacing(2)
+                }
+                .padding(.horizontal, MiyaTheme.hPad)
+                .padding(.top, 76)
+
+                Spacer()
+
+                // CTAs
+                VStack(spacing: MiyaTheme.ctaGap) {
+                    // Primary - Create a new family (NavigationLink preserved)
+                    NavigationLink {
+                        SuperadminOnboardingView()
+                    } label: {
+                        Text("Get started")
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundStyle(Color.white)
+                            .kerning(-0.2)
+                    }
+                    .buttonStyle(MiyaPrimaryButtonStyle())
+
+                    // Secondary - Enter Code (NavigationLink preserved)
+                    NavigationLink {
+                        EnterCodeView()
+                    } label: {
+                        Text("Join with code")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(MiyaTheme.ink)
+                    }
+                    .buttonStyle(MiyaSecondaryButtonStyle())
+
+                    // Tertiary - I already have an account (Button action preserved)
+                    Button(action: { showingLogin = true }) {
+                        Text("I already have an account")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(MiyaTheme.ink.opacity(0.42))
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 8)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, MiyaTheme.hPad)
+                .padding(.bottom, 20)
+            }
+        }
+    }
+}
+
+#Preview {
+    NavigationStack {
+        AuthEntryScreen(
+            showingSettings: .constant(false),
+            showingLogin: .constant(false)
+        )
+    }
+}
+
 struct LandingView: View {
     @State private var showingSettings = false
     @State private var navigateResume = false
@@ -102,188 +293,10 @@ struct LandingView: View {
                 }
             } else {
                 NavigationStack {
-                    ZStack {
-                        // Background layers
-                        Color(hex: "F6F7F8")
-                            .ignoresSafeArea()
-                            .overlay(
-                                RadialGradient(
-                                    colors: [
-                                        Color(hex: "DDF3F2").opacity(0.6),
-                                        Color(hex: "BFE6E4").opacity(0.22),
-                                        Color(hex: "F6F7F8").opacity(0.0)
-                                    ],
-                                    center: .center,
-                                    startRadius: 20,
-                                    endRadius: 360
-                                )
-                            )
-                            .overlay(
-                                Rectangle()
-                                    .fill(.ultraThinMaterial)
-                                    .opacity(0.03)
-                            )
-                            .overlay(
-                                // Concentric rings
-                                Canvas { context, size in
-                                    let center = CGPoint(x: size.width / 2, y: size.height * 0.32)
-                                    let maxRadius = min(size.width, size.height) * 0.38
-                                    let ringCount = 6
-                                    for i in 1...ringCount {
-                                        let progress = CGFloat(i) / CGFloat(ringCount)
-                                        let radius = maxRadius * progress
-                                        var path = Path()
-                                        path.addEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
-                                        context.stroke(path, with: .color(Color(hex: "A6D8D6").opacity(0.1)), lineWidth: 1)
-                                    }
-                                }
-                                .ignoresSafeArea()
-                            )
-                        
-                        VStack(spacing: 0) {
-                            // Top bar (actions unchanged)
-                            HStack {
-                                Text("Miya Health")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .kerning(0.18)
-                                    .foregroundColor(Color(hex: "1F2A37"))
-                                
-                                Spacer()
-                                
-                                Button {
-                                    showingSettings = true
-                                } label: {
-                                    Image(systemName: "line.3.horizontal")
-                                        .font(.system(size: 20, weight: .medium))
-                                        .foregroundColor(Color(hex: "1F2A37"))
-                                        .frame(width: 44, height: 44)
-                                        .background(
-                                            Circle()
-                                                .fill(Color.white)
-                                                .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 2)
-                                        )
-                                }
-                            }
-                            .padding(.horizontal, 24)
-                            .padding(.top, 20)
-                            
-                            Spacer()
-                            
-                            // Hero
-                            VStack(spacing: 24) {
-                                ZStack {
-                                    Circle()
-                                        .fill(
-                                            RadialGradient(
-                                                colors: [
-                                                    Color(hex: "A6D8D6").opacity(0.16),
-                                                    Color(hex: "A6D8D6").opacity(0.05),
-                                                    Color(hex: "F6F7F8").opacity(0.0)
-                                                ],
-                                                center: .center,
-                                                startRadius: 10,
-                                                endRadius: 150
-                                            )
-                                        )
-                                        .frame(width: 220, height: 220)
-                                    
-                                    Circle()
-                                        .fill(Color.white)
-                                        .frame(width: 170, height: 170)
-                                        .shadow(color: Color(hex: "A6D8D6").opacity(0.25), radius: 22, x: 0, y: 10)
-                                        .shadow(color: .black.opacity(0.05), radius: 30, x: 0, y: 16)
-                                    
-                                    Image("e96bc988831220de186601645fd93835b8dede817e5045c208d02c6fb54bd4c8")
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fit)
-                                        .frame(width: 130, height: 130)
-                                }
-                                
-                                VStack(spacing: 14) {
-                                    Text("Welcome to your\nfamily’s health HQ.")
-                                        .font(.system(size: 36, weight: .bold, design: .default))
-                                        .foregroundColor(Color(hex: "1F2A37"))
-                                        .multilineTextAlignment(.center)
-                                        .lineSpacing(3)
-                                    
-                                    Text("YOUR FAMILY. ONE HEARTBEAT.")
-                                        .font(.system(size: 13, weight: .semibold, design: .default))
-                                        .foregroundColor(Color(hex: "1F8A87"))
-                                        .kerning(0.28)
-                                        .textCase(.uppercase)
-                                    
-                                    Text("A calmer, healthier rhythm for your whole family.\nTracking every members wellness, one day at a time")
-                                        .font(.system(size: 17, weight: .regular, design: .default))
-                                        .foregroundColor(Color(hex: "5B6775"))
-                                        .multilineTextAlignment(.center)
-                                        .lineSpacing(6)
-                                }
-                                .padding(.horizontal, 32)
-                            }
-                            
-                            Spacer()
-                            
-                            VStack(spacing: 16) {
-                                // Create a new family (action unchanged)
-                                NavigationLink {
-                                    SuperadminOnboardingView()
-                                } label: {
-                                    HStack(spacing: 12) {
-                                        Text("Create a new family")
-                                            .font(.system(size: 17, weight: .semibold))
-                                        Spacer()
-                                        Image(systemName: "arrow.right")
-                                            .font(.system(size: 15, weight: .semibold))
-                                    }
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 24)
-                                    .frame(height: 64)
-                                    .background(
-                                        LinearGradient(
-                                            colors: [Color(hex: "1F8A87"), Color(hex: "1F8A87").opacity(0.85)],
-                                            startPoint: .leading,
-                                            endPoint: .trailing
-                                        )
-                                    )
-                                    .cornerRadius(16)
-                                    .shadow(color: Color(hex: "1F8A87").opacity(0.28), radius: 14, x: 0, y: 8)
-                                    .shadow(color: .black.opacity(0.08), radius: 18, x: 0, y: 10)
-                                }
-                                
-                                // Enter Code (action unchanged)
-                                NavigationLink {
-                                    EnterCodeView()
-                                } label: {
-                                    Text("Enter Code")
-                                        .font(.system(size: 17, weight: .semibold))
-                                        .foregroundColor(Color(hex: "1F2A37"))
-                                        .frame(maxWidth: .infinity)
-                                        .frame(height: 64)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 16)
-                                                .fill(Color.white)
-                                                .overlay(
-                                                    RoundedRectangle(cornerRadius: 16)
-                                                        .stroke(Color(hex: "D8DEE6"), lineWidth: 1.3)
-                                                )
-                                        )
-                                        .shadow(color: .black.opacity(0.03), radius: 8, x: 0, y: 4)
-                                }
-                                
-                                // I already have an account (action unchanged)
-                                Button {
-                                    showingLogin = true
-                                } label: {
-                                    Text("I already have an account")
-                                        .font(.system(size: 15, weight: .medium))
-                                        .foregroundColor(Color(hex: "7B8794"))
-                                        .padding(.top, 8)
-                                }
-                            }
-                            .padding(.horizontal, 24)
-                            .padding(.bottom, 40)
-                        }
-                    }
+                    AuthEntryScreen(
+                        showingSettings: $showingSettings,
+                        showingLogin: $showingLogin
+                    )
                     .sheet(isPresented: $showingSettings) {
                         SettingsView()
                             .environmentObject(dataManager)
@@ -722,29 +735,6 @@ struct EnterCodeView: View {
 }
 
 // MARK: - Color Hex Helper (local to landing view styling)
-private extension Color {
-    init(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&int)
-        let r, g, b: UInt64
-        switch hex.count {
-        case 6: // RGB (24-bit)
-            (r, g, b) = ((int >> 16) & 0xFF, (int >> 8) & 0xFF, int & 0xFF)
-        case 8: // ARGB (32-bit)
-            (r, g, b) = ((int >> 16) & 0xFF, (int >> 8) & 0xFF, int & 0xFF)
-        default:
-            (r, g, b) = (0, 0, 0)
-        }
-        self.init(
-            .sRGB,
-            red: Double(r) / 255,
-            green: Double(g) / 255,
-            blue: Double(b) / 255,
-            opacity: 1.0
-        )
-    }
-}
 
 // MARK: - GUIDED SETUP PREVIEW VIEW
 
@@ -1781,8 +1771,8 @@ struct WearableSelectionView: View {
             }
         }
         .onAppear {
-            // Step 3: Wearables
-            onboardingManager.setCurrentStep(3)
+            // Step 2: Wearables
+            onboardingManager.setCurrentStep(2)
             // Check connection status for API-based wearables on appear
             Task {
                 await checkAPIWearableConnectionStatus()
@@ -1966,11 +1956,65 @@ struct WearableSelectionView: View {
                     permissionsManager.requestAllPermissions { _ in
                         DispatchQueue.main.async {
                             print("🟢 RookConnect: Permission screen flow finished")
+                            
+                            // Check if HealthKit permissions are actually granted
+                            let store = HKHealthStore()
+                            let typesToCheck: [HKObjectType] = [
+                                HKQuantityType.quantityType(forIdentifier: .stepCount)!,
+                                HKCategoryType.categoryType(forIdentifier: .sleepAnalysis)!
+                            ]
+                            
+                            var allAuthorized = true
+                            for type in typesToCheck {
+                                let status = store.authorizationStatus(for: type)
+                                if status != .sharingAuthorized {
+                                    allAuthorized = false
+                                    break
+                                }
+                            }
+                            
+                            if allAuthorized {
+                                print("✅ RookConnect: Apple Health permissions granted - marking as connected")
+                                // Mark Apple Health as connected
+                                Task { @MainActor in
+                                    let appleHealthWearable = WearableType.appleWatch
+                                    let wasAlreadyConnected = connectedWearables.contains(appleHealthWearable)
+                                    connectedWearables.insert(appleHealthWearable)
+                                    
+                                    // Save to OnboardingManager
+                                    if !onboardingManager.connectedWearables.contains(appleHealthWearable.rawValue) {
+                                        onboardingManager.connectedWearables.append(appleHealthWearable.rawValue)
+                                    }
+                                    
+                                    // Save to database
+                                    do {
+                                        try await dataManager.saveWearable(wearableType: appleHealthWearable.rawValue)
+                                        print("✅ RookConnect: Apple Health saved to database")
+                                        
+                                        // Post notification to trigger automatic vitality scoring (same as API-based wearables)
+                                        if !wasAlreadyConnected {
+                                            NotificationCenter.default.post(
+                                                name: .apiWearableConnected,
+                                                object: nil,
+                                                userInfo: [
+                                                    "wearableType": appleHealthWearable.rawValue,
+                                                    "wearableName": appleHealthWearable.displayName,
+                                                    "userId": userId
+                                                ]
+                                            )
+                                            print("✅ RookConnect: Posted apiWearableConnected notification for Apple Health")
+                                        }
+                                    } catch {
+                                        print("⚠️ RookConnect: Failed to save Apple Health to database: \(error.localizedDescription)")
+                                    }
+                                }
+                            } else {
+                                print("⚠️ RookConnect: Apple Health permissions not fully granted")
+                            }
 
                         #if DEBUG
                         // Debug helper: read today's steps locally to confirm HealthKit access
                         func debugPrintTodaySteps() {
-                            let store = HKHealthStore()
                             guard let stepsType = HKQuantityType.quantityType(forIdentifier: .stepCount) else {
                                 print("🔎 HealthKit debug – steps type unavailable")
                                 return
@@ -2581,8 +2625,8 @@ struct AboutYouView: View {
             Text(errorMessage)
         }
         .onAppear {
-            // Step 4: About You
-            onboardingManager.setCurrentStep(4)
+            // Step 3: About You
+            onboardingManager.setCurrentStep(3)
         }
     }
     
@@ -3012,8 +3056,8 @@ struct HeartHealthView: View {
             Text(errorMessage)
         }
         .onAppear {
-            // Step 5: Heart Health
-            onboardingManager.setCurrentStep(5)
+            // Step 4: Heart Health
+            onboardingManager.setCurrentStep(4)
         }
     }
     
@@ -3295,8 +3339,8 @@ struct MedicalHistoryView: View {
             Text(errorMessage)
         }
         .onAppear {
-            // Step 6: Family History / Medical History
-            onboardingManager.setCurrentStep(6)
+            // Step 5: Family History / Medical History
+            onboardingManager.setCurrentStep(5)
         }
     }
     

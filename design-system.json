@@ -1,0 +1,456 @@
+{
+  "designSystem": {
+    "metadata": {
+      "name": "Health Tracking App Design System",
+      "version": "1.0",
+      "description": "Soft, friendly health and wellness tracking interface with organic shapes and warm color palette",
+      "designPhilosophy": "Approachable wellness tracking with emphasis on progress, community, and gentle motivation"
+    },
+    
+    "colorPalette": {
+      "primary": {
+        "peach": {
+          "50": "#FFF5F2",
+          "100": "#FFE8E0",
+          "200": "#FFD4C4",
+          "300": "#FFC4B0",
+          "400": "#FFB39E",
+          "500": "#FFA08A"
+        },
+        "usage": "Primary accent color for cards, highlights, and CTAs"
+      },
+      "secondary": {
+        "orange": {
+          "500": "#FF9F66",
+          "600": "#FF8C47"
+        },
+        "purple": {
+          "500": "#B794F6",
+          "600": "#9F7AEA"
+        },
+        "cyan": {
+          "500": "#67D5E8",
+          "600": "#4FC3D6"
+        },
+        "usage": "Accent colors for categories, metrics, and visual differentiation"
+      },
+      "neutral": {
+        "white": "#FFFFFF",
+        "cream": "#FFF9F5",
+        "beige": {
+          "50": "#FAF7F4",
+          "100": "#F5EFE9"
+        },
+        "gray": {
+          "400": "#CBD5E0",
+          "500": "#A0AEC0",
+          "600": "#718096"
+        },
+        "black": "#000000"
+      },
+      "semantic": {
+        "success": "#48BB78",
+        "warning": "#ED8936",
+        "error": "#F56565",
+        "info": "#4299E1"
+      }
+    },
+    
+    "typography": {
+      "fontFamilies": {
+        "heading": {
+          "name": "Serif",
+          "alternatives": ["Tiempos", "GT Super", "Freight Display", "Newsreader"],
+          "usage": "Headlines, section titles, emphasis text"
+        },
+        "body": {
+          "name": "Sans Serif",
+          "alternatives": ["SF Pro", "Inter", "Plus Jakarta Sans", "DM Sans"],
+          "usage": "Body text, labels, UI elements"
+        }
+      },
+      "scale": {
+        "xs": {
+          "fontSize": "12px",
+          "lineHeight": "16px",
+          "usage": "Captions, footnotes, timestamps"
+        },
+        "sm": {
+          "fontSize": "14px",
+          "lineHeight": "20px",
+          "usage": "Secondary text, labels"
+        },
+        "base": {
+          "fontSize": "16px",
+          "lineHeight": "24px",
+          "usage": "Body text, default size"
+        },
+        "lg": {
+          "fontSize": "18px",
+          "lineHeight": "28px",
+          "usage": "Emphasized body text"
+        },
+        "xl": {
+          "fontSize": "24px",
+          "lineHeight": "32px",
+          "usage": "Subheadings, card titles"
+        },
+        "2xl": {
+          "fontSize": "32px",
+          "lineHeight": "40px",
+          "usage": "Page titles, main headings"
+        },
+        "3xl": {
+          "fontSize": "48px",
+          "lineHeight": "56px",
+          "usage": "Large metric displays"
+        }
+      },
+      "weights": {
+        "regular": 400,
+        "medium": 500,
+        "semibold": 600,
+        "bold": 700
+      }
+    },
+    
+    "spacing": {
+      "scale": {
+        "xs": "4px",
+        "sm": "8px",
+        "md": "12px",
+        "lg": "16px",
+        "xl": "24px",
+        "2xl": "32px",
+        "3xl": "48px",
+        "4xl": "64px"
+      },
+      "cardPadding": "20px",
+      "sectionSpacing": "24px",
+      "componentGap": "12px"
+    },
+    
+    "borderRadius": {
+      "sm": "8px",
+      "md": "12px",
+      "lg": "16px",
+      "xl": "20px",
+      "2xl": "24px",
+      "pill": "9999px",
+      "usage": "Generous rounding throughout, pill shapes for buttons and tags"
+    },
+    
+    "shadows": {
+      "none": "none",
+      "sm": "0px 1px 2px rgba(0, 0, 0, 0.05)",
+      "md": "0px 4px 6px rgba(0, 0, 0, 0.07)",
+      "lg": "0px 10px 15px rgba(0, 0, 0, 0.1)",
+      "usage": "Minimal shadows, relying on cards and borders for depth"
+    },
+    
+    "components": {
+      "cards": {
+        "primary": {
+          "backgroundColor": "peach.300",
+          "borderRadius": "xl",
+          "padding": "20px",
+          "shadow": "none",
+          "usage": "Featured cards, CTAs, highlighted content"
+        },
+        "secondary": {
+          "backgroundColor": "white",
+          "borderRadius": "xl",
+          "padding": "20px",
+          "shadow": "sm",
+          "border": "1px solid neutral.gray.400",
+          "usage": "Content cards, metric displays, list items"
+        },
+        "minimal": {
+          "backgroundColor": "neutral.cream",
+          "borderRadius": "lg",
+          "padding": "16px",
+          "shadow": "none",
+          "usage": "Nested cards, secondary information"
+        }
+      },
+      
+      "buttons": {
+        "primary": {
+          "backgroundColor": "neutral.black",
+          "color": "neutral.white",
+          "borderRadius": "pill",
+          "padding": "12px 24px",
+          "fontSize": "base",
+          "fontWeight": "medium"
+        },
+        "secondary": {
+          "backgroundColor": "neutral.white",
+          "color": "neutral.black",
+          "border": "1px solid neutral.gray.400",
+          "borderRadius": "pill",
+          "padding": "12px 24px"
+        },
+        "ghost": {
+          "backgroundColor": "transparent",
+          "color": "neutral.black",
+          "padding": "12px 24px"
+        }
+      },
+      
+      "segmentedControl": {
+        "container": {
+          "backgroundColor": "neutral.beige.100",
+          "borderRadius": "pill",
+          "padding": "4px",
+          "display": "inline-flex",
+          "gap": "4px"
+        },
+        "activeSegment": {
+          "backgroundColor": "neutral.black",
+          "color": "neutral.white",
+          "borderRadius": "pill",
+          "padding": "8px 16px"
+        },
+        "inactiveSegment": {
+          "backgroundColor": "transparent",
+          "color": "neutral.gray.600",
+          "padding": "8px 16px"
+        }
+      },
+      
+      "metricCard": {
+        "container": {
+          "display": "flex",
+          "flexDirection": "column",
+          "gap": "4px"
+        },
+        "value": {
+          "fontSize": "3xl",
+          "fontWeight": "semibold",
+          "lineHeight": "1"
+        },
+        "unit": {
+          "fontSize": "lg",
+          "fontWeight": "regular",
+          "color": "neutral.gray.600",
+          "marginLeft": "4px"
+        },
+        "label": {
+          "fontSize": "sm",
+          "color": "neutral.gray.600",
+          "display": "flex",
+          "alignItems": "center",
+          "gap": "6px"
+        },
+        "icon": {
+          "size": "16px",
+          "display": "inline"
+        }
+      },
+      
+      "statusIndicator": {
+        "container": {
+          "display": "inline-flex",
+          "alignItems": "center",
+          "gap": "6px",
+          "backgroundColor": "neutral.beige.50",
+          "borderRadius": "pill",
+          "padding": "4px 12px",
+          "fontSize": "sm"
+        },
+        "emoji": {
+          "size": "16px"
+        }
+      },
+      
+      "progressBar": {
+        "container": {
+          "height": "8px",
+          "backgroundColor": "neutral.gray.400",
+          "borderRadius": "pill",
+          "overflow": "hidden"
+        },
+        "fill": {
+          "height": "100%",
+          "backgroundColor": "primary.peach.400",
+          "borderRadius": "pill",
+          "transition": "width 0.3s ease"
+        }
+      },
+      
+      "calendar": {
+        "grid": {
+          "display": "grid",
+          "gridTemplateColumns": "repeat(7, 1fr)",
+          "gap": "8px"
+        },
+        "day": {
+          "width": "40px",
+          "height": "40px",
+          "borderRadius": "md",
+          "display": "flex",
+          "alignItems": "center",
+          "justifyContent": "center",
+          "fontSize": "sm"
+        },
+        "activeDay": {
+          "backgroundColor": "secondary.orange.500",
+          "color": "neutral.white",
+          "fontWeight": "semibold"
+        },
+        "inactiveDay": {
+          "backgroundColor": "neutral.beige.100",
+          "color": "neutral.gray.600"
+        },
+        "unknownDay": {
+          "backgroundColor": "transparent",
+          "border": "2px dashed neutral.gray.400",
+          "display": "flex",
+          "alignItems": "center",
+          "justifyContent": "center",
+          "content": "?"
+        }
+      },
+      
+      "listItem": {
+        "container": {
+          "display": "flex",
+          "alignItems": "center",
+          "padding": "12px 16px",
+          "gap": "12px",
+          "borderRadius": "lg",
+          "backgroundColor": "neutral.white"
+        },
+        "avatar": {
+          "width": "48px",
+          "height": "48px",
+          "borderRadius": "pill",
+          "overflow": "hidden"
+        },
+        "content": {
+          "flex": 1,
+          "display": "flex",
+          "flexDirection": "column",
+          "gap": "2px"
+        },
+        "chevron": {
+          "color": "neutral.gray.400",
+          "size": "20px"
+        }
+      },
+      
+      "illustration": {
+        "style": "hand-drawn, organic shapes",
+        "stroke": "2-3px solid black",
+        "fill": "minimal, mostly outlines",
+        "characteristics": "playful, simple line art with occasional sparkle/star accents"
+      }
+    },
+    
+    "layouts": {
+      "screenPadding": "20px",
+      "maxContentWidth": "600px",
+      "headerHeight": "60px",
+      
+      "patterns": {
+        "dashboardGrid": {
+          "display": "grid",
+          "gap": "16px",
+          "gridTemplateColumns": "1fr",
+          "usage": "Main content area for cards and widgets"
+        },
+        
+        "twoColumnMetric": {
+          "display": "grid",
+          "gridTemplateColumns": "1fr 1fr",
+          "gap": "12px",
+          "usage": "Side-by-side metric displays"
+        },
+        
+        "weeklyCalendar": {
+          "display": "grid",
+          "gridTemplateColumns": "repeat(7, 1fr)",
+          "gap": "4px",
+          "justifyItems": "center"
+        },
+        
+        "tabBar": {
+          "display": "flex",
+          "gap": "8px",
+          "borderBottom": "1px solid neutral.gray.400",
+          "padding": "0 0 8px 0"
+        }
+      }
+    },
+    
+    "iconography": {
+      "style": "Mix of emoji and simple line icons",
+      "size": {
+        "sm": "16px",
+        "md": "20px",
+        "lg": "24px",
+        "xl": "32px"
+      },
+      "usage": "Emoji for status/mood, line icons for UI actions",
+      "examples": {
+        "categories": "🏃 (activity), 💜 (heart), ⚡ (energy), 🔥 (calories)",
+        "status": "😊 (good), 😐 (neutral), 😣 (poor)",
+        "actions": "Outlined icons for navigation, add, settings"
+      }
+    },
+    
+    "charts": {
+      "lineChart": {
+        "strokeWidth": "3px",
+        "color": "secondary.orange.500",
+        "backgroundColor": "rgba(255, 159, 102, 0.1)",
+        "gridLines": "neutral.gray.400 with low opacity",
+        "dataPoints": "circular, 6px diameter"
+      },
+      "barChart": {
+        "barColor": "secondary.orange.500",
+        "backgroundColor": "neutral.beige.50",
+        "borderRadius": "4px 4px 0 0",
+        "spacing": "8px"
+      }
+    },
+    
+    "animations": {
+      "duration": {
+        "fast": "150ms",
+        "normal": "300ms",
+        "slow": "500ms"
+      },
+      "easing": "ease-in-out",
+      "interactions": {
+        "buttonPress": "scale(0.95)",
+        "cardHover": "translateY(-2px)",
+        "fadeIn": "opacity 0 to 1"
+      }
+    },
+    
+    "designPrinciples": [
+      "Use generous white space and padding",
+      "Round everything - corners, buttons, avatars",
+      "Soft, warm color palette dominated by peach/coral tones",
+      "Mix serif headlines with sans-serif body for contrast",
+      "Emoji and illustrations add personality and warmth",
+      "Minimal shadows, rely on cards and backgrounds for hierarchy",
+      "Progress and metrics are prominent and celebratory",
+      "Hand-drawn illustrations feel approachable not clinical",
+      "Grid-based layouts with consistent spacing",
+      "Tab navigation and segmented controls for view switching"
+    ],
+    
+    "componentPatterns": {
+      "heroMetric": "Large number with unit, small label below, optional icon",
+      "comparisonCard": "Two metrics side by side in white card within colored card",
+      "statusTags": "Pill-shaped with emoji + text, light background",
+      "weekView": "7-day horizontal grid showing daily progress",
+      "leaderboard": "Ranked list with avatars, names, scores, and sparkline charts",
+      "progressSection": "Heading + multiple metric cards or progress bars",
+      "motivationalCard": "Illustration + heading + subtext + CTA button",
+      "miniChart": "Small inline sparkline or bar chart showing trend"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "sleep_minutes": {
+    "patternType": "drop_vs_baseline",
+    "rules": [
+      { "kind": "percent_drop_at_least", "percent": 0.10 },
+      { "kind": "absolute_drop_at_least", "value": 45 }
+    ]
+  },
+  "steps": {
+    "patternType": "drop_vs_baseline",
+    "rules": [{ "kind": "percent_drop_at_least", "percent": 0.25 }]
+  },
+  "hrv_ms": {
+    "patternType": "drop_vs_baseline",
+    "rules": [{ "kind": "percent_drop_at_least", "percent": 0.15 }]
+  },
+  "resting_hr": {
+    "patternType": "rise_vs_baseline",
+    "rules": [
+      { "kind": "percent_rise_at_least", "percent": 0.10 },
+      { "kind": "absolute_rise_at_least", "value": 5 }
+    ]
+  }
+}
+

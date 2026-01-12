@@ -1,0 +1,195 @@
+{
+  "fixtures" : [
+    {
+      "expected" : {
+        "movement" : 94,
+        "sleep" : 90,
+        "stress" : 89,
+        "totalScore" : 91
+      },
+      "id" : "young_all_optimal",
+      "input" : {
+        "activeCalories" : 500,
+        "age" : 30,
+        "awakePercent" : 3,
+        "breathingRate" : 14,
+        "hrvMs" : 85,
+        "hrvType" : "sdnn",
+        "movementMinutes" : 40,
+        "restingHeartRate" : 58,
+        "restorativeSleepPercent" : 40,
+        "sleepDurationHours" : 8,
+        "sleepEfficiencyPercent" : 95,
+        "steps" : 9500
+      }
+    },
+    {
+      "expected" : {
+        "movement" : 70,
+        "sleep" : 22,
+        "stress" : 71,
+        "totalScore" : 55
+      },
+      "id" : "young_sleep_low_movement_ok_stress_ok",
+      "input" : {
+        "activeCalories" : 250,
+        "age" : 30,
+        "awakePercent" : 12,
+        "breathingRate" : 18.5,
+        "hrvMs" : 55,
+        "hrvType" : "sdnn",
+        "movementMinutes" : 25,
+        "restingHeartRate" : 72,
+        "restorativeSleepPercent" : 28,
+        "sleepDurationHours" : 6,
+        "sleepEfficiencyPercent" : 84,
+        "steps" : 7000
+      }
+    },
+    {
+      "expected" : {
+        "movement" : 88,
+        "sleep" : 0,
+        "stress" : 87,
+        "totalScore" : 87
+      },
+      "id" : "middle_missing_sleep_but_movement_and_stress_present",
+      "input" : {
+        "activeCalories" : 450,
+        "age" : 50,
+        "breathingRate" : 15,
+        "hrvMs" : 70,
+        "hrvType" : "sdnn",
+        "movementMinutes" : 35,
+        "restingHeartRate" : 60,
+        "steps" : 9000
+      }
+    },
+    {
+      "id" : "middle_only_one_pillar_movement_should_be_ineligible",
+      "input" : {
+        "activeCalories" : 450,
+        "age" : 50,
+        "movementMinutes" : 35,
+        "steps" : 9000
+      }
+    },
+    {
+      "expected" : {
+        "movement" : 63,
+        "sleep" : 84,
+        "stress" : 34,
+        "totalScore" : 60
+      },
+      "id" : "senior_stress_low_rhr_high",
+      "input" : {
+        "activeCalories" : 180,
+        "age" : 65,
+        "awakePercent" : 11,
+        "breathingRate" : 19.5,
+        "hrvMs" : 35,
+        "hrvType" : "sdnn",
+        "movementMinutes" : 18,
+        "restingHeartRate" : 88,
+        "restorativeSleepPercent" : 28,
+        "sleepDurationHours" : 7.5,
+        "sleepEfficiencyPercent" : 86,
+        "steps" : 4500
+      }
+    },
+    {
+      "expected" : {
+        "movement" : 83,
+        "sleep" : 82,
+        "stress" : 85,
+        "totalScore" : 83
+      },
+      "id" : "elderly_steps_optimal_range",
+      "input" : {
+        "activeCalories" : 320,
+        "age" : 80,
+        "awakePercent" : 13,
+        "breathingRate" : 16,
+        "hrvMs" : 45,
+        "hrvType" : "sdnn",
+        "movementMinutes" : 22,
+        "restingHeartRate" : 68,
+        "restorativeSleepPercent" : 24,
+        "sleepDurationHours" : 7.2,
+        "sleepEfficiencyPercent" : 84,
+        "steps" : 6500
+      }
+    },
+    {
+      "expected" : {
+        "movement" : 80,
+        "sleep" : 80,
+        "stress" : 80,
+        "totalScore" : 80
+      },
+      "id" : "young_sleep_duration_at_optimal_min",
+      "input" : {
+        "activeCalories" : 300,
+        "age" : 25,
+        "awakePercent" : 5,
+        "breathingRate" : 12,
+        "hrvMs" : 70,
+        "hrvType" : "sdnn",
+        "movementMinutes" : 30,
+        "restingHeartRate" : 65,
+        "restorativeSleepPercent" : 35,
+        "sleepDurationHours" : 7,
+        "sleepEfficiencyPercent" : 90,
+        "steps" : 8000
+      }
+    },
+    {
+      "expected" : {
+        "movement" : 100,
+        "sleep" : 98,
+        "stress" : 100,
+        "totalScore" : 99
+      },
+      "id" : "young_sleep_duration_at_optimal_max",
+      "input" : {
+        "activeCalories" : 600,
+        "age" : 25,
+        "awakePercent" : 5,
+        "breathingRate" : 18,
+        "hrvMs" : 100,
+        "hrvType" : "sdnn",
+        "movementMinutes" : 45,
+        "restingHeartRate" : 50,
+        "restorativeSleepPercent" : 45,
+        "sleepDurationHours" : 9,
+        "sleepEfficiencyPercent" : 100,
+        "steps" : 10000
+      }
+    },
+    {
+      "expected" : {
+        "movement" : 59,
+        "sleep" : 45,
+        "stress" : 38,
+        "totalScore" : 47
+      },
+      "id" : "young_sleep_duration_just_below_poor_low",
+      "input" : {
+        "activeCalories" : 199,
+        "age" : 25,
+        "awakePercent" : 10.1,
+        "breathingRate" : 20.1,
+        "hrvMs" : 49,
+        "hrvType" : "sdnn",
+        "movementMinutes" : 19.9,
+        "restingHeartRate" : 90,
+        "restorativeSleepPercent" : 29,
+        "sleepDurationHours" : 6.4,
+        "sleepEfficiencyPercent" : 84.9,
+        "steps" : 5999
+      }
+    }
+  ],
+  "generatedAt" : "2026-01-07T14:49:17Z",
+  "schemaVersion" : "v1_2026_01_07"
+}

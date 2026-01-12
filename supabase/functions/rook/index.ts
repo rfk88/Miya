@@ -2,6 +2,9 @@
 // Accepts POST, stores headers + payload into rook_webhook_events, always responds 200.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { scoringSchema } from "./scoring/schema.ts";
+import { recomputeRolling7dScoresForUser } from "./scoring/recompute.ts";
+import { evaluatePatternsForUser } from "./patterns/engine.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -84,6 +87,40 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
       ...corsHeaders,
     },
   });
+}
+
+function parseISODateYYYYMMDDToUTCDate(dayKey: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return null;
+  const d = new Date(`${dayKey}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function toYYYYMMDD(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+function addDaysUTC(dayKey: string, deltaDays: number): string | null {
+  const d = parseISODateYYYYMMDDToUTCDate(dayKey);
+  if (!d) return null;
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  return toYYYYMMDD(d);
+}
+
+function clampEndDateToToday(dayKey: string): string {
+  const today = toYYYYMMDD(new Date());
+  return dayKey > today ? today : dayKey;
+}
+
+function computeAgeYears(dobISO: string): number | null {
+  const dob = new Date(dobISO);
+  if (Number.isNaN(dob.getTime())) return null;
+  const now = new Date();
+  let age = now.getUTCFullYear() - dob.getUTCFullYear();
+  const m = now.getUTCMonth() - dob.getUTCMonth();
+  if (m < 0 || (m === 0 && now.getUTCDate() < dob.getUTCDate())) {
+    age -= 1;
+  }
+  return age >= 0 ? age : null;
 }
 
 Deno.serve(async (req) => {
@@ -276,6 +313,98 @@ Deno.serve(async (req) => {
             sleepMinutesValue: sleepMinutes,
             restingHrValue: restingHr,
           });
+
+          // ===============================
+          // SERVER-SIDE SCORING (rolling 7d)
+          // ===============================
+          // Only compute if we can map to a Miya user UUID (we treat rook_user_id as UUID).
+          if (!userId) {
+            console.log("🟡 MIYA_SCORE_SKIP_NO_USER_ID", { rookUserId, metricDate });
+          } else {
+            try {
+              // Load DOB (required to compute AgeGroup).
+              const { data: profile, error: profileErr } = await supabase
+                .from("user_profiles")
+                .select("date_of_birth")
+                .eq("user_id", userId)
+                .maybeSingle();
+
+              if (profileErr) {
+                console.error("🔴 MIYA_SCORE_PROFILE_FETCH_ERROR", {
+                  userId,
+                  error: profileErr.message,
+                });
+              } else if (!profile?.date_of_birth) {
+                console.log("🟡 MIYA_SCORE_SKIP_NO_DOB", { userId });
+              } else {
+                const age = computeAgeYears(profile.date_of_birth);
+                if (age == null) {
+                  console.log("🟡 MIYA_SCORE_SKIP_BAD_DOB", { userId, dob: profile.date_of_birth });
+                } else {
+                  const endStart = metricDate;
+                  const endMax = clampEndDateToToday(addDaysUTC(metricDate, 6) ?? metricDate);
+
+                  const res = await recomputeRolling7dScoresForUser(supabase, {
+                    userId,
+                    age,
+                    startEndDate: endStart,
+                    endEndDate: endMax,
+                  });
+
+                  console.log("🔵 MIYA_SCORE_RECOMPUTE_RESULT", {
+                    userId,
+                    attempted: res.attemptedEndDates.length,
+                    computed: res.computedEndDates.length,
+                    skipped: res.skippedEndDates.length,
+                    latest: res.latestComputed?.endDate ?? null,
+                  });
+
+                  if (res.latestComputed) {
+                    const snap = res.latestComputed.snapshot;
+                    const sleep = snap.pillarScores.find((p) => p.pillar === "sleep")?.score ?? 0;
+                    const movement = snap.pillarScores.find((p) => p.pillar === "movement")?.score ?? 0;
+                    const stress = snap.pillarScores.find((p) => p.pillar === "stress")?.score ?? 0;
+
+                    const snapshotPayload: Record<string, unknown> = {
+                      vitality_score_current: snap.totalScore,
+                      vitality_score_source: "wearable",
+                      vitality_score_updated_at: new Date().toISOString(),
+                      vitality_sleep_pillar_score: sleep,
+                      vitality_movement_pillar_score: movement,
+                      vitality_stress_pillar_score: stress,
+                      vitality_schema_version: scoringSchema.schemaVersion,
+                    };
+
+                    const { error: upErr } = await supabase.from("user_profiles").update(snapshotPayload).eq("user_id", userId);
+
+                    if (upErr) {
+                      console.error("🔴 MIYA_SCORE_PROFILE_UPDATE_ERROR", { userId, error: upErr.message });
+                    } else {
+                      console.log("🟢 MIYA_SCORE_PROFILE_UPDATE_SUCCESS", {
+                        userId,
+                        endDate: res.latestComputed.endDate,
+                        total: snap.totalScore,
+                      });
+                    }
+                  }
+                }
+              }
+            } catch (scoreErr) {
+              console.error("🔴 MIYA_SCORE_UNHANDLED_ERROR", { userId, metricDate, error: String(scoreErr) });
+            }
+
+            // ===========================================
+            // SERVER-SIDE PATTERN ALERTS (baseline-driven)
+            // ===========================================
+            // Always evaluate in shadow mode by default (MIYA_PATTERN_SHADOW_MODE=true).
+            console.log("🟡 MIYA_PATTERN_EVAL_STARTING", { userId, metricDate });
+            try {
+              const res = await evaluatePatternsForUser(supabase, { userId, endDate: metricDate });
+              console.log("🔵 MIYA_PATTERN_EVAL_RESULT", { userId, metricDate, ...res });
+            } catch (patternErr) {
+              console.error("🔴 MIYA_PATTERN_EVAL_ERROR", { userId, metricDate, error: String(patternErr), stack: patternErr?.stack });
+            }
+          }
         }
       } else {
         console.log("🟡 MIYA_WEARABLE_SKIP", {

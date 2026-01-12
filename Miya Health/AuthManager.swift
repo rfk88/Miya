@@ -139,6 +139,52 @@ class AuthManager: ObservableObject {
             return nil
         }
     }
+
+    /// Get the current authenticated user's email (if available).
+    func getCurrentEmail() async throws -> String? {
+        let session = try await supabase.auth.session
+        return session.user.email
+    }
+
+    /// Re-authenticate by signing in again with email + password.
+    /// This refreshes the session and satisfies "recent login" requirements for sensitive changes.
+    func reauthenticate(email: String, password: String) async throws {
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            _ = try await supabase.auth.signIn(email: email, password: password)
+            isAuthenticated = true
+            UserDefaults.standard.set(false, forKey: explicitLogoutKey)
+        } catch {
+            throw AuthError.signInFailed(error.localizedDescription)
+        }
+    }
+
+    /// Request an email change for the current authenticated user.
+    /// Note: Supabase may require confirmation via email depending on project settings.
+    func updateEmail(to newEmail: String) async throws {
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            _ = try await supabase.auth.update(user: UserAttributes(email: newEmail))
+        } catch {
+            throw AuthError.updateFailed(error.localizedDescription)
+        }
+    }
+
+    /// Update the password for the current authenticated user.
+    func updatePassword(to newPassword: String) async throws {
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            _ = try await supabase.auth.update(user: UserAttributes(password: newPassword))
+        } catch {
+            throw AuthError.updateFailed(error.localizedDescription)
+        }
+    }
 }
 
 // MARK: - Auth Errors
@@ -147,6 +193,7 @@ enum AuthError: LocalizedError {
     case signUpFailed(String)
     case signInFailed(String)
     case signOutFailed(String)
+    case updateFailed(String)
     
     var errorDescription: String? {
         switch self {
@@ -156,6 +203,8 @@ enum AuthError: LocalizedError {
             return "Failed to sign in: \(message)"
         case .signOutFailed(let message):
             return "Failed to sign out: \(message)"
+        case .updateFailed(let message):
+            return message
         }
     }
 }

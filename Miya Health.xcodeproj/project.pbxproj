@@ -307,6 +307,8 @@
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Miya uses your Apple Health data (sleep, steps, heart rate and related metrics) to calculate your personal and family vitality scores, and to give you tailored guidance.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Miya may write certain health data (for example, workouts or mindfulness sessions you complete in the app) so your Apple Health history stays in one place.";
+				INFOPLIST_KEY_SupabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhtZmdkZXlycHpwcXB0Y2ttY2JyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxNjA4NjMsImV4cCI6MjA3OTczNjg2M30.zL4PS7grZF3BJUcdgGmJMa_2KTsl-1fCMbaCyhUqSIA";
+				INFOPLIST_KEY_SupabaseURL = "https://xmfgdeyrpzpqptckmcbr.supabase.co";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -353,6 +355,8 @@
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Miya uses your Apple Health data (sleep, steps, heart rate and related metrics) to calculate your personal and family vitality scores, and to give you tailored guidance.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Miya may write certain health data (for example, workouts or mindfulness sessions you complete in the app) so your Apple Health history stays in one place.";
+				INFOPLIST_KEY_SupabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhtZmdkZXlycHpwcXB0Y2ttY2JyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxNjA4NjMsImV4cCI6MjA3OTczNjg2M30.zL4PS7grZF3BJUcdgGmJMa_2KTsl-1fCMbaCyhUqSIA";
+				INFOPLIST_KEY_SupabaseURL = "https://xmfgdeyrpzpqptckmcbr.supabase.co";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

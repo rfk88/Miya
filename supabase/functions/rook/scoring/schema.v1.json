@@ -1,0 +1,506 @@
+{
+  "schemaVersion": "v1_2026_01_07",
+  "ageGroups": ["young", "middle", "senior", "elderly"],
+  "pillars": [
+    {
+      "id": "sleep",
+      "weightInVitality": 0.33,
+      "subMetrics": [
+        {
+          "id": "sleepDuration",
+          "weightWithinPillar": 0.4,
+          "scoringDirection": "optimalRange",
+          "description": "Total hours of sleep per night. Based on AASM/CDC guidelines by age.",
+          "ageSpecificBenchmarks": {
+            "young": {
+              "optimalMin": 7.0,
+              "optimalMax": 9.0,
+              "acceptableLowMin": 6.5,
+              "acceptableLowMax": 7.0,
+              "acceptableHighMin": 9.0,
+              "acceptableHighMax": 9.5,
+              "poorLowMax": 6.5,
+              "poorHighMin": 9.5
+            },
+            "middle": {
+              "optimalMin": 7.0,
+              "optimalMax": 9.0,
+              "acceptableLowMin": 6.5,
+              "acceptableLowMax": 7.0,
+              "acceptableHighMin": 9.0,
+              "acceptableHighMax": 9.5,
+              "poorLowMax": 6.5,
+              "poorHighMin": 9.5
+            },
+            "senior": {
+              "optimalMin": 7.0,
+              "optimalMax": 8.5,
+              "acceptableLowMin": 6.5,
+              "acceptableLowMax": 7.0,
+              "acceptableHighMin": 8.5,
+              "acceptableHighMax": 9.0,
+              "poorLowMax": 6.5,
+              "poorHighMin": 9.0
+            },
+            "elderly": {
+              "optimalMin": 7.0,
+              "optimalMax": 8.0,
+              "acceptableLowMin": 6.5,
+              "acceptableLowMax": 7.0,
+              "acceptableHighMin": 8.0,
+              "acceptableHighMax": 8.5,
+              "poorLowMax": 6.5,
+              "poorHighMin": 8.5
+            }
+          }
+        },
+        {
+          "id": "restorativeSleepPercent",
+          "weightWithinPillar": 0.3,
+          "scoringDirection": "optimalRange",
+          "description": "Percentage of sleep in REM and Deep stages. Declines with age; these are wellness targets.",
+          "ageSpecificBenchmarks": {
+            "young": {
+              "optimalMin": 35.0,
+              "optimalMax": 45.0,
+              "acceptableLowMin": 30.0,
+              "acceptableLowMax": 35.0,
+              "acceptableHighMin": 45.0,
+              "acceptableHighMax": 50.0,
+              "poorLowMax": 30.0,
+              "poorHighMin": 50.0
+            },
+            "middle": {
+              "optimalMin": 30.0,
+              "optimalMax": 40.0,
+              "acceptableLowMin": 25.0,
+              "acceptableLowMax": 30.0,
+              "acceptableHighMin": 40.0,
+              "acceptableHighMax": 45.0,
+              "poorLowMax": 25.0,
+              "poorHighMin": 45.0
+            },
+            "senior": {
+              "optimalMin": 25.0,
+              "optimalMax": 35.0,
+              "acceptableLowMin": 20.0,
+              "acceptableLowMax": 25.0,
+              "acceptableHighMin": 35.0,
+              "acceptableHighMax": 40.0,
+              "poorLowMax": 20.0,
+              "poorHighMin": 40.0
+            },
+            "elderly": {
+              "optimalMin": 23.0,
+              "optimalMax": 33.0,
+              "acceptableLowMin": 18.0,
+              "acceptableLowMax": 23.0,
+              "acceptableHighMin": 33.0,
+              "acceptableHighMax": 38.0,
+              "poorLowMax": 18.0,
+              "poorHighMin": 38.0
+            }
+          }
+        },
+        {
+          "id": "sleepEfficiency",
+          "weightWithinPillar": 0.2,
+          "scoringDirection": "higherIsBetter",
+          "description": "Time asleep divided by time in bed. Higher is better; standards decrease with age.",
+          "ageSpecificBenchmarks": {
+            "young": {
+              "optimalMin": 90.0,
+              "optimalMax": 100.0,
+              "acceptableLowMin": 85.0,
+              "acceptableLowMax": 90.0,
+              "acceptableHighMin": 100.0,
+              "acceptableHighMax": 100.0,
+              "poorLowMax": 85.0,
+              "poorHighMin": 100.0
+            },
+            "middle": {
+              "optimalMin": 88.0,
+              "optimalMax": 100.0,
+              "acceptableLowMin": 83.0,
+              "acceptableLowMax": 88.0,
+              "acceptableHighMin": 100.0,
+              "acceptableHighMax": 100.0,
+              "poorLowMax": 83.0,
+              "poorHighMin": 100.0
+            },
+            "senior": {
+              "optimalMin": 85.0,
+              "optimalMax": 100.0,
+              "acceptableLowMin": 80.0,
+              "acceptableLowMax": 85.0,
+              "acceptableHighMin": 100.0,
+              "acceptableHighMax": 100.0,
+              "poorLowMax": 80.0,
+              "poorHighMin": 100.0
+            },
+            "elderly": {
+              "optimalMin": 83.0,
+              "optimalMax": 100.0,
+              "acceptableLowMin": 78.0,
+              "acceptableLowMax": 83.0,
+              "acceptableHighMin": 100.0,
+              "acceptableHighMax": 100.0,
+              "poorLowMax": 78.0,
+              "poorHighMin": 100.0
+            }
+          }
+        },
+        {
+          "id": "sleepFragmentationAwakePercent",
+          "weightWithinPillar": 0.1,
+          "scoringDirection": "lowerIsBetter",
+          "description": "Percentage of time awake during sleep period. Lower is better; increases with age.",
+          "ageSpecificBenchmarks": {
+            "young": {
+              "optimalMin": 0.0,
+              "optimalMax": 5.0,
+              "acceptableLowMin": 0.0,
+              "acceptableLowMax": 0.0,
+              "acceptableHighMin": 5.0,
+              "acceptableHighMax": 10.0,
+              "poorLowMax": 0.0,
+              "poorHighMin": 10.0
+            },
+            "middle": {
+              "optimalMin": 0.0,
+              "optimalMax": 7.0,
+              "acceptableLowMin": 0.0,
+              "acceptableLowMax": 0.0,
+              "acceptableHighMin": 7.0,
+              "acceptableHighMax": 12.0,
+              "poorLowMax": 0.0,
+              "poorHighMin": 12.0
+            },
+            "senior": {
+              "optimalMin": 0.0,
+              "optimalMax": 10.0,
+              "acceptableLowMin": 0.0,
+              "acceptableLowMax": 0.0,
+              "acceptableHighMin": 10.0,
+              "acceptableHighMax": 15.0,
+              "poorLowMax": 0.0,
+              "poorHighMin": 15.0
+            },
+            "elderly": {
+              "optimalMin": 0.0,
+              "optimalMax": 12.0,
+              "acceptableLowMin": 0.0,
+              "acceptableLowMax": 0.0,
+              "acceptableHighMin": 12.0,
+              "acceptableHighMax": 18.0,
+              "poorLowMax": 0.0,
+              "poorHighMin": 18.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "movement",
+      "weightInVitality": 0.33,
+      "subMetrics": [
+        {
+          "id": "movementMinutes",
+          "weightWithinPillar": 0.4,
+          "scoringDirection": "higherIsBetter",
+          "description": "Minutes of moderate to vigorous physical activity per day. Based on WHO guidelines.",
+          "ageSpecificBenchmarks": {
+            "young": {
+              "optimalMin": 30.0,
+              "optimalMax": 45.0,
+              "acceptableLowMin": 20.0,
+              "acceptableLowMax": 30.0,
+              "acceptableHighMin": 45.0,
+              "acceptableHighMax": 60.0,
+              "poorLowMax": 20.0,
+              "poorHighMin": 60.0
+            },
+            "middle": {
+              "optimalMin": 30.0,
+              "optimalMax": 45.0,
+              "acceptableLowMin": 20.0,
+              "acceptableLowMax": 30.0,
+              "acceptableHighMin": 45.0,
+              "acceptableHighMax": 60.0,
+              "poorLowMax": 20.0,
+              "poorHighMin": 60.0
+            },
+            "senior": {
+              "optimalMin": 20.0,
+              "optimalMax": 40.0,
+              "acceptableLowMin": 15.0,
+              "acceptableLowMax": 20.0,
+              "acceptableHighMin": 40.0,
+              "acceptableHighMax": 50.0,
+              "poorLowMax": 15.0,
+              "poorHighMin": 50.0
+            },
+            "elderly": {
+              "optimalMin": 20.0,
+              "optimalMax": 40.0,
+              "acceptableLowMin": 15.0,
+              "acceptableLowMax": 20.0,
+              "acceptableHighMin": 40.0,
+              "acceptableHighMax": 50.0,
+              "poorLowMax": 15.0,
+              "poorHighMin": 50.0
+            }
+          }
+        },
+        {
+          "id": "steps",
+          "weightWithinPillar": 0.3,
+          "scoringDirection": "higherIsBetter",
+          "description": "Total step count per day. Targets based on research showing plateau effects by age.",
+          "ageSpecificBenchmarks": {
+            "young": {
+              "optimalMin": 8000.0,
+              "optimalMax": 10000.0,
+              "acceptableLowMin": 6000.0,
+              "acceptableLowMax": 8000.0,
+              "acceptableHighMin": 10000.0,
+              "acceptableHighMax": 15000.0,
+              "poorLowMax": 6000.0,
+              "poorHighMin": 15000.0
+            },
+            "middle": {
+              "optimalMin": 8000.0,
+              "optimalMax": 10000.0,
+              "acceptableLowMin": 6000.0,
+              "acceptableLowMax": 8000.0,
+              "acceptableHighMin": 10000.0,
+              "acceptableHighMax": 15000.0,
+              "poorLowMax": 6000.0,
+              "poorHighMin": 15000.0
+            },
+            "senior": {
+              "optimalMin": 6000.0,
+              "optimalMax": 8000.0,
+              "acceptableLowMin": 4000.0,
+              "acceptableLowMax": 6000.0,
+              "acceptableHighMin": 8000.0,
+              "acceptableHighMax": 12000.0,
+              "poorLowMax": 4000.0,
+              "poorHighMin": 12000.0
+            },
+            "elderly": {
+              "optimalMin": 6000.0,
+              "optimalMax": 8000.0,
+              "acceptableLowMin": 4000.0,
+              "acceptableLowMax": 6000.0,
+              "acceptableHighMin": 8000.0,
+              "acceptableHighMax": 12000.0,
+              "poorLowMax": 4000.0,
+              "poorHighMin": 12000.0
+            }
+          }
+        },
+        {
+          "id": "activeCalories",
+          "weightWithinPillar": 0.3,
+          "scoringDirection": "higherIsBetter",
+          "description": "Calories burned through activity. Uniform targets for V1; may be age-adjusted in future.",
+          "ageSpecificBenchmarks": {
+            "young": {
+              "optimalMin": 300.0,
+              "optimalMax": 600.0,
+              "acceptableLowMin": 200.0,
+              "acceptableLowMax": 300.0,
+              "acceptableHighMin": 600.0,
+              "acceptableHighMax": 900.0,
+              "poorLowMax": 200.0,
+              "poorHighMin": 900.0
+            },
+            "middle": {
+              "optimalMin": 300.0,
+              "optimalMax": 600.0,
+              "acceptableLowMin": 200.0,
+              "acceptableLowMax": 300.0,
+              "acceptableHighMin": 600.0,
+              "acceptableHighMax": 900.0,
+              "poorLowMax": 200.0,
+              "poorHighMin": 900.0
+            },
+            "senior": {
+              "optimalMin": 300.0,
+              "optimalMax": 600.0,
+              "acceptableLowMin": 200.0,
+              "acceptableLowMax": 300.0,
+              "acceptableHighMin": 600.0,
+              "acceptableHighMax": 900.0,
+              "poorLowMax": 200.0,
+              "poorHighMin": 900.0
+            },
+            "elderly": {
+              "optimalMin": 300.0,
+              "optimalMax": 600.0,
+              "acceptableLowMin": 200.0,
+              "acceptableLowMax": 300.0,
+              "acceptableHighMin": 600.0,
+              "acceptableHighMax": 900.0,
+              "poorLowMax": 200.0,
+              "poorHighMin": 900.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "stress",
+      "weightInVitality": 0.34,
+      "subMetrics": [
+        {
+          "id": "hrv",
+          "weightWithinPillar": 0.4,
+          "scoringDirection": "higherIsBetter",
+          "description": "Heart rate variability (SDNN). Higher HRV indicates better recovery; declines with age. Heuristic wellness targets.",
+          "ageSpecificBenchmarks": {
+            "young": {
+              "optimalMin": 70.0,
+              "optimalMax": 100.0,
+              "acceptableLowMin": 50.0,
+              "acceptableLowMax": 70.0,
+              "acceptableHighMin": 100.0,
+              "acceptableHighMax": 150.0,
+              "poorLowMax": 50.0,
+              "poorHighMin": 150.0
+            },
+            "middle": {
+              "optimalMin": 60.0,
+              "optimalMax": 90.0,
+              "acceptableLowMin": 45.0,
+              "acceptableLowMax": 60.0,
+              "acceptableHighMin": 90.0,
+              "acceptableHighMax": 130.0,
+              "poorLowMax": 45.0,
+              "poorHighMin": 130.0
+            },
+            "senior": {
+              "optimalMin": 50.0,
+              "optimalMax": 80.0,
+              "acceptableLowMin": 40.0,
+              "acceptableLowMax": 50.0,
+              "acceptableHighMin": 80.0,
+              "acceptableHighMax": 110.0,
+              "poorLowMax": 40.0,
+              "poorHighMin": 110.0
+            },
+            "elderly": {
+              "optimalMin": 40.0,
+              "optimalMax": 70.0,
+              "acceptableLowMin": 30.0,
+              "acceptableLowMax": 40.0,
+              "acceptableHighMin": 70.0,
+              "acceptableHighMax": 100.0,
+              "poorLowMax": 30.0,
+              "poorHighMin": 100.0
+            }
+          }
+        },
+        {
+          "id": "restingHeartRate",
+          "weightWithinPillar": 0.4,
+          "scoringDirection": "lowerIsBetter",
+          "description": "Average resting heart rate. Lower is generally better; normal adult range is 60-100 bpm.",
+          "ageSpecificBenchmarks": {
+            "young": {
+              "optimalMin": 50.0,
+              "optimalMax": 65.0,
+              "acceptableLowMin": 40.0,
+              "acceptableLowMax": 50.0,
+              "acceptableHighMin": 65.0,
+              "acceptableHighMax": 75.0,
+              "poorLowMax": 40.0,
+              "poorHighMin": 90.0
+            },
+            "middle": {
+              "optimalMin": 50.0,
+              "optimalMax": 65.0,
+              "acceptableLowMin": 40.0,
+              "acceptableLowMax": 50.0,
+              "acceptableHighMin": 65.0,
+              "acceptableHighMax": 75.0,
+              "poorLowMax": 40.0,
+              "poorHighMin": 90.0
+            },
+            "senior": {
+              "optimalMin": 55.0,
+              "optimalMax": 70.0,
+              "acceptableLowMin": 45.0,
+              "acceptableLowMax": 55.0,
+              "acceptableHighMin": 70.0,
+              "acceptableHighMax": 80.0,
+              "poorLowMax": 45.0,
+              "poorHighMin": 90.0
+            },
+            "elderly": {
+              "optimalMin": 55.0,
+              "optimalMax": 70.0,
+              "acceptableLowMin": 45.0,
+              "acceptableLowMax": 55.0,
+              "acceptableHighMin": 70.0,
+              "acceptableHighMax": 80.0,
+              "poorLowMax": 45.0,
+              "poorHighMin": 90.0
+            }
+          }
+        },
+        {
+          "id": "breathingRate",
+          "weightWithinPillar": 0.2,
+          "scoringDirection": "optimalRange",
+          "description": "Breaths per minute during rest. Normal range is 12-20 for adults of all ages.",
+          "ageSpecificBenchmarks": {
+            "young": {
+              "optimalMin": 12.0,
+              "optimalMax": 18.0,
+              "acceptableLowMin": 10.0,
+              "acceptableLowMax": 12.0,
+              "acceptableHighMin": 18.0,
+              "acceptableHighMax": 20.0,
+              "poorLowMax": 10.0,
+              "poorHighMin": 20.0
+            },
+            "middle": {
+              "optimalMin": 12.0,
+              "optimalMax": 18.0,
+              "acceptableLowMin": 10.0,
+              "acceptableLowMax": 12.0,
+              "acceptableHighMin": 18.0,
+              "acceptableHighMax": 20.0,
+              "poorLowMax": 10.0,
+              "poorHighMin": 20.0
+            },
+            "senior": {
+              "optimalMin": 12.0,
+              "optimalMax": 18.0,
+              "acceptableLowMin": 10.0,
+              "acceptableLowMax": 12.0,
+              "acceptableHighMin": 18.0,
+              "acceptableHighMax": 20.0,
+              "poorLowMax": 10.0,
+              "poorHighMin": 20.0
+            },
+            "elderly": {
+              "optimalMin": 12.0,
+              "optimalMax": 18.0,
+              "acceptableLowMin": 10.0,
+              "acceptableLowMax": 12.0,
+              "acceptableHighMin": 18.0,
+              "acceptableHighMax": 20.0,
+              "poorLowMax": 10.0,
+              "poorHighMin": 20.0
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
+
+

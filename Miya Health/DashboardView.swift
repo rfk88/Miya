@@ -335,12 +335,12 @@ struct DashboardTopBar: View {
         ZStack {
             // Premium header with softer emerald color
             DashboardDesign.miyaEmeraldSoft
-                .ignoresSafeArea(edges: .top)
+                .ignoresSafeArea(edges: [.top])
 
             // Subtle blur effect for depth (refined opacity)
             Rectangle()
                 .fill(.ultraThinMaterial)
-                .ignoresSafeArea(edges: .top)
+                .ignoresSafeArea(edges: [.top])
                 .opacity(0.1)
 
             HStack(spacing: 0) {
@@ -440,6 +440,7 @@ struct DashboardView: View {
     @State private var trendInsights: [TrendInsight] = []
     @State private var trendCoverage: TrendCoverageStatus? = nil
     @State private var isComputingTrendInsights: Bool = false
+    @State private var serverPatternAlerts: [FamilyNotificationItem] = []
     @State private var selectedFamilyNotification: FamilyNotificationItem? = nil
     
     // Family badges (Daily computed; Weekly persisted)
@@ -529,7 +530,7 @@ struct DashboardView: View {
                             if isLoadingFamilyMembers {
                                 DashboardInlineLoaderCard(title: "Family members")
                             } else {
-                        FamilyMembersStrip(members: familyMembers)
+                        FamilyMembersStrip(members: familyMembers, familyId: dataManager.currentFamilyId)
                             .id(familyMembersRefreshID)
                             }
                         }
@@ -563,13 +564,23 @@ struct DashboardView: View {
                         // Notifications / Patterns (family insights)
                         // Only show after trend computation completes to avoid flashing stale insights
                         if let snapshot = familySnapshot, familyVitalityScore != nil, !isComputingTrendInsights {
-                            let notifications = FamilyNotificationItem.build(
+                            let trendNotifications = FamilyNotificationItem.build(
                                 snapshot: snapshot,
                                 trendInsights: trendInsights,
                                 trendCoverage: trendCoverage,
                                 factors: vitalityFactors,
                                 members: familyMembers
-                            )
+                            ).filter { item in
+                                // Filter out "celebrate" trends if we have server alerts
+                                if case .trend(let insight) = item.kind {
+                                    return insight.severity != .celebrate
+                                }
+                                return true
+                            }
+                            
+                            // Prefer server alerts, fallback to trend insights
+                            let notifications = serverPatternAlerts.isEmpty ? trendNotifications : serverPatternAlerts
+                            
                             if !notifications.isEmpty {
                                 FamilyNotificationsCard(items: notifications.prefix(3).map { $0 }) { item in
                                     selectedFamilyNotification = item
@@ -637,6 +648,7 @@ struct DashboardView: View {
                     familyMembersRefreshID = UUID()
                     await computeAndStoreFamilySnapshot()
                     await computeTrendInsights()
+                    await loadServerPatternAlerts()
                     await computeFamilyBadgesIfNeeded()
                 }
             }
@@ -742,6 +754,7 @@ struct DashboardView: View {
                 familyMembersRefreshID = UUID()
                 await computeAndStoreFamilySnapshot()
                 await computeTrendInsights()
+                await loadServerPatternAlerts()
                 await computeFamilyBadgesIfNeeded()
             }
         }
@@ -763,6 +776,7 @@ struct DashboardView: View {
                 familyMembersRefreshID = UUID()
                 await computeAndStoreFamilySnapshot()
                 await computeTrendInsights()
+                await loadServerPatternAlerts()
                 await computeFamilyBadgesIfNeeded()
             }
         }
@@ -778,6 +792,7 @@ struct DashboardView: View {
             await loadFamilyVitality()
             await computeAndStoreFamilySnapshot()
             await computeTrendInsights()
+            await loadServerPatternAlerts()
             await computeFamilyBadgesIfNeeded()
             print("DashboardView .task finished, familyVitalityScore=\(String(describing: familyVitalityScore))")
         }
@@ -1523,6 +1538,125 @@ struct DashboardView: View {
         }
     }
     
+    /// Load server pattern alerts from the database into state
+    private func loadServerPatternAlerts() async {
+        let alerts = await fetchServerPatternAlerts()
+        await MainActor.run {
+            serverPatternAlerts = alerts
+        }
+    }
+    
+    /// Fetch server pattern alerts from the database
+    private func fetchServerPatternAlerts() async -> [FamilyNotificationItem] {
+        do {
+            let supabase = SupabaseConfig.client
+            
+            // Require familyId to scope alerts
+            guard let familyId = dataManager.currentFamilyId else {
+                print("❌ Dashboard: No familyId available for get_family_pattern_alerts")
+                return []
+            }
+            
+            // Call the get_family_pattern_alerts RPC
+            struct AlertRow: Decodable {
+                let id: String
+                let member_user_id: String
+                let metric_type: String
+                let pattern_type: String?
+                let episode_status: String
+                let active_since: String?
+                let current_level: Int
+                let severity: String?
+                let deviation_percent: Double?
+                let baseline_value: Double?
+                let recent_value: Double?
+            }
+            
+            let rows: [AlertRow] = try await supabase
+                .rpc("get_family_pattern_alerts", params: ["family_id": AnyJSON.string(familyId)])
+                .execute()
+                .value
+            
+            print("🔔 Dashboard: Found \(rows.count) active server pattern alerts")
+            
+            var items: [FamilyNotificationItem] = []
+            
+            for row in rows {
+                // Find member name
+                guard let member = familyMembers.first(where: { $0.userId?.lowercased() == row.member_user_id.lowercased() }) else {
+                    continue
+                }
+                
+                // Map metric to pillar
+                let pillar: VitalityPillar
+                switch row.metric_type.lowercased() {
+                case "steps":
+                    pillar = .movement
+                case "sleep_minutes":
+                    pillar = .sleep
+                case "hrv_ms", "resting_hr":
+                    pillar = .stress
+                default:
+                    continue
+                }
+                
+                // Build title and body
+                let metricDisplay: String
+                switch row.metric_type {
+                case "steps": metricDisplay = "Movement"
+                case "sleep_minutes": metricDisplay = "Sleep"
+                case "hrv_ms": metricDisplay = "HRV"
+                case "resting_hr": metricDisplay = "Resting HR"
+                default: metricDisplay = row.metric_type
+                }
+                
+                let patternDesc = row.pattern_type?.contains("rise") == true ? "above" : "below"
+                let levelDesc = "\(row.current_level)d"
+                
+                let title = "\(metricDisplay) \(patternDesc) baseline"
+                let deviationText = row.deviation_percent.map { String(format: "%.0f%%", abs($0 * 100)) } ?? ""
+                let body = deviationText.isEmpty ? 
+                    "\(metricDisplay) has been \(patternDesc) \(member.name)'s baseline for \(levelDesc)." :
+                    "\(metricDisplay) is \(deviationText) \(patternDesc) \(member.name)'s baseline (last \(levelDesc))."
+                
+                // Create a TrendInsight to store the server pattern data with debugWhy
+                let debugWhy = "serverPattern metric=\(row.metric_type) pattern=\(row.pattern_type ?? "unknown") level=\(row.current_level) severity=\(row.severity ?? "watch") deviation=\(row.deviation_percent ?? 0) alertStateId=\(row.id) activeSince=\(row.active_since ?? "unknown")"
+                
+                let insight = TrendInsight(
+                    memberName: member.name,
+                    memberUserId: row.member_user_id,
+                    pillar: pillar,
+                    severity: row.severity == "critical" ? .attention : (row.severity == "attention" ? .attention : .watch),
+                    title: title,
+                    body: body,
+                    debugWhy: debugWhy,
+                    windowDays: 21,
+                    requiredDays: 7,
+                    missingDays: 0,
+                    confidence: 1.0
+                )
+                
+                let item = FamilyNotificationItem(
+                    id: row.id,
+                    kind: .trend(insight),
+                    pillar: pillar,
+                    title: title,
+                    body: body,
+                    memberInitials: member.initials,
+                    memberName: member.name
+                )
+                items.append(item)
+            }
+            
+            print("🔔 Dashboard: Converted \(items.count) server pattern alerts to notification items")
+            return items
+            
+        } catch {
+            print("❌ Dashboard: Failed to fetch server pattern alerts: \(error.localizedDescription)")
+            return []
+        }
+    }
+    
     /// Fetch vitality history for family members and compute trend insights.
     private func computeTrendInsights() async {
         await MainActor.run {
@@ -1684,6 +1818,7 @@ struct DashboardView: View {
 
 struct FamilyMembersStrip: View {
     let members: [FamilyMemberScore]
+    let familyId: String?
 
     private func label(for score: Int) -> String {
         switch score {
@@ -1700,7 +1835,8 @@ struct FamilyMembersStrip: View {
                 ForEach(members) { member in
                     MemberProfileLink(
                         member: member,
-                        vitalityLabel: label(for: member.currentScore)
+                        vitalityLabel: label(for: member.currentScore),
+                        familyId: familyId
                     )
                 }
             }
@@ -1711,6 +1847,7 @@ struct FamilyMembersStrip: View {
     private struct MemberProfileLink: View {
         let member: FamilyMemberScore
         let vitalityLabel: String
+        let familyId: String?
         
         private var progress: CGFloat {
             CGFloat(member.ringProgress)
@@ -1718,12 +1855,20 @@ struct FamilyMembersStrip: View {
         
         var body: some View {
             NavigationLink {
+                if let fid = familyId, let uid = member.userId {
+                    FamilyMemberProfileView(
+                        memberUserId: uid,
+                        memberName: member.name,
+                        familyId: fid
+                    )
+                } else {
                 ProfileView(
                     memberName: member.name,
                     vitalityScore: member.currentScore,
                     vitalityTrendDelta: 0,
                     vitalityLabel: vitalityLabel
                 )
+                }
             } label: {
                         VStack(spacing: 10) {
                             ZStack {
@@ -5256,7 +5401,31 @@ private struct FamilyNotificationDetailSheet: View {
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var hasMinimumCoverage = false
-    @State private var showMiyaAlert = false
+    @State private var showAskMiyaChat = false
+    
+    // AI Insight state
+    @State private var aiInsightHeadline: String?
+    @State private var aiInsightClinicalInterpretation: String?
+    @State private var aiInsightDataConnections: String?
+    @State private var aiInsightPossibleCauses: [String] = []
+    @State private var aiInsightActionSteps: [String] = []
+    @State private var aiInsightConfidence: String?
+    @State private var aiInsightConfidenceReason: String?
+    @State private var isLoadingAIInsight: Bool = false
+    @State private var aiInsightError: String?
+    @State private var suggestedMessages: [(label: String, text: String)] = []
+    @State private var selectedSuggestedMessageIndex = 0
+    @State private var showShareSheet = false
+    @State private var aiInsightBaselineValue: Double?
+    @State private var loadingStep: Int = 0  // For animated loading checklist
+    @State private var isSection1Expanded: Bool = true  // What's Happening
+    @State private var isSection2Expanded: Bool = false  // The Full Picture
+    @State private var isSection3Expanded: Bool = false  // What Might Be Causing This
+    @State private var isSection4Expanded: Bool = true  // What To Do Now (always defaults open)
+    @State private var feedbackSubmitted: Bool = false
+    @State private var feedbackIsHelpful: Bool? = nil
+    @State private var aiInsightRecentValue: Double?
+    @State private var aiInsightDeviationPercent: Double?
     
     private var config: PillarConfig {
         PillarConfig.forPillar(item.pillar)
@@ -5472,22 +5641,345 @@ private struct FamilyNotificationDetailSheet: View {
     
     @ViewBuilder
     private var metricsDisplayView: some View {
-        // Headline sentence (pillar-specific)
-        let headline: String = {
-            switch item.pillar {
-            case .movement:
-                return "They're moving less than their optimal level."
-            case .sleep:
-                return "Their sleep has been below their optimal level."
-            case .stress:
-                return "Recovery signals suggest higher stress recently."
+        // Phase 2: prefer cached/GPT insight when available.
+        if let h = aiInsightHeadline, let clinical = aiInsightClinicalInterpretation {
+            VStack(alignment: .leading, spacing: 16) {
+                // Medical Disclaimer (always visible)
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 14))
+                        .foregroundColor(.orange)
+                        .padding(.top, 2)
+                    
+                    Text("This insight is AI-generated to help you understand health trends. It is not medical advice and should not replace consultation with a healthcare provider. If you have medical concerns, please consult a doctor.")
+                        .font(.system(size: 14))
+                        .foregroundColor(.miyaTextSecondary)
+                        .lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(12)
+                .background(Color(.systemGray6).opacity(0.5))
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+                )
+                
+                // Get baseline and recent values from AI insight evidence
+                let baselineVal = getBaselineValue()
+                let recentVal = getRecentValue()
+                let deviationPct = getDeviationPercent()
+                
+                // Key metrics card - shows baseline vs current vs optimal prominently
+                if let baseline = baselineVal, let recent = recentVal {
+                    VStack(spacing: 16) {
+                        // Baseline vs Current
+                        HStack(spacing: 20) {
+                            // Baseline
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Baseline")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.miyaTextSecondary)
+                                    .textCase(.uppercase)
+                                    .tracking(0.5)
+                                Text(formatMetricValue(baseline))
+                                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+                                    .foregroundColor(.miyaTextPrimary)
+                            }
+                            
+                            // Arrow indicator
+                            Image(systemName: deviationPct < 0 ? "arrow.down.right" : "arrow.up.right")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundColor(deviationPct < 0 ? .red.opacity(0.7) : .green.opacity(0.7))
+                                .padding(.top, 12)
+                            
+                            // Current
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Current")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.miyaTextSecondary)
+                                    .textCase(.uppercase)
+                                    .tracking(0.5)
+                                Text(formatMetricValue(recent))
+                                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+                                    .foregroundColor(deviationPct < 0 ? .red : .green)
+                            }
+                            
+                            Spacer()
+                        }
+                        
+                        // Change indicator
+                        if deviationPct != 0 {
+                            HStack(spacing: 6) {
+                                Image(systemName: deviationPct < 0 ? "arrow.down" : "arrow.up")
+                                    .font(.system(size: 11, weight: .semibold))
+                                Text("\(abs(Int(deviationPct * 100)))% change")
+                                    .font(.system(size: 13, weight: .medium))
+                            }
+                            .foregroundColor(deviationPct < 0 ? .red.opacity(0.8) : .green.opacity(0.8))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(deviationPct < 0 ? Color.red.opacity(0.1) : Color.green.opacity(0.1))
+                            )
+                        }
+                        
+                        // Optimal range (if available)
+                        if let optimal = optimalTarget {
+                            Divider()
+                            HStack {
+                                Text(config.optimalTargetLabel)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(.miyaTextSecondary)
+                                    .textCase(.uppercase)
+                                    .tracking(0.3)
+                                Spacer()
+                                Text(formatOptimalRange(optimal))
+                                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                                    .foregroundColor(.green.opacity(0.8))
+                            }
+                        }
+                    }
+                    .padding(16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color(.secondarySystemBackground))
+                    )
+                }
+                
+                // Headline
+                Text(h)
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.miyaTextPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                
+                // Section 1: What's Happening (Clinical Interpretation) - DEFAULT EXPANDED
+                ExpandableInsightSection(
+                    icon: "📊",
+                    title: "What's Happening",
+                    isExpanded: $isSection1Expanded,
+                    backgroundColor: Color.blue.opacity(0.08)
+                ) {
+                    Text(clinical)
+                        .font(.system(size: 16))
+                    .foregroundColor(.miyaTextPrimary)
+                        .lineSpacing(6)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                
+                // Section 2: The Full Picture (Data Connections) - DEFAULT COLLAPSED
+                if let dataConnections = aiInsightDataConnections, !dataConnections.isEmpty {
+                    ExpandableInsightSection(
+                        icon: "🔍",
+                        title: "The Full Picture",
+                        isExpanded: $isSection2Expanded,
+                        backgroundColor: Color.purple.opacity(0.08)
+                    ) {
+                        Text(dataConnections)
+                            .font(.system(size: 16))
+                                .foregroundColor(.miyaTextPrimary)
+                            .lineSpacing(6)
+                                .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                
+                // Section 3: What Might Be Causing This - DEFAULT COLLAPSED
+                if !aiInsightPossibleCauses.isEmpty {
+                    ExpandableInsightSection(
+                        icon: "💡",
+                        title: "What Might Be Causing This",
+                        isExpanded: $isSection3Expanded,
+                        backgroundColor: Color.orange.opacity(0.08)
+                    ) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(Array(aiInsightPossibleCauses.enumerated()), id: \.element) { index, cause in
+                                HStack(alignment: .top, spacing: 10) {
+                                    Circle()
+                                        .fill(Color.orange.opacity(0.7))
+                                        .frame(width: 6, height: 6)
+                                        .padding(.top, 6)
+                                    Text(cause)
+                                        .font(.system(size: 16))
+                                        .foregroundColor(.miyaTextPrimary)
+                                        .lineSpacing(4)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Section 4: What To Do Now - DEFAULT EXPANDED (ALWAYS)
+                if !aiInsightActionSteps.isEmpty {
+                    ExpandableInsightSection(
+                        icon: "✅",
+                        title: "What To Do Now",
+                        isExpanded: $isSection4Expanded,
+                        backgroundColor: Color.green.opacity(0.08)
+                    ) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(Array(aiInsightActionSteps.enumerated()), id: \.element) { index, step in
+                                HStack(alignment: .top, spacing: 12) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(Color.green.opacity(0.15))
+                                            .frame(width: 26, height: 26)
+                                        Text("\(index + 1)")
+                                            .font(.system(size: 13, weight: .bold))
+                                            .foregroundColor(.green)
+                                    }
+                                    .padding(.top, 2)
+                                    
+                                    Text(step)
+                                        .font(.system(size: 16))
+                                .foregroundColor(.miyaTextPrimary)
+                                        .lineSpacing(4)
+                                .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Feedback buttons (after action steps)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Was this insight helpful?")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.miyaTextPrimary)
+                    
+                    if feedbackSubmitted {
+                        // Thank you message
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text("Thank you for your feedback!")
+                                .font(.system(size: 15))
+                                .foregroundColor(.miyaTextSecondary)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.green.opacity(0.1))
+                        .cornerRadius(10)
+                    } else {
+                        // Feedback buttons
+                        HStack(spacing: 16) {
+                            Button {
+                                submitFeedback(isHelpful: true)
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Text("👍")
+                                        .font(.system(size: 20))
+                                    Text("Yes")
+                                        .font(.system(size: 15, weight: .medium))
+                                }
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 12)
+                                .background(Color.green.opacity(0.15))
+                                .foregroundColor(.green)
+                                .cornerRadius(10)
+                            }
+                            
+                            Button {
+                                submitFeedback(isHelpful: false)
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Text("👎")
+                                        .font(.system(size: 20))
+                                    Text("No")
+                                        .font(.system(size: 15, weight: .medium))
+                                }
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 12)
+                                .background(Color.red.opacity(0.15))
+                                .foregroundColor(.red)
+                                .cornerRadius(10)
+                            }
+                        }
+                    }
+                }
+                .padding(.top, 8)
+                
+                if let c = aiInsightConfidence, let why = aiInsightConfidenceReason, !c.isEmpty {
+                    HStack(spacing: 6) {
+                        Image(systemName: c == "high" ? "checkmark.circle.fill" : c == "medium" ? "info.circle.fill" : "exclamationmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(c == "high" ? .green : c == "medium" ? .orange : .red)
+                    Text("Confidence: \(c) — \(why)")
+                            .font(.system(size: 12))
+                        .foregroundColor(.miyaTextSecondary)
+                    }
+                    .padding(.top, 4)
+                }
+                
+                if let err = aiInsightError, !err.isEmpty {
+                    Text(err)
+                        .font(.system(size: 13))
+                        .foregroundColor(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-        }()
-        
-        Text(headline)
-            .font(.system(size: 15, weight: .medium))
-            .foregroundColor(.miyaTextPrimary)
-            .padding(.bottom, 12)
+            .padding(.bottom, 6)
+        } else if isLoadingAIInsight {
+            // Enhanced loading state with animated steps
+            VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                    ProgressView()
+                        .scaleEffect(0.9)
+                    Text("Analyzing \(item.memberName)'s health patterns...")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.miyaTextPrimary)
+                }
+                
+                VStack(alignment: .leading, spacing: 10) {
+                    LoadingStepRow(step: 0, currentStep: loadingStep, text: "Reviewing movement data")
+                    LoadingStepRow(step: 1, currentStep: loadingStep, text: "Checking sleep patterns")
+                    LoadingStepRow(step: 2, currentStep: loadingStep, text: "Analyzing stress indicators")
+                    LoadingStepRow(step: 3, currentStep: loadingStep, text: "Connecting the dots")
+                }
+                .padding(.leading, 8)
+                
+                Text("This usually takes 10-15 seconds")
+                    .font(.system(size: 13))
+                    .foregroundColor(.miyaTextSecondary)
+                    .padding(.top, 4)
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(.secondarySystemBackground))
+            )
+            .padding(.bottom, 8)
+            .onAppear {
+                // Animate through the steps
+                loadingStep = 0
+                Task {
+                    for i in 0..<4 {
+                        try? await Task.sleep(nanoseconds: 2_500_000_000) // 2.5 seconds per step
+                        await MainActor.run {
+                            loadingStep = i + 1
+                        }
+                    }
+                }
+            }
+        } else {
+            // Headline sentence (pillar-specific fallback)
+            let headline: String = {
+                switch item.pillar {
+                case .movement:
+                    return "They're moving less than their optimal level."
+                case .sleep:
+                    return "Their sleep has been below their optimal level."
+                case .stress:
+                    return "Recovery signals suggest higher stress recently."
+                }
+            }()
+            
+            Text(headline)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundColor(.miyaTextPrimary)
+                .padding(.bottom, 12)
+        }
         
         // Real metrics display (pillar-specific)
         VStack(spacing: 12) {
@@ -5499,20 +5991,6 @@ private struct FamilyNotificationDetailSheet: View {
             case .stress:
                 stressMetricsView
             }
-            
-            // Why this matters
-            Divider()
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Why this matters")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.miyaTextSecondary)
-                
-                Text(item.debugWhy ?? config.fallbackExplanation)
-                    .font(.system(size: 14))
-                    .foregroundColor(.miyaTextPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.top, 4)
         }
     }
     
@@ -5754,6 +6232,130 @@ private struct FamilyNotificationDetailSheet: View {
                     )
                     .padding(.horizontal, 20)
                     
+                    // Reach Out Section - ELEVATED DESIGN (only if AI insight loaded)
+                    if !suggestedMessages.isEmpty {
+                        VStack(alignment: .leading, spacing: 16) {
+                            // Header with icon
+                            HStack(spacing: 12) {
+                                ZStack {
+                                    Circle()
+                                        .fill(Color.blue.opacity(0.15))
+                                        .frame(width: 44, height: 44)
+                                    Image(systemName: "paperplane.fill")
+                                        .font(.system(size: 20))
+                                        .foregroundColor(.blue)
+                                }
+                                
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Reach Out")
+                                        .font(.system(size: 20, weight: .bold))
+                                .foregroundColor(.miyaTextPrimary)
+                                    Text("Share this insight with \(item.memberName)")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(.miyaTextSecondary)
+                                }
+                                
+                                Spacer()
+                            }
+                            
+                            Picker("Message style", selection: $selectedSuggestedMessageIndex) {
+                                ForEach(0..<suggestedMessages.count, id: \.self) { idx in
+                                    Text(suggestedMessages[idx].label).tag(idx)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            
+                            Text(selectedShareText)
+                                .font(.system(size: 15))
+                                .foregroundColor(.miyaTextPrimary)
+                                .lineSpacing(4)
+                                .padding(16)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .fill(Color(.secondarySystemBackground))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(Color.blue.opacity(0.2), lineWidth: 1)
+                                )
+                            
+                            VStack(spacing: 12) {
+                                // WhatsApp Button
+                                Button {
+                                    openWhatsApp(with: selectedShareText)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "message.fill")
+                                            .font(.system(size: 18, weight: .semibold))
+                                        Text("Send via WhatsApp")
+                                            .font(.system(size: 16, weight: .semibold))
+                                        Spacer()
+                                        Image(systemName: "arrow.up.forward")
+                                            .font(.system(size: 14))
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .padding(.horizontal, 20)
+                                    .background(Color(red: 0.15, green: 0.79, blue: 0.47)) // WhatsApp green
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                                }
+                                
+                                // Messages/SMS Button
+                                Button {
+                                    openMessages(with: selectedShareText)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "message.badge.fill")
+                                            .font(.system(size: 18, weight: .semibold))
+                                        Text("Send via Text Message")
+                                            .font(.system(size: 16, weight: .semibold))
+                                        Spacer()
+                                        Image(systemName: "arrow.up.forward")
+                                            .font(.system(size: 14))
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .padding(.horizontal, 20)
+                                    .background(Color.green)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                                }
+                                
+                                // Keep the generic share sheet as a fallback
+                                Button {
+                                    showShareSheet = true
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "square.and.arrow.up")
+                                            .font(.system(size: 16, weight: .semibold))
+                                        Text("More Options...")
+                                            .font(.system(size: 16, weight: .semibold))
+                                        Spacer()
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .padding(.horizontal, 20)
+                                    .background(Color(.systemGray5))
+                                    .foregroundColor(.miyaTextPrimary)
+                                    .cornerRadius(12)
+                                }
+                                .sheet(isPresented: $showShareSheet) {
+                                    MiyaShareSheetView(activityItems: [selectedShareText])
+                                }
+                            }
+                        }
+                        .padding(20)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(Color(.systemBackground))
+                                .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
+                        )
+                        .padding(.horizontal, 20)
+                        .padding(.top, 16)
+                    }
+                    
                     // Ask Miya button (moved here, directly under "What's going on" card)
                     if item.memberUserId != nil {
                         Button {
@@ -5764,7 +6366,7 @@ private struct FamilyNotificationDetailSheet: View {
                             #if DEBUG
                             print("📤 ASK_MIYA_PAYLOAD: \(payload)")
                             #endif
-                            showMiyaAlert = true
+                            showAskMiyaChat = true
                         } label: {
                             HStack(spacing: 12) {
                                 ZStack {
@@ -5998,7 +6600,10 @@ private struct FamilyNotificationDetailSheet: View {
                     Button("Close") { dismiss() }
                 }
             }
-            .alert("Miya insights coming soon", isPresented: $showMiyaAlert) {
+            .sheet(isPresented: $showAskMiyaChat) {
+                MiyaInsightChatSheet(alertItem: item)
+            }
+            .alert("Data loading", isPresented: .constant(false)) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("We're building personalized insights based on this data. Check back soon!")
@@ -6006,6 +6611,7 @@ private struct FamilyNotificationDetailSheet: View {
             .task {
                 await loadHistory()
                 await calculateOptimalTarget()
+                await fetchAIInsightIfPossible()
             }
         }
     }
@@ -6361,6 +6967,262 @@ private struct FamilyNotificationDetailSheet: View {
             ],
             "triggerReason": item.debugWhy ?? config.fallbackExplanation
         ]
+    }
+    
+    private func fetchAIInsightIfPossible() async {
+        print("🤖 AI_INSIGHT: fetchAIInsightIfPossible() called for \(item.memberName)")
+        print("🤖 AI_INSIGHT: debugWhy = \(item.debugWhy ?? "nil")")
+        
+        // Only fetch for server pattern alerts with an alertStateId
+        guard let debugWhy = item.debugWhy else {
+            print("❌ AI_INSIGHT: No debugWhy found - exiting")
+            return
+        }
+        
+        guard debugWhy.contains("serverPattern") else {
+            print("❌ AI_INSIGHT: debugWhy does not contain 'serverPattern' - exiting")
+            return
+        }
+        
+        guard let alertStateId = extractAlertStateId(from: debugWhy) else {
+            print("❌ AI_INSIGHT: Could not extract alertStateId from debugWhy - exiting")
+            return
+        }
+        
+        print("✅ AI_INSIGHT: Found alertStateId = \(alertStateId)")
+        
+        await MainActor.run {
+            isLoadingAIInsight = true
+            aiInsightError = nil
+        }
+        
+        do {
+            let supabase = SupabaseConfig.client
+            let session = try await supabase.auth.session
+            guard let url = URL(string: "\(SupabaseConfig.supabaseURL)/functions/v1/miya_insight") else { throw URLError(.badURL) }
+            
+            print("🌐 AI_INSIGHT: Calling Edge Function at \(url)")
+            print("🌐 AI_INSIGHT: Payload = {\"alert_state_id\": \"\(alertStateId)\"}")
+            
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+            req.setValue(SupabaseConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
+            req.httpBody = try JSONSerialization.data(withJSONObject: ["alert_state_id": alertStateId])
+            
+            let (data, response) = try await URLSession.shared.data(for: req)
+            let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
+            
+            print("📥 AI_INSIGHT: Response status = \(httpStatus)")
+            print("📥 AI_INSIGHT: Response data = \(String(data: data, encoding: .utf8) ?? "nil")")
+            
+            let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            guard (obj?["ok"] as? Bool) == true else {
+                let errBody = (obj?["error"] as? String) ?? String(data: data, encoding: .utf8) ?? "Unknown"
+                print("❌ AI_INSIGHT: Edge Function returned error: \(errBody)")
+                throw NSError(domain: "miya_insight", code: httpStatus, userInfo: [NSLocalizedDescriptionKey: "AI insight failed (status \(httpStatus)): \(errBody)"])
+            }
+            
+            print("✅ AI_INSIGHT: Successfully received response")
+            
+            await MainActor.run {
+                aiInsightHeadline = obj?["headline"] as? String
+                aiInsightClinicalInterpretation = obj?["clinical_interpretation"] as? String
+                aiInsightDataConnections = obj?["data_connections"] as? String
+                aiInsightPossibleCauses = obj?["possible_causes"] as? [String] ?? []
+                aiInsightActionSteps = obj?["action_steps"] as? [String] ?? []
+                aiInsightConfidence = obj?["confidence"] as? String
+                aiInsightConfidenceReason = obj?["confidence_reason"] as? String
+                
+                print("📊 AI_INSIGHT: Parsed fields:")
+                print("  - headline: \(aiInsightHeadline ?? "nil")")
+                print("  - clinical_interpretation: \(aiInsightClinicalInterpretation?.prefix(50) ?? "nil")...")
+                print("  - data_connections: \(aiInsightDataConnections?.prefix(50) ?? "nil")...")
+                print("  - possible_causes: \(aiInsightPossibleCauses.count) items")
+                print("  - action_steps: \(aiInsightActionSteps.count) items")
+                
+                // Extract evidence data for metric display
+                if let evidence = obj?["evidence"] as? [String: Any] {
+                    aiInsightBaselineValue = evidence["baseline_value"] as? Double
+                    aiInsightRecentValue = evidence["recent_value"] as? Double
+                    aiInsightDeviationPercent = evidence["deviation_percent"] as? Double
+                    print("  - evidence baseline: \(aiInsightBaselineValue ?? 0)")
+                    print("  - evidence recent: \(aiInsightRecentValue ?? 0)")
+                    print("  - evidence deviation: \(aiInsightDeviationPercent ?? 0)")
+                }
+                
+                if let ms = obj?["message_suggestions"] as? [[String: Any]] {
+                    suggestedMessages = ms.compactMap { d in
+                        guard let label = d["label"] as? String, let text = d["text"] as? String else { return nil }
+                        return (label: label, text: text)
+                    }
+                    print("  - message_suggestions: \(suggestedMessages.count) items")
+                }
+            }
+        } catch {
+            print("❌ AI_INSIGHT: Error occurred: \(error)")
+            print("❌ AI_INSIGHT: Error description: \(error.localizedDescription)")
+            print("❌ AI_INSIGHT: Error type: \(type(of: error))")
+            if let urlError = error as? URLError {
+                print("❌ AI_INSIGHT: URLError code: \(urlError.code)")
+            }
+            if let nsError = error as? NSError {
+                print("❌ AI_INSIGHT: NSError domain: \(nsError.domain)")
+                print("❌ AI_INSIGHT: NSError code: \(nsError.code)")
+                print("❌ AI_INSIGHT: NSError userInfo: \(nsError.userInfo)")
+            }
+            await MainActor.run {
+                aiInsightError = error.localizedDescription
+            }
+        }
+        
+        await MainActor.run { isLoadingAIInsight = false }
+    }
+    
+    private func extractAlertStateId(from debugWhy: String) -> String? {
+        // Format: "serverPattern ... alertStateId=<uuid> ..."
+        let pattern = "alertStateId=([a-f0-9-]+)"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
+              let match = regex.firstMatch(in: debugWhy, options: [], range: NSRange(debugWhy.startIndex..., in: debugWhy)),
+              let range = Range(match.range(at: 1), in: debugWhy)
+        else { return nil }
+        return String(debugWhy[range])
+    }
+    
+    private func getBaselineValue() -> Double? {
+        return aiInsightBaselineValue
+    }
+    
+    private func getRecentValue() -> Double? {
+        return aiInsightRecentValue
+    }
+    
+    private func getDeviationPercent() -> Double {
+        return aiInsightDeviationPercent ?? 0
+    }
+    
+    private func submitFeedback(isHelpful: Bool) {
+        // Extract alert state ID from debugWhy
+        guard let debugWhy = item.debugWhy,
+              debugWhy.contains("serverPattern"),
+              let alertStateId = extractAlertStateId(from: debugWhy)
+        else {
+            print("❌ FEEDBACK: Could not extract alertStateId")
+            return
+        }
+        
+        Task {
+            do {
+                let supabase = SupabaseConfig.client
+                let userId = try await supabase.auth.session.user.id
+                
+                // Create feedback record
+                struct FeedbackInsert: Encodable {
+                    let alert_state_id: String
+                    let user_id: String
+                    let is_helpful: Bool
+                }
+                
+                let feedback = FeedbackInsert(
+                    alert_state_id: alertStateId,
+                    user_id: userId.uuidString,
+                    is_helpful: isHelpful
+                )
+                
+                // Insert feedback into database
+                try await supabase
+                    .from("alert_insight_feedback")
+                    .insert(feedback)
+                    .execute()
+                
+                await MainActor.run {
+                    feedbackSubmitted = true
+                    feedbackIsHelpful = isHelpful
+                }
+                
+                print("✅ FEEDBACK: Submitted \(isHelpful ? "helpful" : "not helpful") for alert \(alertStateId)")
+            } catch {
+                print("❌ FEEDBACK: Failed to submit - \(error.localizedDescription)")
+                // Don't show error to user, just log it
+            }
+        }
+    }
+    
+    private func openWhatsApp(with message: String) {
+        let encoded = message.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        
+        // Try WhatsApp first
+        if let url = URL(string: "whatsapp://send?text=\(encoded)"),
+           UIApplication.shared.canOpenURL(url) {
+            UIApplication.shared.open(url)
+        } else {
+            // Fallback: Open WhatsApp in App Store if not installed
+            if let appStoreURL = URL(string: "https://apps.apple.com/app/whatsapp-messenger/id310633997") {
+                UIApplication.shared.open(appStoreURL)
+            }
+        }
+    }
+    
+    private func openMessages(with message: String, phoneNumber: String? = nil) {
+        let encoded = message.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        
+        var urlString = "sms:"
+        if let phone = phoneNumber {
+            urlString += phone
+        }
+        urlString += "&body=\(encoded)"
+        
+        if let url = URL(string: urlString) {
+            UIApplication.shared.open(url)
+        }
+    }
+    
+    private func formatMetricValue(_ value: Double) -> String {
+        let unit = config.primaryUnit
+        
+        // Format based on metric type
+        switch item.pillar {
+        case .sleep:
+            // Convert minutes to hours
+            let hours = value / 60.0
+            return String(format: "%.1fh", hours)
+        case .movement:
+            // Steps
+            return String(format: "%.0f", value)
+        case .stress:
+            // HRV or HR
+            if config.primaryMetricLabel.contains("HRV") {
+                return String(format: "%.0f ms", value)
+            } else {
+                return String(format: "%.0f bpm", value)
+            }
+        }
+    }
+    
+    private func formatOptimalRange(_ optimal: (min: Double, max: Double)) -> String {
+        switch item.pillar {
+        case .sleep:
+            // Convert minutes to hours for sleep
+            return String(format: "%.1f-%.1fh", optimal.min, optimal.max)
+        case .movement:
+            // Steps
+            return "\(Int(optimal.min.rounded()))-\(Int(optimal.max.rounded())) steps"
+        case .stress:
+            // HRV in ms
+            if config.primaryMetricLabel.contains("HRV") {
+                return "\(Int(optimal.min.rounded()))-\(Int(optimal.max.rounded())) ms"
+            } else {
+                return "\(Int(optimal.min.rounded()))-\(Int(optimal.max.rounded())) bpm"
+            }
+        }
+    }
+    
+    private var selectedShareText: String {
+        guard selectedSuggestedMessageIndex < suggestedMessages.count else {
+            return "Hey, just checking in on you."
+        }
+        return suggestedMessages[selectedSuggestedMessageIndex].text
     }
 }
 
@@ -6820,5 +7682,272 @@ private struct FamilyHelpActionCard: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemBackground))
         )
+    }
+}
+
+// MARK: - Ask Miya Chat Sheet
+
+private struct MiyaInsightChatSheet: View {
+    let alertItem: FamilyNotificationItem
+    @Environment(\.dismiss) private var dismiss
+    
+    @State private var inputText = ""
+    @State private var messages: [(role: String, text: String)] = []
+    @State private var isSending = false
+    @State private var errorText: String?
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                if errorText != nil || messages.isEmpty {
+                    VStack(spacing: 12) {
+                        if let err = errorText {
+                            Text(err)
+                                .font(.system(size: 14))
+                                .foregroundColor(.red)
+                                .multilineTextAlignment(.center)
+                                .padding()
+                        }
+                        if messages.isEmpty {
+                            Text("Ask a question about this pattern")
+                                .font(.system(size: 15))
+                                .foregroundColor(.secondary)
+                                .padding()
+                        }
+                    }
+                    .frame(maxHeight: .infinity)
+                }
+                
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(Array(messages.enumerated()), id: \.offset) { _, msg in
+                            HStack {
+                                if msg.role == "user" {
+                                    Spacer()
+                                    Text(msg.text)
+                                        .font(.system(size: 15))
+                                        .padding(12)
+                                        .background(Color.blue.opacity(0.1))
+                                        .cornerRadius(12)
+                                        .frame(maxWidth: .infinity * 0.75, alignment: .trailing)
+                                } else {
+                                    Text(msg.text)
+                                        .font(.system(size: 15))
+                                        .padding(12)
+                                        .background(Color(.systemGray6))
+                                        .cornerRadius(12)
+                                        .frame(maxWidth: .infinity * 0.75, alignment: .leading)
+                                    Spacer()
+                                }
+                            }
+                        }
+                    }
+                    .padding()
+                }
+                
+                Divider()
+                
+                HStack(spacing: 12) {
+                    TextField("Ask a question...", text: $inputText)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(isSending)
+                    
+                    Button {
+                        Task { await send() }
+                    } label: {
+                        if isSending {
+                            ProgressView().scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 28))
+                                .foregroundColor(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .gray : .blue)
+                        }
+                    }
+                    .disabled(isSending || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .padding()
+            }
+            .navigationTitle("Ask Miya")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+    
+    private func send() async {
+        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        inputText = ""
+        errorText = nil
+        
+        messages.append((role: "user", text: text))
+        isSending = true
+        defer { isSending = false }
+        
+        do {
+            // Extract alert_state_id from debugWhy (format: "serverPattern ... alertStateId=<uuid> ...")
+            guard let debugWhy = alertItem.debugWhy,
+                  debugWhy.contains("serverPattern"),
+                  let alertStateId = extractAlertStateId(from: debugWhy)
+            else {
+                errorText = "Ask Miya is available for server pattern alerts."
+                return
+            }
+            
+            let supabase = SupabaseConfig.client
+            let session = try await supabase.auth.session
+            guard let url = URL(string: "\(SupabaseConfig.supabaseURL)/functions/v1/miya_insight_chat") else { throw URLError(.badURL) }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+            req.setValue(SupabaseConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
+            req.httpBody = try JSONSerialization.data(withJSONObject: ["alert_state_id": alertStateId, "message": text])
+            
+            let (data, response) = try await URLSession.shared.data(for: req)
+            let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            guard (obj?["ok"] as? Bool) == true else {
+                let errBody = (obj?["error"] as? String) ?? String(data: data, encoding: .utf8) ?? "Unknown"
+                throw NSError(domain: "miya_insight_chat", code: httpStatus, userInfo: [NSLocalizedDescriptionKey: "Chat failed (status \(httpStatus)): \(errBody)"])
+            }
+            let reply = obj?["reply"] as? String ?? "Sorry — I couldn't generate a response."
+            messages.append((role: "assistant", text: reply))
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+    
+    private func extractAlertStateId(from debugWhy: String) -> String? {
+        // Format: "serverPattern ... alertStateId=<uuid> ..."
+        let pattern = "alertStateId=([a-f0-9-]+)"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
+              let match = regex.firstMatch(in: debugWhy, options: [], range: NSRange(debugWhy.startIndex..., in: debugWhy)),
+              let range = Range(match.range(at: 1), in: debugWhy)
+        else { return nil }
+        return String(debugWhy[range])
+    }
+}
+
+// MARK: - Loading Step Row Helper View
+struct LoadingStepRow: View {
+    let step: Int
+    let currentStep: Int
+    let text: String
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: iconName)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(iconColor)
+                .frame(width: 20)
+            
+            Text(text)
+                .font(.system(size: 14))
+                .foregroundColor(textColor)
+        }
+    }
+    
+    private var iconName: String {
+        if currentStep > step {
+            return "checkmark.circle.fill"
+        } else if currentStep == step {
+            return "arrow.right.circle.fill"
+        } else {
+            return "circle"
+        }
+    }
+    
+    private var iconColor: Color {
+        if currentStep > step {
+            return .green
+        } else if currentStep == step {
+            return .blue
+        } else {
+            return .miyaTextSecondary.opacity(0.4)
+        }
+    }
+    
+    private var textColor: Color {
+        if currentStep >= step {
+            return .miyaTextPrimary
+        } else {
+            return .miyaTextSecondary.opacity(0.6)
+        }
+    }
+}
+
+// MARK: - Expandable Insight Section
+struct ExpandableInsightSection<Content: View>: View {
+    let icon: String
+    let title: String
+    @Binding var isExpanded: Bool
+    let backgroundColor: Color
+    @ViewBuilder let content: () -> Content
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header (always visible, tappable)
+            Button {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    Text(icon)
+                        .font(.system(size: 20))
+                    
+                    Text(title)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.miyaTextPrimary)
+                    
+                    Spacer()
+                    
+                    Image(systemName: isExpanded ? "chevron.up.circle.fill" : "chevron.down.circle")
+                        .font(.system(size: 20))
+                        .foregroundColor(.miyaTextSecondary)
+                }
+                .padding(20)
+                .background(backgroundColor)
+                .cornerRadius(12, corners: isExpanded ? [.topLeft, .topRight] : .allCorners)
+            }
+            .buttonStyle(.plain)
+            
+            // Content (collapsible)
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 0) {
+                    content()
+                }
+                .padding(20)
+                .padding(.top, 0)
+                .background(backgroundColor)
+                .cornerRadius(12, corners: [.bottomLeft, .bottomRight])
+            }
+        }
+        .shadow(color: .black.opacity(0.05), radius: 4, x: 0, y: 2)
+    }
+}
+
+// Helper for selective corner radius
+extension View {
+    func cornerRadius(_ radius: CGFloat, corners: UIRectCorner) -> some View {
+        clipShape(RoundedCorner(radius: radius, corners: corners))
+    }
+}
+
+struct RoundedCorner: Shape {
+    var radius: CGFloat = .infinity
+    var corners: UIRectCorner = .allCorners
+    
+    func path(in rect: CGRect) -> Path {
+        let path = UIBezierPath(
+            roundedRect: rect,
+            byRoundingCorners: corners,
+            cornerRadii: CGSize(width: radius, height: radius)
+        )
+        return Path(path.cgPath)
     }
 }

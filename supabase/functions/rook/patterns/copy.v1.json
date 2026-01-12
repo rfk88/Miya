@@ -1,0 +1,91 @@
+{
+  "sleep_minutes": {
+    "3": {
+      "title": "Check in with {firstName}",
+      "body": "Sleep has been shorter than usual for 3 days.",
+      "cta": "View sleep details"
+    },
+    "7": {
+      "title": "Check in with {firstName} this week",
+      "body": "A full week of shorter sleep. Ask about stress, routine, or discomfort.",
+      "cta": "See what changed"
+    },
+    "14": {
+      "title": "{firstName} might need extra support",
+      "body": "Two weeks of shorter sleep. Consider a simple plan: earlier bedtime, less screen time, and a gentle check-in.",
+      "cta": "Create a check-in plan"
+    },
+    "21": {
+      "title": "Time to check in today",
+      "body": "Three weeks of shorter sleep. A direct check-in (and, if relevant, a clinician conversation) may help.",
+      "cta": "Reach out now"
+    }
+  },
+  "steps": {
+    "3": {
+      "title": "Check in with {firstName}",
+      "body": "Movement has been lower than usual for 3 days.",
+      "cta": "View movement details"
+    },
+    "7": {
+      "title": "Check in with {firstName} this week",
+      "body": "A full week of lower movement. Ask if anything changed (routine, pain, illness, motivation).",
+      "cta": "See what changed"
+    },
+    "14": {
+      "title": "{firstName} might need extra support",
+      "body": "Two weeks of lower movement. Consider a small plan: short walks, lighter goals, and accountability.",
+      "cta": "Create a check-in plan"
+    },
+    "21": {
+      "title": "Time to check in today",
+      "body": "Three weeks of low movement. A direct check-in may help uncover what's getting in the way.",
+      "cta": "Reach out now"
+    }
+  },
+  "hrv_ms": {
+    "3": {
+      "title": "Check in with {firstName}",
+      "body": "Stress indicators look higher than usual for 3 days (HRV is lower than their normal).",
+      "cta": "View stress details"
+    },
+    "7": {
+      "title": "Check in with {firstName} this week",
+      "body": "A full week of higher stress indicators. This can be associated with stress, illness, poor sleep, alcohol, or dehydration.",
+      "cta": "See what changed"
+    },
+    "14": {
+      "title": "{firstName} might need extra support",
+      "body": "Two weeks of persistent stress indicators. Consider a small plan: sleep routine, hydration, and lighter days.",
+      "cta": "Create a check-in plan"
+    },
+    "21": {
+      "title": "Time to check in today",
+      "body": "Three weeks of persistent stress indicators. Consider a direct check-in and, if relevant, a clinician conversation.",
+      "cta": "Reach out now"
+    }
+  },
+  "resting_hr": {
+    "3": {
+      "title": "Check in with {firstName}",
+      "body": "Resting heart rate has been higher than usual for 3 days.",
+      "cta": "View heart rate details"
+    },
+    "7": {
+      "title": "Check in with {firstName} this week",
+      "body": "A full week of higher resting heart rate. This can be associated with stress, illness, poor sleep, or dehydration.",
+      "cta": "See what changed"
+    },
+    "14": {
+      "title": "{firstName} might need extra support",
+      "body": "Two weeks of higher resting heart rate. Consider checking contributing factors and monitoring how they feel.",
+      "cta": "Create a check-in plan"
+    },
+    "21": {
+      "title": "Time to check in today",
+      "body": "Three weeks of higher resting heart rate. Consider a direct check-in and, if relevant, a clinician conversation.",
+      "cta": "Reach out now"
+    }
+  }
+}
+

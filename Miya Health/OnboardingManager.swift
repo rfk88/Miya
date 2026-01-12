@@ -63,7 +63,17 @@ class OnboardingManager: ObservableObject {
             invitedMemberId = rec.id.uuidString
             invitedFamilyId = rec.familyId?.uuidString
             guidedSetupStatus = parseGuidedSetupStatus(rec.guidedSetupStatus)
-            firstName = rec.firstName
+            // Prefer canonical name from user_profiles if available; otherwise fall back to family_members.
+            if let profile = (try? await dataManager.loadUserProfile()) ?? nil,
+               let fn = profile.first_name?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !fn.isEmpty {
+                firstName = fn
+                if let ln = profile.last_name?.trimmingCharacters(in: .whitespacesAndNewlines), !ln.isEmpty {
+                    lastName = ln
+                }
+            } else {
+                firstName = rec.firstName
+            }
             
             #if DEBUG
             print("🔄 refreshGuidedContextFromDB:")
@@ -185,10 +195,10 @@ class OnboardingManager: ObservableObject {
     private let persistedStepKey = "onboarding_last_step"
     
     init() {
-        let savedStep = UserDefaults.standard.integer(forKey: persistedStepKey)
-        if savedStep > 0 {
-            currentStep = savedStep
-        }
+        // Don't load from UserDefaults on init - database is the source of truth
+        // UserDefaults can have stale data from previous sessions that would overwrite
+        // the correct database value when user logs in. The step will be loaded from
+        // database during login via LoginView.loadUserProfile()
     }
     
     // MARK: - Methods
