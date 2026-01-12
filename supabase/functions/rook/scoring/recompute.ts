@@ -14,8 +14,18 @@ type DailyRow = {
   steps: number | null;
   sleep_minutes: number | null;
   hrv_ms: number | null;
+  hrv_rmssd_ms: number | null;
   resting_hr: number | null;
+  breaths_avg_per_min: number | null;
+  spo2_avg_pct: number | null;
   calories_active: number | null;
+  movement_minutes: number | null;
+  deep_sleep_minutes: number | null;
+  rem_sleep_minutes: number | null;
+  light_sleep_minutes: number | null;
+  awake_minutes: number | null;
+  sleep_efficiency_pct: number | null;
+  time_to_fall_asleep_minutes: number | null;
 };
 
 function parseISODateYYYYMMDDToUTCDate(dayKey: string): Date | null {
@@ -120,7 +130,7 @@ export async function recomputeRolling7dScoresForUser(
 
     const { data: rows, error: rowsErr } = await supabase
       .from("wearable_daily_metrics")
-      .select("metric_date,steps,sleep_minutes,hrv_ms,resting_hr,calories_active")
+      .select("metric_date,steps,sleep_minutes,hrv_ms,hrv_rmssd_ms,resting_hr,breaths_avg_per_min,spo2_avg_pct,calories_active,movement_minutes,deep_sleep_minutes,rem_sleep_minutes,light_sleep_minutes,awake_minutes,sleep_efficiency_pct,time_to_fall_asleep_minutes")
       .eq("user_id", userId)
       .gte("metric_date", lookbackStart)
       .lte("metric_date", endDate)
@@ -140,8 +150,18 @@ export async function recomputeRolling7dScoresForUser(
         steps: mergeMax(prev?.steps, r0.steps),
         sleep_minutes: mergeMax(prev?.sleep_minutes, r0.sleep_minutes),
         hrv_ms: mergeMax(prev?.hrv_ms, r0.hrv_ms),
+        hrv_rmssd_ms: mergeMax(prev?.hrv_rmssd_ms, r0.hrv_rmssd_ms),
         resting_hr: mergeMax(prev?.resting_hr, r0.resting_hr),
+        breaths_avg_per_min: mergeMax(prev?.breaths_avg_per_min, r0.breaths_avg_per_min),
+        spo2_avg_pct: mergeMax(prev?.spo2_avg_pct, r0.spo2_avg_pct),
         calories_active: mergeMax(prev?.calories_active, r0.calories_active),
+        movement_minutes: mergeMax(prev?.movement_minutes, r0.movement_minutes),
+        deep_sleep_minutes: mergeMax(prev?.deep_sleep_minutes, r0.deep_sleep_minutes),
+        rem_sleep_minutes: mergeMax(prev?.rem_sleep_minutes, r0.rem_sleep_minutes),
+        light_sleep_minutes: mergeMax(prev?.light_sleep_minutes, r0.light_sleep_minutes),
+        awake_minutes: mergeMax(prev?.awake_minutes, r0.awake_minutes),
+        sleep_efficiency_pct: mergeMax(prev?.sleep_efficiency_pct, r0.sleep_efficiency_pct),
+        time_to_fall_asleep_minutes: mergeMax(prev?.time_to_fall_asleep_minutes, r0.time_to_fall_asleep_minutes),
       });
     }
 
@@ -151,14 +171,22 @@ export async function recomputeRolling7dScoresForUser(
 
     const dailyWindow = windowKeys.map((k) => mergedByDay.get(k)!).filter(Boolean);
 
-    const sleepHoursUnfilled = (() => {
-      const minutesAvg = avg(dailyWindow.map((d) => d.sleep_minutes));
-      return minutesAvg == null ? null : minutesAvg / 60.0;
-    })();
+    const sleepMinutesUnfilled = avgIntRounded(dailyWindow.map((d) => d.sleep_minutes));
+    const sleepHoursUnfilled = sleepMinutesUnfilled == null ? null : sleepMinutesUnfilled / 60.0;
     const stepsUnfilled = avgIntRounded(dailyWindow.map((d) => d.steps));
     const caloriesActiveUnfilled = avg(dailyWindow.map((d) => d.calories_active));
     const hrvMsUnfilled = avg(dailyWindow.map((d) => d.hrv_ms));
+    const hrvRmssdUnfilled = avg(dailyWindow.map((d) => d.hrv_rmssd_ms));
     const restingHrUnfilled = avg(dailyWindow.map((d) => d.resting_hr));
+    const breathsAvgUnfilled = avg(dailyWindow.map((d) => d.breaths_avg_per_min));
+    const spo2AvgUnfilled = avg(dailyWindow.map((d) => d.spo2_avg_pct));
+    const movementMinutesUnfilled = avgIntRounded(dailyWindow.map((d) => d.movement_minutes));
+    const sleepEfficiencyUnfilled = avg(dailyWindow.map((d) => d.sleep_efficiency_pct));
+    const deepSleepMinutesUnfilled = avgIntRounded(dailyWindow.map((d) => d.deep_sleep_minutes));
+    const remSleepMinutesUnfilled = avgIntRounded(dailyWindow.map((d) => d.rem_sleep_minutes));
+    const lightSleepMinutesUnfilled = avgIntRounded(dailyWindow.map((d) => d.light_sleep_minutes));
+    const awakeMinutesUnfilled = avgIntRounded(dailyWindow.map((d) => d.awake_minutes));
+    const timeToFallAsleepUnfilled = avgIntRounded(dailyWindow.map((d) => d.time_to_fall_asleep_minutes));
 
     const sleepDurationHours = backfillDoubleIfNeeded(
       sleepHoursUnfilled,
@@ -166,24 +194,55 @@ export async function recomputeRolling7dScoresForUser(
       mergedByDay,
       (d) => (d.sleep_minutes == null ? null : d.sleep_minutes / 60.0),
     );
+    const sleepMinutesFinal = backfillIntIfNeeded(
+      sleepMinutesUnfilled,
+      lookbackKeysDesc,
+      mergedByDay,
+      (d) => d.sleep_minutes,
+    );
     const stepsFinal = backfillIntIfNeeded(stepsUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.steps);
     const activeCalories = backfillDoubleIfNeeded(caloriesActiveUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.calories_active);
     const hrvMsFinal = backfillDoubleIfNeeded(hrvMsUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.hrv_ms);
+    const hrvRmssdFinal = backfillDoubleIfNeeded(hrvRmssdUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.hrv_rmssd_ms);
     const restingHrFinal = backfillDoubleIfNeeded(restingHrUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.resting_hr);
+    const breathsAvgFinal = backfillDoubleIfNeeded(breathsAvgUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.breaths_avg_per_min);
+    const spo2AvgFinal = backfillDoubleIfNeeded(spo2AvgUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.spo2_avg_pct);
+    const movementMinutesFinal = backfillIntIfNeeded(movementMinutesUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.movement_minutes);
+    const sleepEfficiencyPercent = backfillDoubleIfNeeded(sleepEfficiencyUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.sleep_efficiency_pct);
+    const deepSleepMinutesFinal = backfillIntIfNeeded(deepSleepMinutesUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.deep_sleep_minutes);
+    const remSleepMinutesFinal = backfillIntIfNeeded(remSleepMinutesUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.rem_sleep_minutes);
+    const lightSleepMinutesFinal = backfillIntIfNeeded(lightSleepMinutesUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.light_sleep_minutes);
+    const awakeMinutesFinal = backfillIntIfNeeded(awakeMinutesUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.awake_minutes);
+    const timeToFallAsleepMinutes = backfillIntIfNeeded(timeToFallAsleepUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.time_to_fall_asleep_minutes);
+    const restorativeSleepPercent = (() => {
+      if (sleepMinutesFinal == null || sleepMinutesFinal <= 0) return null;
+      const deep = deepSleepMinutesFinal ?? 0;
+      const rem = remSleepMinutesFinal ?? 0;
+      const total = deep + rem;
+      if (!Number.isFinite(total) || total <= 0) return null;
+      return Math.round((total / sleepMinutesFinal) * 100);
+    })();
+    const awakePercent = (() => {
+      if (awakeMinutesFinal == null || sleepMinutesFinal == null) return null;
+      const denom = sleepMinutesFinal + awakeMinutesFinal;
+      if (!Number.isFinite(denom) || denom <= 0) return null;
+      return Math.round((awakeMinutesFinal / denom) * 100);
+    })();
+    const hrvForScore = hrvMsFinal ?? hrvRmssdFinal;
 
     const raw = {
       age,
       sleepDurationHours,
-      restorativeSleepPercent: null,
-      sleepEfficiencyPercent: null,
-      awakePercent: null,
-      movementMinutes: null,
+      restorativeSleepPercent,
+      sleepEfficiencyPercent,
+      awakePercent,
+      movementMinutes: movementMinutesFinal,
       steps: stepsFinal,
       activeCalories,
-      hrvMs: hrvMsFinal,
-      hrvType: null,
+      hrvMs: hrvForScore,
+      hrvType: hrvMsFinal != null ? "sdnn" : (hrvRmssdFinal != null ? "rmssd" : null),
       restingHeartRate: restingHrFinal,
-      breathingRate: null,
+      breathingRate: breathsAvgFinal,
     };
 
     const snap = scoreIfPossible(raw);

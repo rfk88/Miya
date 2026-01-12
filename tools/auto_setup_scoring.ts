@@ -3,8 +3,28 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const supabaseUrl = "https://xmfgdeyrpzpqptckmcbr.supabase.co";
-const serviceRoleKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhtZmdkZXlycHpwcXB0Y2ttY2JyIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NDE2MDg2MywiZXhwIjoyMDc5NzM2ODYzfQ.0zHTKRpmY5kTIo25UxDAn8U6VNn29cmvYewRP75R0io";
+// Load configuration from environment variables
+// Supports both Deno and Node.js environments
+const getEnvVar = (key: string): string => {
+  const value = typeof Deno !== "undefined" 
+    ? Deno.env.get(key) 
+    : typeof process !== "undefined" 
+      ? process.env[key] 
+      : undefined;
+  
+  if (!value) {
+    throw new Error(
+      `Missing required environment variable: ${key}\n` +
+      `Please set it before running this script.\n` +
+      `Example: ${key}=your_value deno run -A tools/auto_setup_scoring.ts`
+    );
+  }
+  
+  return value;
+};
+
+const supabaseUrl = getEnvVar("SUPABASE_URL");
+const serviceRoleKey = getEnvVar("SUPABASE_SERVICE_ROLE_KEY");
 
 const supabase = createClient(supabaseUrl, serviceRoleKey, {
   auth: {
@@ -48,9 +68,10 @@ if (migrationError) {
   });
 
   if (!response.ok) {
+    const projectRef = supabaseUrl.match(/https:\/\/([^.]+)\.supabase\.co/)?.[1] || "YOUR_PROJECT_REF";
     console.log("   ⚠️  Cannot execute SQL automatically via API");
     console.log("   📋 Please run this SQL manually in Supabase Dashboard:");
-    console.log("   https://supabase.com/dashboard/project/xmfgdeyrpzpqptckmcbr/sql/new\n");
+    console.log(`   https://supabase.com/dashboard/project/${projectRef}/sql/new\n`);
     console.log(migrationSQL);
     console.log("\n   Then press Enter to continue...");
     await Deno.stdin.read(new Uint8Array(1));
@@ -67,13 +88,20 @@ const secret = crypto.randomUUID() + crypto.randomUUID().replace(/-/g, "");
 console.log(`   Generated secret: ${secret.substring(0, 20)}...`);
 
 // Use Supabase Management API to set secret
+const projectRef = supabaseUrl.match(/https:\/\/([^.]+)\.supabase\.co/)?.[1] || "YOUR_PROJECT_REF";
+const accessToken = typeof Deno !== "undefined" 
+  ? Deno.env.get("SUPABASE_ACCESS_TOKEN")
+  : typeof process !== "undefined"
+    ? process.env.SUPABASE_ACCESS_TOKEN
+    : undefined;
+
 const { error: secretError } = await fetch(
-  `https://api.supabase.com/v1/projects/xmfgdeyrpzpqptckmcbr/secrets`,
+  `https://api.supabase.com/v1/projects/${projectRef}/secrets`,
   {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${Deno.env.get("SUPABASE_ACCESS_TOKEN") || ""}`,
+      "Authorization": `Bearer ${accessToken || ""}`,
     },
     body: JSON.stringify({
       name: "MIYA_ADMIN_SECRET",
@@ -82,10 +110,10 @@ const { error: secretError } = await fetch(
   }
 ).then((r) => r.json());
 
-if (secretError || !Deno.env.get("SUPABASE_ACCESS_TOKEN")) {
+if (secretError || !accessToken) {
   console.log("   ⚠️  Cannot set secret automatically (need SUPABASE_ACCESS_TOKEN)");
   console.log("   📋 Please set it manually:");
-  console.log("   1. Go to: https://supabase.com/dashboard/project/xmfgdeyrpzpqptckmcbr/settings/functions");
+  console.log(`   1. Go to: https://supabase.com/dashboard/project/${projectRef}/settings/functions`);
   console.log("   2. Add secret: MIYA_ADMIN_SECRET");
   console.log(`   3. Value: ${secret}`);
   console.log("\n   Then press Enter to continue...");
@@ -96,8 +124,8 @@ if (secretError || !Deno.env.get("SUPABASE_ACCESS_TOKEN")) {
 
 console.log("\n📦 Step 3: Deploying Edge Functions...");
 console.log("   Run these commands:");
-console.log("   supabase functions deploy rook --project-ref xmfgdeyrpzpqptckmcbr");
-console.log("   supabase functions deploy recompute_vitality_scores --project-ref xmfgdeyrpzpqptckmcbr");
+console.log(`   supabase functions deploy rook --project-ref ${projectRef}`);
+console.log(`   supabase functions deploy recompute_vitality_scores --project-ref ${projectRef}`);
 
 console.log("\n✅ Setup instructions complete!");
 console.log("   After deploying functions, server-side scoring will be active.");

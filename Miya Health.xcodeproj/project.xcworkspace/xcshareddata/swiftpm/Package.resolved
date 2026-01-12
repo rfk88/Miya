@@ -1,5 +1,5 @@
 {
-  "originHash" : "e3adadd46d9dc721269b540370194ce3dd1e46b2176ae1d2bf7c9709000ee120",
+  "originHash" : "f2d259375f42b794b0040268c1333d823e07254f1b4e01695fbbbc695aed2d81",
   "pins" : [
     {
       "identity" : "rook-ios-sdk",
@@ -62,6 +62,15 @@
       "state" : {
         "revision" : "45eb0224913ea070ec4fba17291b9e7ecf4749ca",
         "version" : "1.5.1"
+      }
+    },
+    {
+      "identity" : "swiftuix",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/SwiftUIX/SwiftUIX",
+      "state" : {
+        "revision" : "d9f903b214b9d56e3c1e4533b03359aee94acd5d",
+        "version" : "0.2.4"
       }
     },
     {

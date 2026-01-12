@@ -199,7 +199,7 @@ private extension FamilyMemberProfileView {
             if let stress = stressData {
                 PillarCardView(
                     icon: "💗",
-                    title: "Stress",
+                    title: "Recovery",
                     value: stress.value,
                     status: stress.status,
                     changeText: stress.changeText,
@@ -449,7 +449,7 @@ private extension FamilyMemberProfileView {
                 recentValues: recent.compactMap { $0.hrv_ms },
                 baselineValues: baseline.compactMap { $0.hrv_ms },
                 valueFormatter: { hrv in "\(Int(hrv.rounded())) ms HRV" },
-                contextLabel: "Stress"
+                contextLabel: "Recovery"
             )
             
             return (sleep, movement, stress)

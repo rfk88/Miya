@@ -9,6 +9,9 @@ type DailyRow = {
   sleep_minutes: number | null;
   hrv_ms: number | null;
   resting_hr: number | null;
+  sleep_efficiency_pct: number | null;      // NEW
+  movement_minutes: number | null;          // NEW
+  deep_sleep_minutes: number | null;        // NEW
 };
 
 function parseISODateYYYYMMDDToUTCDate(dayKey: string): Date | null {
@@ -46,6 +49,40 @@ function loadThresholds(): ThresholdConfig {
   return thresholdsJSON as ThresholdConfig;
 }
 
+async function prewarmInsightCache(supabase: any, alertStateId: string): Promise<void> {
+  // Call miya_insight function to pre-generate and cache the insight
+  // This prevents the first chat message from hitting a 409 loop
+  console.log("🔥 MIYA_PREWARM: Starting insight generation for alert", alertStateId);
+  
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  
+  if (!supabaseUrl || !serviceKey) {
+    console.warn("⚠️ MIYA_PREWARM: Missing env vars, skipping");
+    return;
+  }
+  
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/miya_insight`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${serviceKey}`,
+      },
+      body: JSON.stringify({ alert_state_id: alertStateId }),
+    });
+    
+    if (!response.ok) {
+      const text = await response.text();
+      console.error("❌ MIYA_PREWARM: Failed", { status: response.status, body: text });
+    } else {
+      console.log("✅ MIYA_PREWARM: Insight cached successfully for alert", alertStateId);
+    }
+  } catch (error) {
+    console.error("❌ MIYA_PREWARM: Exception", { error: String(error) });
+  }
+}
+
 function buildMetricSeries(metric: MetricType, mergedByDay: Map<string, DailyRow>): Array<{ date: string; value: number }> {
   const keys = Array.from(mergedByDay.keys()).sort();
   const out: Array<{ date: string; value: number }> = [];
@@ -62,6 +99,12 @@ function buildMetricSeries(metric: MetricType, mergedByDay: Map<string, DailyRow
           return r.hrv_ms;
         case "resting_hr":
           return r.resting_hr;
+        case "sleep_efficiency_pct":           // NEW
+          return r.sleep_efficiency_pct;
+        case "movement_minutes":               // NEW
+          return r.movement_minutes;
+        case "deep_sleep_minutes":             // NEW
+          return r.deep_sleep_minutes;
       }
     })();
     if (v == null) continue;
@@ -73,7 +116,7 @@ function buildMetricSeries(metric: MetricType, mergedByDay: Map<string, DailyRow
 async function fetchMergedDailyMetrics(supabase: any, userId: string, startDate: string, endDate: string): Promise<Map<string, DailyRow>> {
   const { data: rows, error } = await supabase
     .from("wearable_daily_metrics")
-    .select("metric_date,steps,sleep_minutes,hrv_ms,resting_hr")
+    .select("metric_date,steps,sleep_minutes,hrv_ms,resting_hr,sleep_efficiency_pct,movement_minutes,deep_sleep_minutes")
     .eq("user_id", userId)
     .gte("metric_date", startDate)
     .lte("metric_date", endDate)
@@ -91,9 +134,44 @@ async function fetchMergedDailyMetrics(supabase: any, userId: string, startDate:
       sleep_minutes: mergeMax(prev?.sleep_minutes, r0.sleep_minutes),
       hrv_ms: mergeMax(prev?.hrv_ms, r0.hrv_ms),
       resting_hr: mergeMax(prev?.resting_hr, r0.resting_hr),
+      sleep_efficiency_pct: mergeMax(prev?.sleep_efficiency_pct, r0.sleep_efficiency_pct),  // NEW
+      movement_minutes: mergeMax(prev?.movement_minutes, r0.movement_minutes),              // NEW
+      deep_sleep_minutes: mergeMax(prev?.deep_sleep_minutes, r0.deep_sleep_minutes),        // NEW
     });
   }
   return mergedByDay;
+}
+
+/**
+ * Fetch exercise session dates for the user within the date range.
+ * Returns a Set of YYYY-MM-DD strings representing days with workouts.
+ * Used to prevent false "poor recovery" alerts on days with healthy exercise.
+ */
+async function fetchExerciseDates(supabase: any, userId: string, startDate: string, endDate: string): Promise<Set<string>> {
+  const { data: sessions, error } = await supabase
+    .from("exercise_sessions")
+    .select("metric_date")
+    .eq("user_id", userId)
+    .gte("metric_date", startDate)
+    .lte("metric_date", endDate);
+
+  if (error) {
+    console.error("exercise_sessions fetch failed:", error.message);
+    return new Set();
+  }
+
+  const dates = new Set<string>();
+  for (const session of (sessions ?? [])) {
+    if (session.metric_date) {
+      dates.add(String(session.metric_date));
+    }
+  }
+  
+  if (dates.size > 0) {
+    console.log("🏃 MIYA_EXERCISE_DATES_FOUND", { userId, count: dates.size, dates: Array.from(dates) });
+  }
+  
+  return dates;
 }
 
 async function fetchFamilyAdminRecipients(supabase: any, memberUserId: string): Promise<string[]> {
@@ -252,7 +330,10 @@ export async function evaluatePatternsForUser(
   const startDate = addDaysUTC(endDate, -60) ?? endDate;
   const mergedByDay = await fetchMergedDailyMetrics(supabase, userId, startDate, endDate);
 
-  const metrics: MetricType[] = ["sleep_minutes", "steps", "hrv_ms", "resting_hr"];
+  // Fetch exercise session dates to prevent false recovery alerts on workout days
+  const exerciseDates = await fetchExerciseDates(supabase, userId, startDate, endDate);
+
+  const metrics: MetricType[] = ["sleep_minutes", "steps", "hrv_ms", "resting_hr", "sleep_efficiency_pct", "movement_minutes", "deep_sleep_minutes"];
   let attempted = 0;
 
   for (const metric of metrics) {
@@ -264,6 +345,24 @@ export async function evaluatePatternsForUser(
     attempted += 1;
 
     const { baseline, result } = evaluateMetricOnDate(metric, thresholds, series, endDate);
+
+    // EXERCISE CONTEXT: Skip recovery-related alerts on workout days
+    // Heart rate and HRV naturally change during exercise, which is healthy
+    // Do not flag "poor recovery" on days with workouts
+    const isRecoveryMetric = metric === "hrv_ms" || metric === "resting_hr";
+    const hasWorkoutOnEndDate = exerciseDates.has(endDate);
+    
+    if (isRecoveryMetric && hasWorkoutOnEndDate && result.isTrue) {
+      console.log("🏃 MIYA_RECOVERY_ALERT_SKIPPED_WORKOUT_DAY", { 
+        userId, 
+        metric, 
+        endDate, 
+        message: "Recovery alert suppressed due to workout activity" 
+      });
+      // Still resolve any active episode that might be ending
+      await resolveIfInactive({ supabase, userId, metric, patternType, endDate, thresholds, series });
+      continue;
+    }
 
     if (!result.isTrue) {
       await resolveIfInactive({ supabase, userId, metric, patternType, endDate, thresholds, series });
@@ -333,6 +432,11 @@ export async function evaluatePatternsForUser(
       }
 
       await supabase.from("pattern_alert_state").update({ last_notified_level: level, last_notified_at: new Date().toISOString() }).eq("id", alertStateId);
+      
+      // Pre-warm AI insight cache (fire and forget - don't block notification queue)
+      prewarmInsightCache(supabase, alertStateId).catch((e) => {
+        console.error("⚠️ MIYA_PREWARM_INSIGHT_FAILED", { alertStateId, error: String(e) });
+      });
     }
   }
 

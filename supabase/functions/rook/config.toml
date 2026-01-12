@@ -1,0 +1,3 @@
+# Rook webhook endpoint configuration
+# Disable JWT verification to allow Rook to send webhooks without authentication
+verify_jwt = false

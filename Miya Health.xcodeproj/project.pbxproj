@@ -14,6 +14,7 @@
 		696F9C4C2EE0992500626717 /* Storage in Frameworks */ = {isa = PBXBuildFile; productRef = 696F9C4B2EE0992500626717 /* Storage */; };
 		696F9C4E2EE0992500626717 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 696F9C4D2EE0992500626717 /* Supabase */; };
 		696F9C502EE0992500626718 /* RookSDK in Frameworks */ = {isa = PBXBuildFile; productRef = 696F9C512EE0992500626718 /* RookSDK */; };
+		6970A1B22EE0992500626720 /* SwiftUIX in Frameworks */ = {isa = PBXBuildFile; productRef = 6970A1B12EE0992500626720 /* SwiftUIX */; };
 		A1B2C3D4E5F60123456789A0 /* Rook Samples/ROOKConnect-Apple Health-dataset-v2.json in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60123456789A1 /* Rook Samples/ROOKConnect-Apple Health-dataset-v2.json */; };
 		A1B2C3D4E5F60123456789A2 /* Rook Samples/ROOKConnect-Whoop-dataset-v2.json in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60123456789A3 /* Rook Samples/ROOKConnect-Whoop-dataset-v2.json */; };
 /* End PBXBuildFile section */
@@ -44,6 +45,7 @@
 				696F9C4C2EE0992500626717 /* Storage in Frameworks */,
 				696F9C4A2EE0992500626717 /* Realtime in Frameworks */,
 				696F9C502EE0992500626718 /* RookSDK in Frameworks */,
+				6970A1B22EE0992500626720 /* SwiftUIX in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -103,6 +105,7 @@
 				696F9C4B2EE0992500626717 /* Storage */,
 				696F9C4D2EE0992500626717 /* Supabase */,
 				696F9C512EE0992500626718 /* RookSDK */,
+				6970A1B12EE0992500626720 /* SwiftUIX */,
 			);
 			productName = "Miya Health";
 			productReference = 366E9A332ED07BE4001C6CA1 /* Miya Health.app */;
@@ -135,6 +138,7 @@
 			packageReferences = (
 				696F9C422EE0992500626717 /* XCRemoteSwiftPackageReference "supabase-swift" */,
 				696F9C4F2EE0992500626718 /* XCRemoteSwiftPackageReference "rook-ios-sdk" */,
+				6970A1B02EE0992500626720 /* XCRemoteSwiftPackageReference "SwiftUIX" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 366E9A342ED07BE4001C6CA1 /* Products */;
@@ -300,7 +304,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Miya Health/Miya Health.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = DG8R472FC7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -319,7 +323,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.4;
+				MARKETING_VERSION = 1.7;
 				PRODUCT_BUNDLE_IDENTIFIER = "Miya-Health.com.Miya-Health";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -346,7 +350,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Miya Health/Miya Health.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = DG8R472FC7;
 				ENABLE_BITCODE = NO;
@@ -367,7 +371,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.4;
+				MARKETING_VERSION = 1.7;
 				PRODUCT_BUNDLE_IDENTIFIER = "Miya-Health.com.Miya-Health";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -427,6 +431,14 @@
 				minimumVersion = 1.0.0;
 			};
 		};
+		6970A1B02EE0992500626720 /* XCRemoteSwiftPackageReference "SwiftUIX" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/SwiftUIX/SwiftUIX";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.2.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -464,6 +476,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 696F9C4F2EE0992500626718 /* XCRemoteSwiftPackageReference "rook-ios-sdk" */;
 			productName = RookSDK;
+		};
+		6970A1B12EE0992500626720 /* SwiftUIX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6970A1B02EE0992500626720 /* XCRemoteSwiftPackageReference "SwiftUIX" */;
+			productName = SwiftUIX;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

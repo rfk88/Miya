@@ -14,8 +14,8 @@ final class RookAPIService {
     static let shared = RookAPIService()
     
     // Reuse credentials from RookService
-    private let clientUUID = "6e2ba052-e35f-44a1-b99b-1453f4a49c6d"
-    private let secretKey = "BBH0rN4hcqg3c7NfUt9jEO4P8ZHjbz3zazN2"
+    private let clientUUID = "f60e5d66-1d2f-4e71-ba6c-f90c6c8ac2dc"
+    private let secretKey = "kO6KBCELDtz4jBMWLrw63WFG8ppzSkQIND4E"
     
     // Sandbox base URL (update to production URL when transitioning)
     private let baseURL = "https://api.rook-connect.review"
@@ -109,9 +109,21 @@ final class RookAPIService {
     /// Uses official Rook API v1 endpoint: /api/v1/user_id/{userId}/data_source/{DataSource}/authorizer
     /// - Parameters:
     ///   - dataSource: Rook data source identifier (e.g., "whoop", "oura", "fitbit") - will be capitalized
-    ///   - userId: Authenticated user's ID
+    ///   - userId: Authenticated user's ID (MUST be Miya auth UUID)
     /// - Returns: RookAuthorizerResponse with authorized status and authorization_url
     func getAuthorizerInfo(dataSource: String, userId: String) async throws -> RookAuthorizerResponse {
+        // Validate UUID format
+        print("🔍 RookAPIService: Validating user ID format...")
+        let uuidRegex = try? NSRegularExpression(pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+        let range = NSRange(location: 0, length: userId.utf16.count)
+        if let regex = uuidRegex, regex.firstMatch(in: userId, range: range) != nil {
+            print("✅ RookAPIService: User ID is valid UUID format")
+        } else {
+            print("⚠️ RookAPIService: User ID does NOT match UUID format - API calls may fail!")
+            print("   Expected: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+            print("   Received: \(userId)")
+        }
+        
         // Capitalize data source name (Oura, Whoop, Fitbit, Garmin)
         let capitalizedDataSource = capitalizeDataSource(dataSource)
         
@@ -127,6 +139,7 @@ final class RookAPIService {
         
         // Log request URL (without credentials)
         print("🟢 RookAPIService: Requesting authorizer for \(dataSource) (capitalized: \(capitalizedDataSource))")
+        print("   User ID in API call: \(userId)")
         print("   Final authorizer URL: \(urlString)")
         print("   Method: GET")
         

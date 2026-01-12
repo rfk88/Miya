@@ -33,36 +33,46 @@ extension Color {
     }
 }
 
-// MARK: - Hearth & Garden Palette
+// MARK: - Modern Health Palette
 extension Color {
-    // Sage (Primary)
-    static let miyaSage = Color(hex: "7C9885")
-    static let miyaSageLight = Color(hex: "A8C5B3")
-    static let miyaSageDark = Color(hex: "5A7362")
+    // Modern Teal (Primary) - Calming, medical, trustworthy
+    static let miyaTeal = Color(hex: "0891B2")        // Vibrant teal
+    static let miyaTealLight = Color(hex: "2DD4BF")   // Light teal
+    static let miyaTealDark = Color(hex: "0E7490")    // Deep teal
     
-    // Terracotta (Warmth/Alerts)
+    // Alternative: If you prefer blue, uncomment these and change miyaPrimary below:
+    // static let miyaBlue = Color(hex: "3B82F6")     // Vibrant blue
+    // static let miyaBlueLight = Color(hex: "60A5FA") // Light blue
+    // static let miyaBlueDark = Color(hex: "2563EB")  // Deep blue
+    
+    // Terracotta (Warmth/Alerts) - Keep this, it's good
     static let miyaTerracotta = Color(hex: "C97064")
     static let miyaTerracottaLight = Color(hex: "E8AFA7")
     static let miyaTerracottaDark = Color(hex: "A55549")
     
-    // Cream (Neutral/Base)
+    // Cream (Neutral/Base) - Keep this
     static let miyaCreamBg = Color(hex: "FAF8F5")
     static let miyaCardWhite = Color.white
     static let miyaSurfaceGrey = Color(hex: "F4F1ED")
     
-    // Charcoal (Text)
+    // Charcoal (Text) - Keep this
     static let miyaTextPrimary = Color(hex: "2C3333")
     static let miyaTextSecondary = Color(hex: "6B7280")
     static let miyaTextTertiary = Color(hex: "9CA3AF")
     
-    // Supporting
+    // Supporting colors
     static let miyaAmber = Color(hex: "E8A449")
     static let miyaLavender = Color(hex: "9B89B3")
     static let miyaSkyBlue = Color(hex: "7BA4C0")
     
-    // Legacy aliases for backward compatibility
-    static let miyaPrimary = miyaSage
+    // LEGACY: Old sage green (deprecated - now using teal)
+    static let miyaSage = Color(hex: "7C9885")
+    static let miyaSageLight = Color(hex: "A8C5B3")
+    static let miyaSageDark = Color(hex: "5A7362")
+    
+    // Primary brand colors (NEW)
+    static let miyaPrimary = miyaTeal              // Changed from sage to teal
     static let miyaBackground = miyaCreamBg
-    static let miyaEmerald = miyaSage          // legacy teal → sage
-    static let miyaSecondary = miyaAmber       // legacy gold secondary → amber
+    static let miyaEmerald = miyaTeal              // legacy alias → modern teal
+    static let miyaSecondary = miyaAmber          // Keep amber as secondary
 }

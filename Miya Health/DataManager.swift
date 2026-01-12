@@ -1126,6 +1126,10 @@ class DataManager: ObservableObject {
         let metricDate: String
         let steps: Int?
         let sleepMinutes: Int?
+        let movementMinutes: Int?
+        let deepSleepMinutes: Int?
+        let remSleepMinutes: Int?
+        let sleepEfficiencyPct: Double?
         let hrvMs: Double?
         let restingHr: Double?
         let source: String?
@@ -1134,6 +1138,10 @@ class DataManager: ObservableObject {
             case metricDate = "metric_date"
             case steps = "steps"
             case sleepMinutes = "sleep_minutes"
+            case movementMinutes = "movement_minutes"
+            case deepSleepMinutes = "deep_sleep_minutes"
+            case remSleepMinutes = "rem_sleep_minutes"
+            case sleepEfficiencyPct = "sleep_efficiency_pct"
             case hrvMs = "hrv_ms"
             case restingHr = "resting_hr"
             case source = "source"
@@ -1155,7 +1163,7 @@ class DataManager: ObservableObject {
         do {
             let rows: [WearableDailyMetricRow] = try await supabase
                 .from("wearable_daily_metrics")
-                .select("metric_date, steps, sleep_minutes, hrv_ms, resting_hr, source")
+                .select("metric_date, steps, sleep_minutes, movement_minutes, deep_sleep_minutes, rem_sleep_minutes, sleep_efficiency_pct, hrv_ms, resting_hr, source")
                 .eq("rook_user_id", value: userId)
                 .gte("metric_date", value: cutoff)
                 .order("metric_date", ascending: true)
@@ -1187,7 +1195,7 @@ class DataManager: ObservableObject {
         do {
             let rows: [WearableDailyMetricRow] = try await supabase
                 .from("wearable_daily_metrics")
-                .select("metric_date, steps, sleep_minutes, hrv_ms, resting_hr, source")
+                .select("metric_date, steps, sleep_minutes, movement_minutes, deep_sleep_minutes, rem_sleep_minutes, sleep_efficiency_pct, hrv_ms, resting_hr, source")
                 .eq("rook_user_id", value: userId)
                 .gte("metric_date", value: cutoff)
                 .order("metric_date", ascending: true)
@@ -1203,6 +1211,149 @@ class DataManager: ObservableObject {
             print("❌ DataManager: fetchWearableDailyMetricsForUser error: \(error.localizedDescription)")
             throw DataError.databaseError(userMessage)
         }
+    }
+
+    // MARK: - Wearable Baseline (compute + persist)
+
+    struct WearableBaselineAttempt {
+        let snapshot: VitalitySnapshot?
+        let daysUsed: Int
+        let sleepDays: Int
+        let stepDays: Int
+        let stressSignalDays: Int
+        let rowsCount: Int
+    }
+
+    /// Compute and persist a wearable baseline from recent ROOK webhook data.
+    /// - Note: Returns a status object even if scoring isn't possible yet.
+    func computeAndPersistWearableBaseline(days: Int = 21) async throws -> WearableBaselineAttempt {
+        guard let userId = await currentUserId else {
+            throw DataError.notAuthenticated
+        }
+
+        let age = try await fetchMemberAge(userId: userId)
+        guard let age else {
+            throw DataError.databaseError("Missing date of birth for vitality scoring.")
+        }
+
+        let rows = try await fetchWearableDailyMetrics(days: days)
+
+        // Merge multiple rows per day into a single "best" row for that day.
+        let byDay: [String: [WearableDailyMetricRow]] = Dictionary(grouping: rows, by: { $0.metricDate })
+        let mergedDays: [(dayKey: String, steps: Int?, sleepMinutes: Int?, movementMinutes: Int?, deepSleepMinutes: Int?, remSleepMinutes: Int?, sleepEfficiencyPct: Double?, hrvMs: Double?, restingHr: Double?)] =
+            byDay.keys.sorted().map { dayKey in
+                let dayRows = byDay[dayKey] ?? []
+                let steps = dayRows.compactMap(\.steps).max()
+                let sleepMinutes = dayRows.compactMap(\.sleepMinutes).max()
+                let movementMinutes = dayRows.compactMap(\.movementMinutes).max()
+                let deepSleepMinutes = dayRows.compactMap(\.deepSleepMinutes).max()
+                let remSleepMinutes = dayRows.compactMap(\.remSleepMinutes).max()
+                let sleepEfficiencyPct = dayRows.compactMap(\.sleepEfficiencyPct).max()
+                let hrvMs = dayRows.compactMap(\.hrvMs).max()
+                let restingHr = dayRows.compactMap(\.restingHr).max()
+                return (dayKey, steps, sleepMinutes, movementMinutes, deepSleepMinutes, remSleepMinutes, sleepEfficiencyPct, hrvMs, restingHr)
+            }
+
+        // Take last up to 7 unique days.
+        let last = Array(mergedDays.suffix(7))
+        let daysUsed = last.count
+        let sleepDays = last.filter { $0.sleepMinutes != nil }.count
+        let stepDays = last.filter { $0.steps != nil }.count
+        let movementDays = last.filter { $0.movementMinutes != nil }.count
+        let stressSignalDays = last.filter { $0.hrvMs != nil || $0.restingHr != nil }.count
+
+        func avgDouble(_ xs: [Double?]) -> Double? {
+            let v = xs.compactMap { $0 }
+            guard !v.isEmpty else { return nil }
+            return v.reduce(0, +) / Double(v.count)
+        }
+
+        func avgIntRounded(_ xs: [Int?]) -> Int? {
+            let v = xs.compactMap { $0 }
+            guard !v.isEmpty else { return nil }
+            return Int((Double(v.reduce(0, +)) / Double(v.count)).rounded())
+        }
+
+        let dailyRaw: [(dayKey: String, raw: VitalityRawMetrics)] = last.map { r in
+            let sleepHours = r.sleepMinutes.map { Double($0) / 60.0 }
+            let movementMins = r.movementMinutes.map { Double($0) }
+            
+            // Calculate restorative sleep % (deep + REM / total sleep)
+            let restorativeSleepPct: Double? = {
+                guard let total = r.sleepMinutes, total > 0 else { return nil }
+                let restorative = (r.deepSleepMinutes ?? 0) + (r.remSleepMinutes ?? 0)
+                return (Double(restorative) / Double(total)) * 100.0
+            }()
+            
+            // Calculate awake % (awake time is stored separately if available, otherwise nil)
+            let awakePct: Double? = r.sleepEfficiencyPct != nil ? (100.0 - r.sleepEfficiencyPct!) : nil
+            
+            return (
+                dayKey: r.dayKey,
+                raw: VitalityRawMetrics(
+                    age: age,
+                    sleepDurationHours: sleepHours,
+                    restorativeSleepPercent: restorativeSleepPct,
+                    sleepEfficiencyPercent: r.sleepEfficiencyPct,
+                    awakePercent: awakePct,
+                    movementMinutes: movementMins,
+                    steps: r.steps,
+                    activeCalories: nil,
+                    hrvMs: r.hrvMs,
+                    hrvType: nil,
+                    restingHeartRate: r.restingHr,
+                    breathingRate: nil
+                )
+            )
+        }
+
+        let windowRaw = VitalityRawMetrics(
+            age: age,
+            sleepDurationHours: avgDouble(dailyRaw.map { $0.raw.sleepDurationHours }),
+            restorativeSleepPercent: avgDouble(dailyRaw.map { $0.raw.restorativeSleepPercent }),
+            sleepEfficiencyPercent: avgDouble(dailyRaw.map { $0.raw.sleepEfficiencyPercent }),
+            awakePercent: avgDouble(dailyRaw.map { $0.raw.awakePercent }),
+            movementMinutes: avgDouble(dailyRaw.map { $0.raw.movementMinutes }),
+            steps: avgIntRounded(dailyRaw.map { $0.raw.steps }),
+            activeCalories: nil,
+            hrvMs: avgDouble(dailyRaw.map { $0.raw.hrvMs }),
+            hrvType: nil,
+            restingHeartRate: avgDouble(dailyRaw.map { $0.raw.restingHeartRate }),
+            breathingRate: nil
+        )
+
+        let engine = VitalityScoringEngine()
+        guard let scored = engine.scoreIfPossible(raw: windowRaw) else {
+            return WearableBaselineAttempt(
+                snapshot: nil,
+                daysUsed: daysUsed,
+                sleepDays: sleepDays,
+                stepDays: stepDays,
+                stressSignalDays: stressSignalDays,
+                rowsCount: rows.count
+            )
+        }
+
+        let snapshot = scored.snapshot
+
+        // Save snapshot + per-day pillar scores (for trends).
+        try await saveVitalitySnapshot(snapshot: snapshot, source: "wearable")
+        let dailySnapshots: [(dayKey: String, snapshot: VitalitySnapshot)] = dailyRaw.compactMap { dayKey, raw in
+            guard let dayScored = engine.scoreIfPossible(raw: raw) else { return nil }
+            return (dayKey, dayScored.snapshot)
+        }
+        if !dailySnapshots.isEmpty {
+            try await saveDailyVitalityPillarScores(dailySnapshots, source: "wearable")
+        }
+
+        return WearableBaselineAttempt(
+            snapshot: snapshot,
+            daysUsed: daysUsed,
+            sleepDays: sleepDays,
+            stepDays: stepDays,
+            stressSignalDays: stressSignalDays,
+            rowsCount: rows.count
+        )
     }
     
     /// Fetch member age from user_profiles table.
@@ -1365,6 +1516,121 @@ class DataManager: ObservableObject {
         let totalRows = result.values.reduce(0) { $0 + $1.count }
         print("✅ DataManager: Fetched vitality history for \(userIds.count) users (days: \(days), total rows: \(totalRows))")
         #endif
+        return result
+    }
+    
+    /// Fetch daily pillar scores and sub-metrics for multiple family members (for pillar detail sheets).
+    /// - Parameters:
+    ///   - memberIds: Array of user UUIDs to fetch data for.
+    ///   - pillar: The pillar to extract (sleep, movement, or stress).
+    ///   - days: Number of days to look back (default 14, includes buffer for backfill).
+    /// - Returns: Dictionary mapping userId → array of DailyDetailRow (sorted ascending by date).
+    struct DailyDetailRow {
+        let date: String // YYYY-MM-DD
+        let pillarScore: Int? // Pillar score from vitality_scores
+        let subMetrics: [String: Double?] // Sub-metrics from wearable_daily_metrics
+    }
+    
+    func fetchFamilyMemberDailyDetails(
+        memberIds: [String],
+        pillar: VitalityPillar,
+        days: Int = 14
+    ) async throws -> [String: [DailyDetailRow]] {
+        guard !memberIds.isEmpty else {
+            return [:]
+        }
+        
+        // Calculate cutoff date
+        let calendar = Calendar.current
+        let cutoffDate = calendar.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let cutoffString = dateFormatter.string(from: cutoffDate)
+        
+        var result: [String: [DailyDetailRow]] = [:]
+        
+        // Fetch data for each member in parallel
+        await withTaskGroup(of: (String, [DailyDetailRow]).self) { group in
+            for userId in memberIds {
+                group.addTask {
+                    do {
+                        // Fetch pillar scores
+                        let pillarRows = try await self.fetchUserPillarHistory(
+                            userId: userId,
+                            pillar: pillar,
+                            days: days
+                        )
+                        
+                        // Fetch sub-metrics
+                        let wearableRows = try await self.fetchWearableDailyMetricsForUser(
+                            userId: userId,
+                            days: days
+                        )
+                        
+                        // Build sub-metrics map by date
+                        let subMetricsByDate = Dictionary(grouping: wearableRows, by: { $0.metricDate })
+                            .compactMapValues { dayRows -> [String: Double?] in
+                                // If multiple rows for same date, prefer rows with more data
+                                let sorted = dayRows.sorted { row1, row2 in
+                                    let count1 = [row1.steps, row1.sleepMinutes, row1.movementMinutes, row1.hrvMs, row1.restingHr].compactMap { $0 }.count
+                                    let count2 = [row2.steps, row2.sleepMinutes, row2.movementMinutes, row2.hrvMs, row2.restingHr].compactMap { $0 }.count
+                                    return count1 > count2
+                                }
+                                guard let best = sorted.first else { return [:] }
+                                
+                                // Map sub-metrics based on pillar
+                                var metrics: [String: Double?] = [:]
+                                switch pillar {
+                                case .sleep:
+                                    metrics["sleep_minutes"] = best.sleepMinutes.map { Double($0) }
+                                    metrics["deep_sleep_minutes"] = best.deepSleepMinutes.map { Double($0) }
+                                    metrics["rem_sleep_minutes"] = best.remSleepMinutes.map { Double($0) }
+                                    metrics["sleep_efficiency_pct"] = best.sleepEfficiencyPct
+                                case .movement:
+                                    metrics["steps"] = best.steps.map { Double($0) }
+                                    metrics["movement_minutes"] = best.movementMinutes.map { Double($0) }
+                                    // Note: active_calories not in WearableDailyMetricRow yet, would need to add
+                                case .stress:
+                                    metrics["hrv_ms"] = best.hrvMs
+                                    metrics["resting_hr"] = best.restingHr
+                                }
+                                return metrics
+                            }
+                        
+                        // Merge pillar scores and sub-metrics by date
+                        let allDates = Set(pillarRows.map { $0.date } + wearableRows.map { $0.metricDate })
+                        let mergedRows = allDates.sorted().map { date in
+                            let pillarScore = pillarRows.first(where: { $0.date == date })?.value
+                            let subMetrics = subMetricsByDate[date] ?? [:]
+                            return DailyDetailRow(
+                                date: date,
+                                pillarScore: pillarScore,
+                                subMetrics: subMetrics
+                            )
+                        }
+                        
+                        #if DEBUG
+                        print("📊 DataManager: Fetched \(mergedRows.count) daily detail rows for user \(userId) (pillar: \(pillar.rawValue))")
+                        #endif
+                        
+                        return (userId.lowercased(), mergedRows)
+                    } catch {
+                        print("⚠️ DataManager: Failed to fetch daily details for user \(userId): \(error.localizedDescription)")
+                        return (userId.lowercased(), [])
+                    }
+                }
+            }
+            
+            for await (userId, rows) in group {
+                result[userId] = rows
+            }
+        }
+        
+        #if DEBUG
+        let totalRows = result.values.reduce(0) { $0 + $1.count }
+        print("✅ DataManager: Fetched daily details for \(memberIds.count) members (pillar: \(pillar.rawValue), total rows: \(totalRows))")
+        #endif
+        
         return result
     }
 

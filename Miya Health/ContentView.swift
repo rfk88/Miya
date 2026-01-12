@@ -1553,6 +1553,9 @@ struct WearableSelectionView: View {
     // Flag for invited users with Guided Setup (skip full onboarding after wearables)
     var isGuidedSetupInvite: Bool = false
     
+    // Flag for dashboard reconnect mode (no onboarding navigation, just dismiss)
+    var isReconnectMode: Bool = false
+    
     @State private var selectedWearable: WearableType? = nil
     @State private var isConnecting: Bool = false
     @State private var connectionProgress: Double = 0.0
@@ -1582,24 +1585,29 @@ struct WearableSelectionView: View {
             
             VStack(spacing: 24) {
                 
-                // Progress bar: Step 3 of 8
-                OnboardingProgressBar(currentStep: currentStep, totalSteps: totalSteps)
-                    .padding(.top, 16)
+                // Progress bar: Step 3 of 8 (only show in onboarding mode)
+                if !isReconnectMode {
+                    OnboardingProgressBar(currentStep: currentStep, totalSteps: totalSteps)
+                        .padding(.top, 16)
+                }
                 
                 // Title + subtitle
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Link your health tech")
+                    Text(isReconnectMode ? "Reconnect Wearables" : "Link your health tech")
                         .font(.system(size: 24, weight: .bold))
                         .foregroundColor(.miyaTextPrimary)
                     
-                    Text(isGuidedSetupInvite
-                         ? "Connect a wearable so we can calculate your vitality while your admin completes the rest of your health profile."
-                         : "We’ll sync automatically — set it and forget it ✨")
+                    Text(isReconnectMode
+                         ? "Reconnect your wearables to refresh your vitality data and recalculate your baseline."
+                         : (isGuidedSetupInvite
+                            ? "Connect a wearable so we can calculate your vitality while your admin completes the rest of your health profile."
+                            : "We’ll sync automatically — set it and forget it ✨"))
                         .font(.system(size: 15))
                         .foregroundColor(.miyaTextSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, isReconnectMode ? 16 : 0)
                 
                 // Wearable list
                 VStack(alignment: .leading, spacing: 12) {
@@ -1653,54 +1661,71 @@ struct WearableSelectionView: View {
                 
                 Spacer()
                 
-                // Back + Continue
+                // Back + Continue / Done
                 HStack(spacing: 12) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Text("Back")
-                            .font(.system(size: 15, weight: .medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.clear)
-                            .foregroundColor(.miyaTextSecondary)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .stroke(Color.miyaBackground, lineWidth: 1)
-                            )
+                    if !isReconnectMode {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Text("Back")
+                                .font(.system(size: 15, weight: .medium))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Color.clear)
+                                .foregroundColor(.miyaTextSecondary)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .stroke(Color.miyaBackground, lineWidth: 1)
+                                )
+                        }
                     }
                     
-                    // Navigation depends on whether this is a guided setup invite
-                    if isGuidedSetupInvite {
-                        // Guided Setup: After wearables, take them to vitality setup (RiskResultsView) and then dashboard.
-                        NavigationLink {
-                            RiskResultsView()
-                                .environmentObject(onboardingManager)
-                                .environmentObject(dataManager)
+                    // In reconnect mode, just show Done button
+                    if isReconnectMode {
+                        Button {
+                            dismiss()
                         } label: {
-                            Text("Continue")
+                            Text("Done")
                                 .font(.system(size: 16, weight: .semibold))
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
-                                .background(canContinue ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
+                                .background(Color.miyaPrimary)
                                 .foregroundColor(.white)
                                 .cornerRadius(16)
                         }
-                        .disabled(!canContinue)
                     } else {
-                        // Normal flow: Go to Step 4 (AboutYouView)
-                    NavigationLink {
-                        AboutYouView()
-                    } label: {
-                        Text("Continue")
-                            .font(.system(size: 16, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(canContinue ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
-                            .foregroundColor(.white)
-                            .cornerRadius(16)
-                    }
-                    .disabled(!canContinue)
+                        // Navigation depends on whether this is a guided setup invite
+                        if isGuidedSetupInvite {
+                            // Guided Setup: After wearables, take them to vitality setup (RiskResultsView) and then dashboard.
+                            NavigationLink {
+                                RiskResultsView()
+                                    .environmentObject(onboardingManager)
+                                    .environmentObject(dataManager)
+                            } label: {
+                                Text("Continue")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(canContinue ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
+                                    .foregroundColor(.white)
+                                    .cornerRadius(16)
+                            }
+                            .disabled(!canContinue)
+                        } else {
+                            // Normal flow: Go to Step 4 (AboutYouView)
+                            NavigationLink {
+                                AboutYouView()
+                            } label: {
+                                Text("Continue")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(canContinue ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
+                                    .foregroundColor(.white)
+                                    .cornerRadius(16)
+                            }
+                            .disabled(!canContinue)
+                        }
                     }
                 }
                 .padding(.bottom, 16)
@@ -1771,8 +1796,10 @@ struct WearableSelectionView: View {
             }
         }
         .onAppear {
-            // Step 2: Wearables
-            onboardingManager.setCurrentStep(2)
+            // Step 2: Wearables (only in onboarding mode)
+            if !isReconnectMode {
+                onboardingManager.setCurrentStep(2)
+            }
             // Check connection status for API-based wearables on appear
             Task {
                 await checkAPIWearableConnectionStatus()
@@ -1957,59 +1984,40 @@ struct WearableSelectionView: View {
                         DispatchQueue.main.async {
                             print("🟢 RookConnect: Permission screen flow finished")
                             
-                            // Check if HealthKit permissions are actually granted
-                            let store = HKHealthStore()
-                            let typesToCheck: [HKObjectType] = [
-                                HKQuantityType.quantityType(forIdentifier: .stepCount)!,
-                                HKCategoryType.categoryType(forIdentifier: .sleepAnalysis)!
-                            ]
-                            
-                            var allAuthorized = true
-                            for type in typesToCheck {
-                                let status = store.authorizationStatus(for: type)
-                                if status != .sharingAuthorized {
-                                    allAuthorized = false
-                                    break
+                            // HealthKit read permissions do not reliably reflect in `authorizationStatus`.
+                            // Treat the completed permission flow as a successful connect to avoid blocking onboarding.
+                            print("✅ RookConnect: Permission flow finished - marking Apple Health as connected")
+                            Task { @MainActor in
+                                let appleHealthWearable = WearableType.appleWatch
+                                let wasAlreadyConnected = connectedWearables.contains(appleHealthWearable)
+                                connectedWearables.insert(appleHealthWearable)
+                                
+                                // Save to OnboardingManager
+                                if !onboardingManager.connectedWearables.contains(appleHealthWearable.rawValue) {
+                                    onboardingManager.connectedWearables.append(appleHealthWearable.rawValue)
                                 }
-                            }
-                            
-                            if allAuthorized {
-                                print("✅ RookConnect: Apple Health permissions granted - marking as connected")
-                                // Mark Apple Health as connected
-                                Task { @MainActor in
-                                    let appleHealthWearable = WearableType.appleWatch
-                                    let wasAlreadyConnected = connectedWearables.contains(appleHealthWearable)
-                                    connectedWearables.insert(appleHealthWearable)
+                                
+                                // Save to database
+                                do {
+                                    try await dataManager.saveWearable(wearableType: appleHealthWearable.rawValue)
+                                    print("✅ RookConnect: Apple Health saved to database")
                                     
-                                    // Save to OnboardingManager
-                                    if !onboardingManager.connectedWearables.contains(appleHealthWearable.rawValue) {
-                                        onboardingManager.connectedWearables.append(appleHealthWearable.rawValue)
+                                    // Post notification to trigger automatic vitality scoring (same as API-based wearables)
+                                    if !wasAlreadyConnected {
+                                        NotificationCenter.default.post(
+                                            name: .apiWearableConnected,
+                                            object: nil,
+                                            userInfo: [
+                                                "wearableType": appleHealthWearable.rawValue,
+                                                "wearableName": appleHealthWearable.displayName,
+                                                "userId": userId
+                                            ]
+                                        )
+                                        print("✅ RookConnect: Posted apiWearableConnected notification for Apple Health")
                                     }
-                                    
-                                    // Save to database
-                                    do {
-                                        try await dataManager.saveWearable(wearableType: appleHealthWearable.rawValue)
-                                        print("✅ RookConnect: Apple Health saved to database")
-                                        
-                                        // Post notification to trigger automatic vitality scoring (same as API-based wearables)
-                                        if !wasAlreadyConnected {
-                                            NotificationCenter.default.post(
-                                                name: .apiWearableConnected,
-                                                object: nil,
-                                                userInfo: [
-                                                    "wearableType": appleHealthWearable.rawValue,
-                                                    "wearableName": appleHealthWearable.displayName,
-                                                    "userId": userId
-                                                ]
-                                            )
-                                            print("✅ RookConnect: Posted apiWearableConnected notification for Apple Health")
-                                        }
-                                    } catch {
-                                        print("⚠️ RookConnect: Failed to save Apple Health to database: \(error.localizedDescription)")
-                                    }
+                                } catch {
+                                    print("⚠️ RookConnect: Failed to save Apple Health to database: \(error.localizedDescription)")
                                 }
-                            } else {
-                                print("⚠️ RookConnect: Apple Health permissions not fully granted")
                             }
 
                         #if DEBUG
@@ -2025,7 +2033,7 @@ struct WearableSelectionView: View {
                                 let count = result?.sumQuantity()?.doubleValue(for: .count()) ?? 0
                                 print("🔎 HealthKit debug – steps today:", count)
                             }
-                            store.execute(query)
+                            HKHealthStore().execute(query)
                         }
                         debugPrintTodaySteps()
                         #endif

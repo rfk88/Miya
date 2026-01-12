@@ -27,6 +27,10 @@ function applyRule(
       const riseAbs = recentAvg - baselineAvg;
       return { matched: riseAbs >= rule.value, deviationPercent: pct };
     }
+    case "absolute_drop_below": {
+      const isBelowThreshold = recentAvg < rule.value;
+      return { matched: isBelowThreshold, deviationPercent: pct };
+    }
     default: {
       const _exhaustive: never = rule;
       return { matched: false, deviationPercent: null };

@@ -14,8 +14,8 @@ final class RookService {
 
     private func configure() {
         // TODO: move creds to secure config before production
-        let clientUUID = "6e2ba052-e35f-44a1-b99b-1453f4a49c6d"
-        let secretKey  = "BBH0rN4hcqg3c7NfUt9jEO4P8ZHjbz3zazN2"
+        let clientUUID = "f60e5d66-1d2f-4e71-ba6c-f90c6c8ac2dc"
+        let secretKey  = "kO6KBCELDtz4jBMWLrw63WFG8ppzSkQIND4E"
 
         RookConnectConfigurationManager.shared.setEnvironment(.sandbox)
         RookConnectConfigurationManager.shared.setConfiguration(
@@ -36,17 +36,32 @@ final class RookService {
 
     /// Must be called with the authenticated user's ID before requesting permissions.
     /// This tells Rook which user is connecting their health data.
+    /// CRITICAL: This userId MUST be the Miya auth UUID to ensure webhooks can map correctly.
     func setUserId(_ userId: String, completion: ((Bool) -> Void)? = nil) {
         print("🟢 RookService: Setting user ID: \(userId)")
+        print("🔍 RookService: Verifying UUID format...")
+        
+        // Validate UUID format
+        let uuidRegex = try? NSRegularExpression(pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+        let range = NSRange(location: 0, length: userId.utf16.count)
+        if let regex = uuidRegex, regex.firstMatch(in: userId, range: range) != nil {
+            print("✅ RookService: User ID is valid UUID format")
+        } else {
+            print("⚠️ RookService: User ID does NOT match UUID format - webhooks may fail to map!")
+            print("   Expected: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+            print("   Received: \(userId)")
+        }
 
         RookConnectConfigurationManager.shared.updateUserId(userId) { result in
             switch result {
             case .success:
-                print("✅ RookService: User ID set successfully")
+                print("✅ RookService: User ID set successfully with Rook SDK")
                 print("ℹ️ RookService: Background sync will now automatically sync health data")
+                print("ℹ️ RookService: Webhooks should receive client_user_id=\(userId)")
                 completion?(true)
             case .failure(let error):
                 print("❌ RookService: Failed to set user ID: \(error.localizedDescription)")
+                print("❌ RookService: Webhooks will NOT be able to map to this user!")
                 completion?(false)
             }
         }
@@ -81,10 +96,12 @@ final class RookService {
                 print("❌ RookService: syncPendingSummaries error: \(error.localizedDescription)")
             }
         }
-
+        
+        // NOTE: Event backfill APIs are not available in the current Rook SDK version.
+        // Workout events will still sync via background delivery (AppDelegate enables event background sync).
         // Then, explicitly request per-day sync for last N days (sleep + physical + body).
         let calendar = Calendar.current
-        let types: [SummaryTypeToUpload] = [.sleep, .physical, .body]
+        let summaryTypes: [SummaryTypeToUpload] = [.sleep, .physical, .body]
 
         func syncDay(offsetDaysAgo: Int) {
             guard offsetDaysAgo >= 0 else {
@@ -97,16 +114,18 @@ final class RookService {
                 return
             }
 
-            summaryManager.sync(date, summaryType: types) { result in
+            // Sync summaries for this date
+            summaryManager.sync(date, summaryType: summaryTypes) { result in
                 switch result {
                 case .success(let ok):
                     print("✅ RookService: Synced summaries for \(date) ok=\(ok)")
                 case .failure(let error):
                     print("❌ RookService: Sync summaries for \(date) failed: \(error.localizedDescription)")
                 }
-                // Move to next day (serial to avoid hammering HealthKit).
-                syncDay(offsetDaysAgo: offsetDaysAgo - 1)
             }
+            
+            // Move to next day (serial to avoid hammering HealthKit).
+            syncDay(offsetDaysAgo: offsetDaysAgo - 1)
         }
 
         syncDay(offsetDaysAgo: days - 1)

@@ -1,6 +1,13 @@
 export type ISODate = string; // YYYY-MM-DD
 
-export type MetricType = "sleep_minutes" | "steps" | "hrv_ms" | "resting_hr";
+export type MetricType = 
+  | "sleep_minutes" 
+  | "steps" 
+  | "hrv_ms" 
+  | "resting_hr"
+  | "sleep_efficiency_pct"      // NEW
+  | "movement_minutes"           // NEW
+  | "deep_sleep_minutes";        // NEW
 
 export type PatternType = "drop_vs_baseline" | "rise_vs_baseline";
 
@@ -29,7 +36,8 @@ export type ThresholdRule =
   | { kind: "percent_drop_at_least"; percent: number } // percent=0.25 means 25% drop
   | { kind: "percent_rise_at_least"; percent: number } // percent=0.10 means 10% rise
   | { kind: "absolute_drop_at_least"; value: number } // e.g. 45 minutes
-  | { kind: "absolute_rise_at_least"; value: number }; // e.g. 5 bpm
+  | { kind: "absolute_rise_at_least"; value: number } // e.g. 5 bpm
+  | { kind: "absolute_drop_below"; value: number };  // NEW - for "below 85%" type thresholds
 
 export type ThresholdConfig = Record<
   MetricType,

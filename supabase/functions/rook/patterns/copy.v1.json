@@ -86,6 +86,72 @@
       "body": "Three weeks of higher resting heart rate. Consider a direct check-in and, if relevant, a clinician conversation.",
       "cta": "Reach out now"
     }
+  },
+  "sleep_efficiency_pct": {
+    "3": {
+      "title": "Check in with {firstName}",
+      "body": "Sleep quality has been lower than usual for 3 days (spending more time awake in bed).",
+      "cta": "View sleep quality"
+    },
+    "7": {
+      "title": "Check in with {firstName} this week",
+      "body": "A full week of lower sleep quality. This can be associated with stress, discomfort, or environmental factors.",
+      "cta": "See what changed"
+    },
+    "14": {
+      "title": "{firstName} might need extra support",
+      "body": "Two weeks of lower sleep quality. Consider sleep hygiene: consistent schedule, darker room, temperature, and bedtime routine.",
+      "cta": "Create a sleep plan"
+    },
+    "21": {
+      "title": "Time to check in today",
+      "body": "Three weeks of poor sleep quality. Consider a direct check-in and, if relevant, a sleep specialist consultation.",
+      "cta": "Reach out now"
+    }
+  },
+  "movement_minutes": {
+    "3": {
+      "title": "Check in with {firstName}",
+      "body": "Active time has been lower than usual for 3 days.",
+      "cta": "View activity details"
+    },
+    "7": {
+      "title": "Check in with {firstName} this week",
+      "body": "A full week of lower activity. Ask if anything changed (pain, fatigue, schedule, motivation).",
+      "cta": "See what changed"
+    },
+    "14": {
+      "title": "{firstName} might need extra support",
+      "body": "Two weeks of lower activity. Consider a small plan: short walks, gentle stretches, and manageable goals.",
+      "cta": "Create an activity plan"
+    },
+    "21": {
+      "title": "Time to check in today",
+      "body": "Three weeks of low activity. A direct check-in may help identify barriers and create sustainable solutions.",
+      "cta": "Reach out now"
+    }
+  },
+  "deep_sleep_minutes": {
+    "3": {
+      "title": "Check in with {firstName}",
+      "body": "Deep sleep has been lower than usual for 3 days (less restorative rest).",
+      "cta": "View sleep stages"
+    },
+    "7": {
+      "title": "Check in with {firstName} this week",
+      "body": "A full week of lower deep sleep. This can be associated with stress, alcohol, late meals, or poor sleep environment.",
+      "cta": "See what changed"
+    },
+    "14": {
+      "title": "{firstName} might need extra support",
+      "body": "Two weeks of lower deep sleep. Consider stress management, earlier dinners, and limiting alcohol before bed.",
+      "cta": "Create a recovery plan"
+    },
+    "21": {
+      "title": "Time to check in today",
+      "body": "Three weeks of reduced deep sleep. Consider a direct check-in and, if relevant, a sleep specialist evaluation.",
+      "cta": "Reach out now"
+    }
   }
 }
 

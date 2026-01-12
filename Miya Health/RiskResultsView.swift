@@ -133,7 +133,7 @@ struct RiskResultsView: View {
                             HStack(spacing: 12) {
                                 PillarMini(label: "Sleep", score: sleepPillar)
                                 PillarMini(label: "Movement", score: movementPillar)
-                                PillarMini(label: "Stress", score: stressPillar)
+                                PillarMini(label: "Recovery", score: stressPillar)
                             }
 
                             if let days = wearableDaysUsed, days > 0 {
@@ -1453,14 +1453,18 @@ struct RiskResultsView: View {
                 // Merge multiple rows per day (and partial rows) into a single "best" row for that day.
                 // This avoids missing sleep/steps when they come from different webhook deliveries.
                 let byDay: [String: [DataManager.WearableDailyMetricRow]] = Dictionary(grouping: rows, by: { $0.metricDate })
-                let mergedDays: [(dayKey: String, steps: Int?, sleepMinutes: Int?, hrvMs: Double?, restingHr: Double?)] =
+                let mergedDays: [(dayKey: String, steps: Int?, sleepMinutes: Int?, movementMinutes: Int?, deepSleepMinutes: Int?, remSleepMinutes: Int?, sleepEfficiencyPct: Double?, hrvMs: Double?, restingHr: Double?)] =
                     byDay.keys.sorted().map { dayKey in
                         let dayRows = byDay[dayKey] ?? []
                         let steps = dayRows.compactMap(\.steps).max()
                         let sleepMinutes = dayRows.compactMap(\.sleepMinutes).max()
+                        let movementMinutes = dayRows.compactMap(\.movementMinutes).max()
+                        let deepSleepMinutes = dayRows.compactMap(\.deepSleepMinutes).max()
+                        let remSleepMinutes = dayRows.compactMap(\.remSleepMinutes).max()
+                        let sleepEfficiencyPct = dayRows.compactMap(\.sleepEfficiencyPct).max()
                         let hrvMs = dayRows.compactMap(\.hrvMs).max()
                         let restingHr = dayRows.compactMap(\.restingHr).max()
-                        return (dayKey, steps, sleepMinutes, hrvMs, restingHr)
+                        return (dayKey, steps, sleepMinutes, movementMinutes, deepSleepMinutes, remSleepMinutes, sleepEfficiencyPct, hrvMs, restingHr)
                     }
 
                 // Take last up to 7 unique days.
@@ -1469,19 +1473,32 @@ struct RiskResultsView: View {
 
                 let sleepDays = last.filter { $0.sleepMinutes != nil }.count
                 let stepDays = last.filter { $0.steps != nil }.count
+                let movementDays = last.filter { $0.movementMinutes != nil }.count
                 let stressSignalDays = last.filter { $0.hrvMs != nil || $0.restingHr != nil }.count
 
                 let dailyRaw: [(dayKey: String, raw: VitalityRawMetrics)] = last.map { r in
                     let sleepHours = r.sleepMinutes.map { Double($0) / 60.0 }
+                    let movementMins = r.movementMinutes.map { Double($0) }
+                    
+                    // Calculate restorative sleep % (deep + REM / total sleep)
+                    let restorativeSleepPct: Double? = {
+                        guard let total = r.sleepMinutes, total > 0 else { return nil }
+                        let restorative = (r.deepSleepMinutes ?? 0) + (r.remSleepMinutes ?? 0)
+                        return (Double(restorative) / Double(total)) * 100.0
+                    }()
+                    
+                    // Calculate awake % (100 - efficiency)
+                    let awakePct: Double? = r.sleepEfficiencyPct != nil ? (100.0 - r.sleepEfficiencyPct!) : nil
+                    
                     return (
                         dayKey: r.dayKey,
                         raw: VitalityRawMetrics(
                             age: age,
                             sleepDurationHours: sleepHours,
-                            restorativeSleepPercent: nil,
-                            sleepEfficiencyPercent: nil,
-                            awakePercent: nil,
-                            movementMinutes: nil,
+                            restorativeSleepPercent: restorativeSleepPct,
+                            sleepEfficiencyPercent: r.sleepEfficiencyPct,
+                            awakePercent: awakePct,
+                            movementMinutes: movementMins,
                             steps: r.steps,
                             activeCalories: nil,
                             hrvMs: r.hrvMs,
@@ -1496,10 +1513,10 @@ struct RiskResultsView: View {
                 let windowRaw = VitalityRawMetrics(
                     age: age,
                     sleepDurationHours: avgDouble(dailyRaw.map { $0.raw.sleepDurationHours }),
-                    restorativeSleepPercent: nil,
-                    sleepEfficiencyPercent: nil,
-                    awakePercent: nil,
-                    movementMinutes: nil,
+                    restorativeSleepPercent: avgDouble(dailyRaw.map { $0.raw.restorativeSleepPercent }),
+                    sleepEfficiencyPercent: avgDouble(dailyRaw.map { $0.raw.sleepEfficiencyPercent }),
+                    awakePercent: avgDouble(dailyRaw.map { $0.raw.awakePercent }),
+                    movementMinutes: avgDouble(dailyRaw.map { $0.raw.movementMinutes }),
                     steps: avgIntRounded(dailyRaw.map { $0.raw.steps }),
                     activeCalories: nil,
                     hrvMs: avgDouble(dailyRaw.map { $0.raw.hrvMs }),
@@ -1561,26 +1578,6 @@ struct RiskResultsView: View {
                     "We haven’t received enough Apple Health data yet to calculate a meaningful Vitality score. This first baseline usually appears after at least one sleep + some daily movement has synced. Try again soon, or check back tomorrow morning."
             }
         }
-    }
-}
-
-private struct PillarMini: View {
-    let label: String
-    let score: Int?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.caption)
-                .foregroundColor(.miyaTextSecondary)
-            Text(score.map { "\($0)/100" } ?? "—")
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.miyaTextPrimary)
-        }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 10)
-        .background(Color(.systemGray6))
-        .cornerRadius(10)
     }
 }
 

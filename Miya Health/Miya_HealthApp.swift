@@ -65,7 +65,7 @@ struct Miya_HealthApp: App {
                     // (Avoids "Accessing StateObject... without being installed on a View" warnings.)
                     onboardingManager.dataManager = dataManager
                     
-                    // Restore persisted state first (fast, from UserDefaults)
+                    // Restore persisted state first (fast, from UserDefaults - synchronous is fine)
                     dataManager.restorePersistedState()
                     
                     // Restore user session on app launch

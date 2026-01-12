@@ -56,6 +56,8 @@ struct ROOKDataAdapter {
         }()
         
         // HRV (Rule A)
+        // ONLY use sleep-based HRV for recovery scoring
+        // Physical HRV averages can be skewed by exercise and should NOT be used for recovery assessment
         // Primary: SDNN, Secondary: RMSSD
         // Track which type was used
         let (hrv, hrvType): (Double?, String?) = {
@@ -63,18 +65,14 @@ struct ROOKDataAdapter {
                 return (sdnn, "sdnn")
             } else if let rmssd = sleep?.hrv_rmssd_ms_double {
                 return (rmssd, "rmssd")
-            } else if let sdnn = physical?.hrv_sdnn_avg_ms {
-                return (sdnn, "sdnn")
-            } else if let rmssd = physical?.hrv_rmssd_avg_ms {
-                return (rmssd, "rmssd")
             }
             return (nil, nil)
         }()
         
         // RESTING HEART RATE (Rule G)
-        // Prefer sleep-based, fallback to physical
+        // ONLY use sleep-based resting HR to avoid exercise contamination
+        // Physical HR data can include exercise-induced spikes and should NOT be used for recovery scoring
         let rhr: Double? = sleep?.hr_resting_bpm_int.map { Double($0) }
-                           ?? physical?.hr_resting_bpm_int.map { Double($0) }
         
         // BREATHING RATE (Rule F)
         let breathingRate: Double? = sleep?.breaths_avg_per_min_int.map { Double($0) }

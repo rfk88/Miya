@@ -205,16 +205,44 @@ async function callOpenAI(args: {
       case "steps":
         return `A ${pct.toFixed(1)}% sustained decrease in daily steps (from ${Math.round(baseline)} to ${Math.round(current)} steps) over ${consecutiveDays} days is clinically significant. This level of reduction typically indicates injury, illness, lifestyle disruption, or changes in mental health and motivation.`;
       
+      case "movement_minutes":
+        const baselineMovementHours = (baseline / 60).toFixed(1);
+        const currentMovementHours = (current / 60).toFixed(1);
+        return `A ${pct.toFixed(1)}% decrease in active movement time (from ${baselineMovementHours} to ${currentMovementHours} hours) over ${consecutiveDays} days indicates reduced physical activity. This may reflect injury, illness, schedule changes, or decreased motivation. Movement minutes capture actual active time, not just steps.`;
+      
       case "sleep_minutes":
         const baselineHours = (baseline / 60).toFixed(1);
         const currentHours = (current / 60).toFixed(1);
         return `A ${pct.toFixed(1)}% decrease in sleep duration (from ${baselineHours} to ${currentHours} hours) over ${consecutiveDays} days is concerning. Chronic sleep restriction increases cardiovascular and metabolic health risks and often signals stress, schedule changes, or emerging sleep disorders.`;
       
+      case "sleep_efficiency_pct":
+        return `A ${pct.toFixed(1)}% decrease in sleep efficiency (from ${Math.round(baseline)}% to ${Math.round(current)}%) over ${consecutiveDays} days indicates more time spent awake in bed relative to total sleep. Lower efficiency suggests fragmented sleep, frequent awakenings, or difficulty falling asleep, which can impact recovery and daytime function.`;
+      
+      case "deep_sleep_minutes":
+        const baselineDeepHours = (baseline / 60).toFixed(1);
+        const currentDeepHours = (current / 60).toFixed(1);
+        return `A ${pct.toFixed(1)}% decrease in deep sleep (from ${baselineDeepHours} to ${currentDeepHours} hours) over ${consecutiveDays} days is significant. Deep sleep is critical for physical recovery, immune function, and memory consolidation. Reduced deep sleep often indicates stress, alcohol use, or sleep disorders.`;
+      
+      case "rem_sleep_minutes":
+        const baselineRemHours = (baseline / 60).toFixed(1);
+        const currentRemHours = (current / 60).toFixed(1);
+        return `A ${pct.toFixed(1)}% decrease in REM sleep (from ${baselineRemHours} to ${currentRemHours} hours) over ${consecutiveDays} days may affect cognitive function and emotional regulation. REM sleep supports memory, learning, and mood. Reductions often occur with sleep restriction, alcohol, or certain medications.`;
+      
       case "hrv_ms":
+      case "hrv_rmssd_ms":
         return `A ${pct.toFixed(1)}% drop in heart rate variability (from ${Math.round(baseline)}ms to ${Math.round(current)}ms) over ${consecutiveDays} days indicates increased physiological stress. Lower HRV is associated with poor recovery, illness, overtraining, or psychological stress.`;
       
       case "resting_hr":
         return `A ${pct.toFixed(1)}% increase in resting heart rate (from ${Math.round(baseline)} to ${Math.round(current)} bpm) over ${consecutiveDays} days suggests reduced cardiovascular fitness, inadequate recovery, or potential illness. Elevated resting heart rate is an early warning sign the body isn't recovering properly.`;
+      
+      case "breaths_avg_per_min":
+        return `A ${pct.toFixed(1)}% change in breathing rate (from ${Math.round(baseline)} to ${Math.round(current)} breaths/min) over ${consecutiveDays} days may indicate respiratory changes, stress, or sleep quality issues. Elevated breathing rate during sleep can signal sleep-disordered breathing or stress.`;
+      
+      case "spo2_avg_pct":
+        return `A ${pct.toFixed(1)}% decrease in blood oxygen saturation (from ${Math.round(baseline)}% to ${Math.round(current)}%) over ${consecutiveDays} days is concerning. Lower SpO2 during sleep may indicate sleep apnea, respiratory issues, or altitude effects.`;
+      
+      case "calories_active":
+        return `A ${pct.toFixed(1)}% decrease in active calories burned (from ${Math.round(baseline)} to ${Math.round(current)} kcal) over ${consecutiveDays} days reflects reduced physical activity levels. This may indicate injury, illness, schedule disruption, or decreased motivation.`;
       
       default:
         return `A significant change in health metrics over ${consecutiveDays} days requires attention.`;
@@ -233,6 +261,15 @@ async function callOpenAI(args: {
           "Intentional rest period or lifestyle change"
         ];
       
+      case "movement_minutes":
+        return [
+          "Injury or physical limitation reducing active time",
+          "Illness, fatigue, or recovery period",
+          "Schedule changes reducing time for physical activity",
+          "Decreased motivation or mood affecting activity levels",
+          "Weather, travel, or environmental factors limiting movement"
+        ];
+      
       case "sleep_minutes":
         return [
           "Increased stress or anxiety interfering with sleep",
@@ -242,7 +279,35 @@ async function callOpenAI(args: {
           "Possible emerging sleep disorder"
         ];
       
+      case "sleep_efficiency_pct":
+        return [
+          "Frequent awakenings due to stress, anxiety, or environmental factors",
+          "Difficulty falling asleep (increased time in bed before sleep)",
+          "Sleep-disordered breathing causing frequent arousals",
+          "Pain, discomfort, or medical conditions disrupting sleep",
+          "Alcohol or medication effects fragmenting sleep"
+        ];
+      
+      case "deep_sleep_minutes":
+        return [
+          "Increased stress or cortisol levels suppressing deep sleep",
+          "Alcohol consumption (reduces deep sleep even if total sleep is maintained)",
+          "Sleep-disordered breathing or frequent awakenings",
+          "Late evening exercise or screen time affecting sleep architecture",
+          "Age-related changes or medical conditions affecting deep sleep"
+        ];
+      
+      case "rem_sleep_minutes":
+        return [
+          "Sleep restriction or insufficient total sleep time",
+          "Alcohol consumption (suppresses REM sleep)",
+          "Certain medications affecting sleep stages",
+          "Sleep schedule disruptions or irregular bedtimes",
+          "Sleep-disordered breathing interrupting REM cycles"
+        ];
+      
       case "hrv_ms":
+      case "hrv_rmssd_ms":
         return [
           "Overtraining or insufficient recovery between workouts",
           "Increased psychological stress or anxiety",
@@ -260,6 +325,33 @@ async function callOpenAI(args: {
           "Dehydration or changes in medication"
         ];
       
+      case "breaths_avg_per_min":
+        return [
+          "Sleep-disordered breathing or sleep apnea",
+          "Stress or anxiety affecting respiratory rate",
+          "Respiratory illness or congestion",
+          "Altitude changes or environmental factors",
+          "Medication side effects affecting breathing"
+        ];
+      
+      case "spo2_avg_pct":
+        return [
+          "Sleep apnea or sleep-disordered breathing",
+          "Respiratory illness or congestion",
+          "Altitude changes or environmental factors",
+          "Underlying respiratory or cardiovascular conditions",
+          "Poor sleep position or airway obstruction"
+        ];
+      
+      case "calories_active":
+        return [
+          "Reduced physical activity due to injury or pain",
+          "Illness, fatigue, or recovery period",
+          "Schedule changes reducing exercise opportunities",
+          "Decreased motivation or mood affecting activity",
+          "Environmental factors limiting physical activity"
+        ];
+      
       default:
         return ["Physical factors", "Mental factors", "Lifestyle changes"];
     }
@@ -269,16 +361,32 @@ async function callOpenAI(args: {
   const getActionSteps = () => {
     const metricSigns = {
       steps: "persistent fatigue, pain, low mood, lack of motivation, social withdrawal",
+      movement_minutes: "persistent fatigue, pain, low mood, lack of motivation, social withdrawal",
       sleep_minutes: "daytime fatigue, irritability, difficulty concentrating, increased caffeine use",
+      sleep_efficiency_pct: "daytime fatigue, difficulty falling asleep, frequent awakenings, feeling unrested",
+      deep_sleep_minutes: "daytime fatigue, poor physical recovery, feeling unrested despite adequate sleep time",
+      rem_sleep_minutes: "difficulty concentrating, memory issues, mood changes, feeling emotionally unregulated",
       hrv_ms: "persistent fatigue, poor workout recovery, frequent illness, high stress levels",
-      resting_hr: "feeling unwell, persistent fatigue, difficulty with usual activities, chest discomfort"
+      hrv_rmssd_ms: "persistent fatigue, poor workout recovery, frequent illness, high stress levels",
+      resting_hr: "feeling unwell, persistent fatigue, difficulty with usual activities, chest discomfort",
+      breaths_avg_per_min: "daytime fatigue, snoring, gasping during sleep, morning headaches",
+      spo2_avg_pct: "daytime fatigue, morning headaches, difficulty concentrating, gasping during sleep",
+      calories_active: "persistent fatigue, low energy, decreased motivation, weight changes"
     }[metricName] || "unusual symptoms";
 
     const metricAction = {
       steps: "Offer to take a short walk together, remove barriers to movement, adjust expectations",
+      movement_minutes: "Offer to do activities together, remove barriers to movement, adjust expectations",
       sleep_minutes: "Review sleep routine together, adjust evening schedule, create better sleep environment",
+      sleep_efficiency_pct: "Review sleep routine, address sleep environment, consider sleep hygiene practices",
+      deep_sleep_minutes: "Review evening routine, reduce alcohol/caffeine, optimize sleep environment for deep sleep",
+      rem_sleep_minutes: "Review sleep schedule, reduce alcohol, ensure adequate total sleep time",
       hrv_ms: "Encourage rest days, reduce training intensity, support stress management",
-      resting_hr: "Ensure adequate hydration, encourage rest, monitor for illness symptoms"
+      hrv_rmssd_ms: "Encourage rest days, reduce training intensity, support stress management",
+      resting_hr: "Ensure adequate hydration, encourage rest, monitor for illness symptoms",
+      breaths_avg_per_min: "Review sleep position, consider sleep study, address potential sleep-disordered breathing",
+      spo2_avg_pct: "Review sleep position, consider sleep study, address potential sleep-disordered breathing",
+      calories_active: "Offer to do activities together, remove barriers to movement, adjust expectations"
     }[metricName] || "Provide support and monitor closely";
 
     if (level >= 14) {
@@ -348,13 +456,26 @@ async function callOpenAI(args: {
     "Adapt the numbers and wording based on the actual evidence data provided.",
     "",
     "## WHAT THE DATA SHOWS (2-3 sentences)",
-    "Analyze the 3 supporting metrics in supporting_metrics array:",
-    "- Do they support or contradict the primary alert?",
+    "Analyze ALL supporting metrics in supporting_metrics array. Prioritize rich metrics that provide deeper context:",
+    "",
+    "For SLEEP alerts:",
+    "- Use deep_sleep_minutes, rem_sleep_minutes, light_sleep_minutes, sleep_efficiency_pct to understand sleep quality",
+    "- Example: 'Sleep duration decreased, but deep sleep increased from 1.2 to 1.5 hours, suggesting better sleep quality despite less total time.'",
+    "",
+    "For MOVEMENT/ACTIVITY alerts:",
+    "- Use movement_minutes (active time) and calories_active alongside steps to understand activity patterns",
+    "- Example: 'Steps decreased, but movement_minutes increased from 45 to 60 minutes, indicating longer but less frequent activity sessions.'",
+    "",
+    "For RECOVERY/STRESS alerts:",
+    "- Use hrv_rmssd_ms, resting_hr, breaths_avg_per_min, spo2_avg_pct to understand recovery signals",
+    "- Example: 'HRV decreased from 50ms to 42ms, while resting HR increased from 58 to 65 bpm, indicating elevated stress and reduced recovery.'",
+    "",
+    "General guidelines:",
+    "- Do supporting metrics support or contradict the primary alert?",
     "- What pattern emerges across all metrics?",
     "- ALWAYS use absolute values with units, NOT just percentages",
-    "- Convert sleep_minutes to hours (divide by 60)",
-    "",
-    'Example: "Sleep duration increased from 6.2 to 7.7 hours (24% increase), which may indicate the body is compensating with more rest. Heart rate variability remains stable at 45ms with no significant change from baseline. Resting heart rate decreased slightly to 62 bpm, consistent with increased rest periods."',
+    "- Convert sleep_minutes, deep_sleep_minutes, rem_sleep_minutes to hours (divide by 60)",
+    "- Reference specific supporting metrics by name when they provide meaningful context",
     "",
     "## POSSIBLE CAUSES (3-5 bullet points)",
     `Based on primary metric ${metricName}, include these realistic explanations:`,
@@ -384,7 +505,8 @@ async function callOpenAI(args: {
     "Return JSON with: headline, clinical_interpretation, data_connections, possible_causes (array), action_steps (array), message_suggestions (array of {label, text}), confidence, confidence_reason.",
   ].join("\n");
 
-  const res = await fetch("https://api.openai.com/v1/responses", {
+  // Use correct OpenAI Chat Completions API with structured output
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -392,18 +514,19 @@ async function callOpenAI(args: {
     },
     body: JSON.stringify({
       model,
-      input: [
+      messages: [
         { role: "system", content: system },
         { role: "user", content: user },
       ],
-      text: {
-        format: {
-          type: "json_schema",
+      response_format: {
+        type: "json_schema",
+        json_schema: {
           name: "miya_pattern_insight",
           schema: jsonSchema,
           strict: true,
         },
       },
+      temperature: 0.7,
     }),
   });
 
@@ -413,13 +536,10 @@ async function callOpenAI(args: {
   }
 
   const data = await res.json();
-  const outText: string | undefined =
-    data?.output?.[0]?.content?.find((c: any) => c?.type === "output_text")?.text ??
-    data?.output_text ??
-    undefined;
+  const content = data?.choices?.[0]?.message?.content;
 
-  if (!outText) throw new Error("OpenAI response missing output_text");
-  return JSON.parse(outText);
+  if (!content) throw new Error("OpenAI response missing content");
+  return JSON.parse(content);
 }
 
 Deno.serve(async (req) => {
@@ -565,7 +685,7 @@ Deno.serve(async (req) => {
     // Fetch raw metrics window (may include multiple rows/day from different sources)
     const { data: rawRows, error: rawErr } = await supabaseAdmin
       .from("wearable_daily_metrics")
-      .select("metric_date,steps,sleep_minutes,hrv_ms,resting_hr,source")
+      .select("metric_date,steps,movement_minutes,sleep_minutes,sleep_efficiency_pct,deep_sleep_minutes,rem_sleep_minutes,light_sleep_minutes,awake_minutes,hrv_ms,hrv_rmssd_ms,resting_hr,breaths_avg_per_min,spo2_avg_pct,calories_active,source")
       .eq("user_id", memberId)
       .gte("metric_date", start)
       .lte("metric_date", evaluatedEnd)
@@ -580,16 +700,56 @@ Deno.serve(async (req) => {
     }
     const mergedSeries = [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([day, rows]) => {
       const best = [...rows].sort((ra, rb) => {
-        const ca = [ra.steps, ra.sleep_minutes, ra.hrv_ms, ra.resting_hr].filter((x) => x != null).length;
-        const cb = [rb.steps, rb.sleep_minutes, rb.hrv_ms, rb.resting_hr].filter((x) => x != null).length;
+        const ca = [
+          ra.steps,
+          ra.movement_minutes,
+          ra.sleep_minutes,
+          ra.sleep_efficiency_pct,
+          ra.deep_sleep_minutes,
+          ra.rem_sleep_minutes,
+          ra.light_sleep_minutes,
+          ra.awake_minutes,
+          ra.hrv_ms,
+          ra.hrv_rmssd_ms,
+          ra.resting_hr,
+          ra.breaths_avg_per_min,
+          ra.spo2_avg_pct,
+          ra.calories_active,
+        ].filter((x) => x != null).length;
+        const cb = [
+          rb.steps,
+          rb.movement_minutes,
+          rb.sleep_minutes,
+          rb.sleep_efficiency_pct,
+          rb.deep_sleep_minutes,
+          rb.rem_sleep_minutes,
+          rb.light_sleep_minutes,
+          rb.awake_minutes,
+          rb.hrv_ms,
+          rb.hrv_rmssd_ms,
+          rb.resting_hr,
+          rb.breaths_avg_per_min,
+          rb.spo2_avg_pct,
+          rb.calories_active,
+        ].filter((x) => x != null).length;
         return cb - ca;
       })[0];
       return {
         date: day,
         steps: best?.steps ?? null,
+        movement_minutes: best?.movement_minutes ?? null,
         sleep_minutes: best?.sleep_minutes ?? null,
+        sleep_efficiency_pct: best?.sleep_efficiency_pct ?? null,
+        deep_sleep_minutes: best?.deep_sleep_minutes ?? null,
+        rem_sleep_minutes: best?.rem_sleep_minutes ?? null,
+        light_sleep_minutes: best?.light_sleep_minutes ?? null,
+        awake_minutes: best?.awake_minutes ?? null,
         hrv_ms: best?.hrv_ms ?? null,
+        hrv_rmssd_ms: best?.hrv_rmssd_ms ?? null,
         resting_hr: best?.resting_hr ?? null,
+        breaths_avg_per_min: best?.breaths_avg_per_min ?? null,
+        spo2_avg_pct: best?.spo2_avg_pct ?? null,
+        calories_active: best?.calories_active ?? null,
       };
     });
 
@@ -601,8 +761,23 @@ Deno.serve(async (req) => {
     const recentVal: number | null = alert.recent_value ?? null;
     const dev: number | null = alert.deviation_percent ?? null;
 
-    // Compute baseline and recent for ALL 4 metrics
-    const valuesFor = (key: "steps" | "sleep_minutes" | "hrv_ms" | "resting_hr") =>
+    type MetricKey =
+      | "steps"
+      | "movement_minutes"
+      | "sleep_minutes"
+      | "sleep_efficiency_pct"
+      | "deep_sleep_minutes"
+      | "rem_sleep_minutes"
+      | "light_sleep_minutes"
+      | "awake_minutes"
+      | "hrv_ms"
+      | "hrv_rmssd_ms"
+      | "resting_hr"
+      | "breaths_avg_per_min"
+      | "spo2_avg_pct"
+      | "calories_active";
+
+    const valuesFor = (key: MetricKey) =>
       mergedSeries.map((d: any) => d[key]).filter((v: any) => typeof v === "number") as number[];
     
     const splitBaselineRecent = (vals: number[]) => {
@@ -613,8 +788,23 @@ Deno.serve(async (req) => {
       return { baseline: avg(baseline), recent: avg(recent) };
     };
 
-    // All 4 metrics - compute baseline/recent for each
-    const allMetrics = ["steps", "sleep_minutes", "hrv_ms", "resting_hr"] as const;
+    // Compute baseline/recent for each metric we track
+    const allMetrics: MetricKey[] = [
+      "steps",
+      "movement_minutes",
+      "sleep_minutes",
+      "sleep_efficiency_pct",
+      "deep_sleep_minutes",
+      "rem_sleep_minutes",
+      "light_sleep_minutes",
+      "awake_minutes",
+      "hrv_ms",
+      "hrv_rmssd_ms",
+      "resting_hr",
+      "breaths_avg_per_min",
+      "spo2_avg_pct",
+      "calories_active",
+    ];
     const metricsData = allMetrics.map((m) => {
       const vals = valuesFor(m);
       const { baseline, recent } = splitBaselineRecent(vals);
@@ -647,8 +837,11 @@ Deno.serve(async (req) => {
     // Map pillar from metric type
     const pillar = (() => {
       switch (metricType) {
-        case "steps": return "movement";
-        case "sleep_minutes": return "sleep";
+        case "steps":
+        case "movement_minutes": return "movement";
+        case "sleep_minutes":
+        case "sleep_efficiency_pct":
+        case "deep_sleep_minutes": return "sleep";
         case "hrv_ms":
         case "resting_hr": return "stress";
         default: return "unknown";
@@ -723,7 +916,7 @@ Deno.serve(async (req) => {
     }
 
     const openaiKey = requireEnv("OPENAI_API_KEY");
-    const model = Deno.env.get("OPENAI_MODEL_INSIGHT") ?? "gpt-4.1-mini";
+    const model = Deno.env.get("OPENAI_MODEL_INSIGHT") ?? "gpt-4o"; // Use best model for insight generation
 
     console.log("🤖 MIYA_INSIGHT: Calling OpenAI", { model, alertStateId, metricType });
 
@@ -774,13 +967,23 @@ Deno.serve(async (req) => {
     }
 
     console.log("💾 MIYA_INSIGHT: Saving to database", { alertStateId, promptVersion });
-    
-    await supabaseAdmin.from("pattern_alert_ai_insights").insert({
+
+    // Summary is required by legacy schema; derive a safe fallback.
+    const summary =
+      merged.clinical_interpretation?.trim() ||
+      merged.data_connections?.trim() ||
+      merged.headline?.trim() ||
+      "Insight generated.";
+
+    const { error: insertErr } = await supabaseAdmin.from("pattern_alert_ai_insights").insert({
       alert_state_id: alertStateId,
       evaluated_end_date: evaluatedEnd,
       prompt_version: promptVersion,
       model,
       headline: merged.headline,
+      summary,
+      contributors: merged.possible_causes ?? [],
+      actions: merged.action_steps ?? [],
       clinical_interpretation: merged.clinical_interpretation,
       data_connections: merged.data_connections,
       possible_causes: merged.possible_causes ?? [],
@@ -790,6 +993,11 @@ Deno.serve(async (req) => {
       confidence_reason: merged.confidence_reason ?? "",
       evidence,
     });
+
+    if (insertErr) {
+      console.error("❌ MIYA_INSIGHT: Insert failed", insertErr);
+      return jsonResponse({ ok: false, error: "Failed to save insight" }, 500);
+    }
 
     console.log("✅ MIYA_INSIGHT: Returning final response", {
       alertStateId,

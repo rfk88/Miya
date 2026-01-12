@@ -20,6 +20,27 @@
       { "kind": "percent_rise_at_least", "percent": 0.10 },
       { "kind": "absolute_rise_at_least", "value": 5 }
     ]
+  },
+  "sleep_efficiency_pct": {
+    "patternType": "drop_vs_baseline",
+    "rules": [
+      { "kind": "percent_drop_at_least", "percent": 0.10 },
+      { "kind": "absolute_drop_below", "value": 85 }
+    ]
+  },
+  "movement_minutes": {
+    "patternType": "drop_vs_baseline",
+    "rules": [
+      { "kind": "percent_drop_at_least", "percent": 0.30 },
+      { "kind": "absolute_drop_at_least", "value": 20 }
+    ]
+  },
+  "deep_sleep_minutes": {
+    "patternType": "drop_vs_baseline",
+    "rules": [
+      { "kind": "percent_drop_at_least", "percent": 0.25 },
+      { "kind": "absolute_drop_at_least", "value": 15 }
+    ]
   }
 }
 

@@ -256,9 +256,10 @@ Total vitality = (34×0.33 + 27×0.33 + 66.4×0.34) = 42.7 ≈ 43/100
 
 ### Sync Timing
 - **Initial sync:** On first wearable connection (last 30 days)
-- **Automatic sync:** Daily at 6 AM local time
+- **Automatic sync (server):** Daily cron calls `rook_daily_recompute` to recompute scores for users
+  who have recent webhook data (no duplicate metrics are inserted).
 - **Manual sync:** User taps "Refresh Now" button
-- **Background sync:** iOS background fetch (when app not open)
+- **Background sync (client):** iOS background fetch (best-effort; not guaranteed by iOS)
 
 ### Data Lag
 - **Best case:** 15 minutes (device → ROOK → Miya)
