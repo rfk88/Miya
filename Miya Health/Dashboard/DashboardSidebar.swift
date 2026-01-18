@@ -96,8 +96,8 @@ struct AccountSidebarView: View {
     
     var body: some View {
         ZStack {
-            // MAIN ACCOUNT CONTENT – scrollable
-            ScrollView(showsIndicators: false) {
+                // MAIN ACCOUNT CONTENT – scrollable
+                ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
                     
                     // Top bar
@@ -735,36 +735,42 @@ struct AccountSidebarView: View {
             }
             
         }
-    .sheet(item: $activeDevice) { device in
+        .sheet(item: $activeDevice) { device in
+            deviceDetailSheet(for: device)
+        }
+    }
+    
+    private func deviceDetailSheet(for device: ConnectedDevice) -> some View {
         NavigationStack {
-                    VStack(spacing: 16) {
-                        Text(device.name)
+            VStack(spacing: 16) {
+                Text(device.name)
                     .font(.system(size: 18, weight: .semibold))
+                
                 Text("Last sync: \(device.lastSyncDescription)")
                     .font(.system(size: 14))
                     .foregroundColor(.secondary)
-                        
-                        Button {
+                
+                Button {
                     Task { print("Reconnect \(device.name) tapped") }
-                        } label: {
+                } label: {
                     Text("Reconnect")
                         .font(.system(size: 15, weight: .semibold))
-                                .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
-                        }
+                }
                 .buttonStyle(.borderedProminent)
-                        
-                        Button {
+                
+                Button {
                     Task { print("Connect another device tapped") }
-                        } label: {
+                } label: {
                     Text("Connect another device")
                         .font(.system(size: 15, weight: .semibold))
-                                .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                 }
-                    
-                    Spacer()
-                }
+                
+                Spacer()
+            }
             .padding()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -772,7 +778,6 @@ struct AccountSidebarView: View {
                         activeDevice = nil
                     }
                 }
-            }
             }
         }
     }
@@ -808,7 +813,7 @@ struct AccountSidebarView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.primary)
+                        .foregroundColor(.miyaTextPrimary)
                     Text(subtitle)
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
@@ -885,12 +890,12 @@ struct NotificationPanel: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 14, weight: .bold))
                         .padding(8)
-                        .background(.ultraThinMaterial, in: Circle())
+                        .background(Color.white.opacity(0.9), in: Circle())
                 }
                 .accessibilityLabel("Close notifications")
             }
             .padding()
-            .background(.ultraThinMaterial)
+            .background(Color.white)
             
             ScrollView {
                 VStack(spacing: 0) {

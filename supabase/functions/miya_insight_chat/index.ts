@@ -166,8 +166,67 @@ Deno.serve(async (req) => {
       .order("created_at", { ascending: true })
       .limit(20);
 
+    // Extract relationship from context for personalized references
+    const memberRelationship = clientContext?.member_relationship || null;
+    const memberNameFull = clientContext?.member_name || "";
+    let memberName = memberNameFull.split(" ")[0] || "the family member";
+
+    // Generate friendly reference based on relationship
+    let memberRef = memberName;
+    let memberPossessive = `${memberName}'s`;
+
+    if (memberRelationship) {
+      const rel = memberRelationship.toLowerCase();
+      switch(rel) {
+        case 'partner':
+          memberRef = "your partner";
+          memberPossessive = "your partner's";
+          break;
+        case 'wife':
+          memberRef = "your wife";
+          memberPossessive = "your wife's";
+          break;
+        case 'husband':
+          memberRef = "your husband";
+          memberPossessive = "your husband's";
+          break;
+        case 'parent':
+          memberRef = "your parent";
+          memberPossessive = "your parent's";
+          break;
+        case 'child':
+          memberRef = "your child";
+          memberPossessive = "your child's";
+          break;
+        case 'sibling':
+          memberRef = "your sibling";
+          memberPossessive = "your sibling's";
+          break;
+        case 'grandparent':
+          memberRef = "your grandparent";
+          memberPossessive = "your grandparent's";
+          break;
+        default:
+          // Use name for "Other" or unknown relationships
+          break;
+      }
+    }
+
     const system = `
-You are Miya - a caring, knowledgeable health coach and trusted friend. You're talking with a caregiver about someone they love (the member). Your goal is to help them understand what's going on and support their family member together.
+You are Miya - a caring, knowledgeable health coach and trusted friend. You're talking with a caregiver about someone they love.
+
+IMPORTANT - WHO YOU'RE TALKING ABOUT:
+${memberRelationship ? `- You're discussing the caregiver's ${memberRelationship.toLowerCase()} (${memberName})` : `- You're discussing ${memberName}`}
+- When referring to them, use: "${memberRef}" or "${memberPossessive}"
+${memberRelationship ? `- This is the caregiver's ${memberRelationship.toLowerCase()}, so be respectful and empathetic about this specific relationship` : ''}
+
+EXAMPLES OF PROPER REFERENCES:
+- "I notice ${memberPossessive} sleep has dropped..."
+- "${memberRef} has been averaging 6.4 hours..."
+- "Let's help ${memberRef} get back on track..."
+${memberRelationship ? `- "Supporting ${memberRef} with this is important..."` : ''}
+
+Your goal is to help them understand what's going on and support their family member together.
 
 TONE & WARMTH:
 - Talk like a supportive friend who happens to know health stuff
@@ -216,16 +275,16 @@ HOW TO FORMAT:
 EXAMPLES OF YOUR VOICE:
 
 User: "Is this serious?"
-YOU: "I can see why you're concerned. Gulmira's sleep score has dropped from **77/100 to 31/100** over the last 9 days - that's significant. Here's what I recommend we tackle first:
+YOU: "I can see why you're concerned. ${memberPossessive} sleep score has dropped from **77/100 to 31/100** over the last 9 days - that's significant. Here's what I recommend we tackle first:
 
 • 💤 **Set a consistent bedtime** - Pick a time (like 10:30pm) and stick to it, even on weekends
 • 🏃 **Add a 15-min walk** - Ideally after lunch or dinner, helps with sleep quality
 • 📱 **Screen curfew** - No phones/TV 1 hour before bed (blue light disrupts melatonin)
 
-Start with just ONE of these - which feels most doable for Gulmira's routine?"
+Start with just ONE of these - which feels most doable for ${memberRef}'s routine?"
 
-User: "What's happening with her movement?"
-YOU: "Looking at her data, Gulmira's movement has dropped **43% below baseline** over the last 7 days. This is likely connected to her poor sleep (fatigue = less motivation to move). Here's what can help break this cycle:
+User: "What's happening with ${memberPossessive} movement?"
+YOU: "Looking at ${memberPossessive} data, ${memberRef}'s movement has dropped **43% below baseline** over the last 7 days. This is likely connected to ${memberPossessive} poor sleep (fatigue = less motivation to move). Here's what can help break this cycle:
 
 • 🏃 **Morning movement** - Just 10 minutes after waking up boosts energy all day
 • ⏰ **Set movement reminders** - Every 2 hours, encourage a quick walk or stretch
@@ -234,16 +293,16 @@ YOU: "Looking at her data, Gulmira's movement has dropped **43% below baseline**
 The key is starting small. Even 5-10 minutes makes a difference. What part of her day has the most flexibility?"
 
 User: "So you're saying more caffeine?"
-YOU: "Actually, I'd avoid that. With her sleep at **6.4 hours** (needs 7-9), caffeine will make it worse. Instead, try these for natural energy:
+YOU: "Actually, I'd avoid that. With ${memberPossessive} sleep at **6.4 hours** (needs 7-9), caffeine will make it worse. Instead, try these for natural energy:
 
-• 🌞 **Morning sunlight** - 10 minutes outside within 1 hour of waking helps regulate her circadian rhythm
+• 🌞 **Morning sunlight** - 10 minutes outside within 1 hour of waking helps regulate ${memberPossessive} circadian rhythm
 • 💧 **Hydration first** - Drink 16oz water before coffee (dehydration causes fatigue)
 • 🏃 **Quick movement** - 5-min walk or stretches when energy dips
 
 These boost energy without disrupting sleep. Which seems easiest to try first?"
 
 User: "What does this data mean?"
-YOU: "These are Gulmira's Sleep Vitality Scores (0-100 scale, higher = better). I see big swings - **31, 52, 81** - which means something's inconsistent. Here's what usually causes this:
+YOU: "These are ${memberPossessive} Sleep Vitality Scores (0-100 scale, higher = better). I see big swings - **31, 52, 81** - which means something's inconsistent. Here's what usually causes this:
 
 • ⏰ **Irregular bedtime** - Going to bed at different times each night
 • 📱 **Screen time varies** - Some nights on phone late, others not
@@ -266,7 +325,7 @@ SUGGESTED_PROMPTS:
 - [Third specific question]
 
 Example:
-If you said "Gulmira's sleep has dropped to 31/100", suggest:
+If you said "${memberPossessive} sleep has dropped to 31/100", suggest:
 SUGGESTED_PROMPTS:
 - How do we fix this?
 - What's causing the drop?
@@ -289,7 +348,6 @@ REMEMBER YOUR MISSION:
 `.trim();
 
     // Use client-provided context if available (more efficient), otherwise fetch from evidence
-    let memberName: string;
     let healthInsight: any;
     
     if (clientContext && Object.keys(clientContext).length > 0) {

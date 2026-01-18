@@ -14,8 +14,8 @@ final class RookService {
 
     private func configure() {
         // TODO: move creds to secure config before production
-        let clientUUID = "f60e5d66-1d2f-4e71-ba6c-f90c6c8ac2dc"
-        let secretKey  = "kO6KBCELDtz4jBMWLrw63WFG8ppzSkQIND4E"
+        let clientUUID = "4f2ad4b6-ee91-42d4-bf37-39496ea46724"
+        let secretKey  = "Izjhk4eYBDsDe7ml4aYdI7xtHpTYObL6sYEO"
 
         RookConnectConfigurationManager.shared.setEnvironment(.sandbox)
         RookConnectConfigurationManager.shared.setConfiguration(
@@ -99,36 +99,62 @@ final class RookService {
         
         // NOTE: Event backfill APIs are not available in the current Rook SDK version.
         // Workout events will still sync via background delivery (AppDelegate enables event background sync).
-        // Then, explicitly request per-day sync for last N days (sleep + physical + body).
+        
+        // Then, backfill serially with proper async/await to avoid overwhelming HealthKit
+        Task {
+            await performSerialBackfill(days: days, summaryManager: summaryManager)
+        }
+    }
+    
+    /// Performs serial backfill of health data, one day at a time with delays between requests.
+    /// This prevents overwhelming HealthKit with simultaneous requests and ensures reliable data sync.
+    private func performSerialBackfill(days: Int, summaryManager: RookSummaryManager) async {
         let calendar = Calendar.current
         let summaryTypes: [SummaryTypeToUpload] = [.sleep, .physical, .body]
-
-        func syncDay(offsetDaysAgo: Int) {
-            guard offsetDaysAgo >= 0 else {
-                print("✅ RookService: Manual backfill completed (\(days)d)")
-                return
-            }
-
+        
+        let startTime = Date()
+        print("🔵 RookService: Starting serial backfill (\(days) days) at \(startTime)")
+        
+        var successCount = 0
+        var failureCount = 0
+        
+        // Sync from oldest to newest (more intuitive logging)
+        for offsetDaysAgo in (0..<days).reversed() {
             guard let date = calendar.date(byAdding: .day, value: -offsetDaysAgo, to: Date()) else {
-                syncDay(offsetDaysAgo: offsetDaysAgo - 1)
-                return
+                print("⚠️ RookService: Could not compute date for offset \(offsetDaysAgo), skipping")
+                failureCount += 1
+                continue
             }
-
-            // Sync summaries for this date
-            summaryManager.sync(date, summaryType: summaryTypes) { result in
-                switch result {
-                case .success(let ok):
-                    print("✅ RookService: Synced summaries for \(date) ok=\(ok)")
-                case .failure(let error):
-                    print("❌ RookService: Sync summaries for \(date) failed: \(error.localizedDescription)")
+            
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateStyle = .medium
+            let dateString = dateFormatter.string(from: date)
+            
+            let dayStartTime = Date()
+            
+            // Wait for this day to complete before starting next
+            await withCheckedContinuation { continuation in
+                summaryManager.sync(date, summaryType: summaryTypes) { result in
+                    let dayDuration = Date().timeIntervalSince(dayStartTime)
+                    switch result {
+                    case .success(let ok):
+                        successCount += 1
+                        print("✅ RookService: Day \(offsetDaysAgo) (\(dateString)) synced successfully (ok=\(ok), duration=\(String(format: "%.2f", dayDuration))s)")
+                    case .failure(let error):
+                        failureCount += 1
+                        print("❌ RookService: Day \(offsetDaysAgo) (\(dateString)) failed: \(error.localizedDescription) (duration=\(String(format: "%.2f", dayDuration))s)")
+                    }
+                    continuation.resume()
                 }
             }
             
-            // Move to next day (serial to avoid hammering HealthKit).
-            syncDay(offsetDaysAgo: offsetDaysAgo - 1)
+            // Small delay between days to avoid hammering HealthKit
+            // 500ms = 0.5 seconds, so 29 days takes ~14.5 seconds total
+            try? await Task.sleep(nanoseconds: 500_000_000)
         }
-
-        syncDay(offsetDaysAgo: days - 1)
+        
+        let totalDuration = Date().timeIntervalSince(startTime)
+        print("✅ RookService: Serial backfill completed (\(days) days) - Success: \(successCount), Failed: \(failureCount), Total duration: \(String(format: "%.2f", totalDuration))s)")
     }
 }
 

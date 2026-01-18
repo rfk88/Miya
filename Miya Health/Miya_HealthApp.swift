@@ -56,6 +56,7 @@ struct Miya_HealthApp: App {
         WindowGroup {
             ContentView()
                 .id(appSessionId) // Forces full rebuild on session change
+                .preferredColorScheme(.light) // Force light mode for consistent appearance across all devices
                 // Make the managers available to ALL views in the app
                 .environmentObject(authManager)
                 .environmentObject(dataManager)

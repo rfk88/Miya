@@ -61,7 +61,9 @@ final class EditProfileViewModel: ObservableObject {
 
     @Published var quietHoursStart: Date = Calendar.current.date(from: DateComponents(hour: 22, minute: 0)) ?? Date()
     @Published var quietHoursEnd: Date = Calendar.current.date(from: DateComponents(hour: 7, minute: 0)) ?? Date()
-    @Published var quietHoursApplyCritical: Bool = false
+    @Published var quietHoursApplyCritical: Bool = false // DEPRECATED: Use quietHoursNotificationLevel instead
+    @Published var quietHoursNotificationLevel: String = "none" // "all", "critical_only", "none"
+    @Published var timezone: String = TimeZone.current.identifier
 
     // MARK: - Auth fields (Supabase Auth)
     @Published var currentEmail: String = ""
@@ -114,6 +116,8 @@ final class EditProfileViewModel: ObservableObject {
         let quietStart: Date
         let quietEnd: Date
         let quietApplyCritical: Bool
+        let quietNotificationLevel: String
+        let timezone: String
     }
 
     private func computeSnapshot() -> Snapshot {
@@ -149,7 +153,9 @@ final class EditProfileViewModel: ObservableObject {
             championNotifySms: championNotifySms,
             quietStart: quietHoursStart,
             quietEnd: quietHoursEnd,
-            quietApplyCritical: quietHoursApplyCritical
+            quietApplyCritical: quietHoursApplyCritical,
+            quietNotificationLevel: quietHoursNotificationLevel,
+            timezone: timezone
         )
     }
 
@@ -475,15 +481,106 @@ struct EditProfileView: View {
                     .onChange(of: vm.championNotifySms) { _ in vm.fieldDidChange() }
 
                 Divider().opacity(0.4)
+                
+                // Timezone Selection
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Timezone")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    Menu {
+                        ForEach(commonTimezones, id: \.self) { tz in
+                            Button(formatTimezoneForDisplay(tz)) {
+                                vm.timezone = tz
+                                vm.fieldDidChange()
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text(formatTimezoneForDisplay(vm.timezone))
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Image(systemName: "chevron.down")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 12)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
+                    }
+                }
+                
+                Divider().opacity(0.4)
 
-                DatePicker("Quiet hours start", selection: $vm.quietHoursStart, displayedComponents: .hourAndMinute)
+                // Quiet Hours Settings
+                Text("Quiet Hours")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                
+                DatePicker("Start time", selection: $vm.quietHoursStart, displayedComponents: .hourAndMinute)
                     .onChange(of: vm.quietHoursStart) { _ in vm.fieldDidChange() }
-                DatePicker("Quiet hours end", selection: $vm.quietHoursEnd, displayedComponents: .hourAndMinute)
+                DatePicker("End time", selection: $vm.quietHoursEnd, displayedComponents: .hourAndMinute)
                     .onChange(of: vm.quietHoursEnd) { _ in vm.fieldDidChange() }
-                Toggle("Apply quiet hours to critical alerts", isOn: $vm.quietHoursApplyCritical)
-                    .onChange(of: vm.quietHoursApplyCritical) { _ in vm.fieldDidChange() }
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("During quiet hours, send:")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    Picker("Notification Level", selection: $vm.quietHoursNotificationLevel) {
+                        Text("No notifications").tag("none")
+                        Text("Critical alerts only").tag("critical_only")
+                        Text("All notifications").tag("all")
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: vm.quietHoursNotificationLevel) { _ in vm.fieldDidChange() }
+                }
+                
+                Text("Your quiet hours are calculated in \(formatTimezoneForDisplay(vm.timezone)) timezone")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.top, 4)
             }
         }
+    }
+    
+    // Common timezones for picker
+    private var commonTimezones: [String] {
+        [
+            "America/New_York",
+            "America/Chicago",
+            "America/Denver",
+            "America/Los_Angeles",
+            "America/Anchorage",
+            "Pacific/Honolulu",
+            "Europe/London",
+            "Europe/Paris",
+            "Europe/Berlin",
+            "Europe/Moscow",
+            "Asia/Dubai",
+            "Asia/Kolkata",
+            "Asia/Shanghai",
+            "Asia/Tokyo",
+            "Australia/Sydney",
+            "UTC"
+        ]
+    }
+    
+    // Format timezone for display
+    private func formatTimezoneForDisplay(_ identifier: String) -> String {
+        let tz = TimeZone(identifier: identifier) ?? TimeZone.current
+        let abbreviation = tz.abbreviation() ?? ""
+        let offset = tz.secondsFromGMT() / 3600
+        let offsetString = String(format: "%+d", offset)
+        
+        // Convert identifier to readable format
+        let name = identifier
+            .replacingOccurrences(of: "_", with: " ")
+            .split(separator: "/")
+            .last ?? ""
+        
+        return "\(name) (GMT\(offsetString)) \(abbreviation)"
     }
 
     // MARK: - Derived
@@ -553,6 +650,8 @@ struct EditProfileView: View {
                     vm.quietHoursEnd = endDate
                 }
                 vm.quietHoursApplyCritical = p.quiet_hours_apply_critical ?? onboardingManager.quietHoursApplyCritical
+                vm.quietHoursNotificationLevel = p.quiet_hours_notification_level ?? "none"
+                vm.timezone = p.timezone ?? TimeZone.current.identifier
             }
 
             // health_conditions (best-effort)
@@ -647,16 +746,19 @@ struct EditProfileView: View {
             )
 
             // 4) Notifications / quiet hours
-            try await dataManager.saveAlertPreferences(
-                notifyInApp: vm.notifyInApp,
-                notifyPush: vm.notifyPush,
-                notifyEmail: vm.notifyEmail,
-                championEmail: vm.championNotifyEmail,
-                championSms: vm.championNotifySms,
-                quietStart: formatHm(vm.quietHoursStart),
-                quietEnd: formatHm(vm.quietHoursEnd),
-                quietApplyCritical: vm.quietHoursApplyCritical
-            )
+            let notificationPayload: [String: AnyJSON] = [
+                "notify_in_app": .bool(vm.notifyInApp),
+                "notify_push": .bool(vm.notifyPush),
+                "notify_email": .bool(vm.notifyEmail),
+                "champion_notify_email": .bool(vm.championNotifyEmail),
+                "champion_notify_sms": .bool(vm.championNotifySms),
+                "quiet_hours_start": .string(formatHm(vm.quietHoursStart)),
+                "quiet_hours_end": .string(formatHm(vm.quietHoursEnd)),
+                "quiet_hours_apply_critical": .bool(vm.quietHoursApplyCritical),
+                "quiet_hours_notification_level": .string(vm.quietHoursNotificationLevel),
+                "timezone": .string(vm.timezone)
+            ]
+            try await dataManager.updateUserProfile(notificationPayload)
 
             // 5) Auth: email change (optional)
             var authNote: String? = nil
@@ -716,6 +818,7 @@ struct EditProfileView: View {
             onboardingManager.quietHoursStart = vm.quietHoursStart
             onboardingManager.quietHoursEnd = vm.quietHoursEnd
             onboardingManager.quietHoursApplyCritical = vm.quietHoursApplyCritical
+            // Note: quietHoursNotificationLevel and timezone are stored in user_profiles only
 
             onboardingManager.hasChronicKidneyDisease = vm.hasChronicKidneyDisease
             onboardingManager.hasAtrialFibrillation = vm.hasAtrialFibrillation

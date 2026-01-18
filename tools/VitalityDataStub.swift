@@ -7,6 +7,9 @@ import Foundation
 struct VitalityData {
     let date: Date
     let sleepHours: Double?
+    let restorativeSleepPercent: Double?
+    let sleepEfficiencyPercent: Double?
+    let awakePercent: Double?
     let steps: Int?
     let hrvMs: Double?
     let restingHr: Double?

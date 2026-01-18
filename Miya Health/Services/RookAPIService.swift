@@ -14,8 +14,8 @@ final class RookAPIService {
     static let shared = RookAPIService()
     
     // Reuse credentials from RookService
-    private let clientUUID = "f60e5d66-1d2f-4e71-ba6c-f90c6c8ac2dc"
-    private let secretKey = "kO6KBCELDtz4jBMWLrw63WFG8ppzSkQIND4E"
+    private let clientUUID = "4f2ad4b6-ee91-42d4-bf37-39496ea46724"
+    private let secretKey = "Izjhk4eYBDsDe7ml4aYdI7xtHpTYObL6sYEO"
     
     // Sandbox base URL (update to production URL when transitioning)
     private let baseURL = "https://api.rook-connect.review"

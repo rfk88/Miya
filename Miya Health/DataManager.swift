@@ -1764,6 +1764,28 @@ class DataManager: ObservableObject {
             throw DataError.databaseError(userMessage)
         }
     }
+
+    /// Update user_profiles for the current user with a raw payload.
+    /// Use this for new fields without creating a dedicated wrapper method.
+    func updateUserProfile(_ payload: [String: AnyJSON]) async throws {
+        guard let userId = await currentUserId else {
+            throw DataError.notAuthenticated
+        }
+
+        do {
+            try await supabase
+                .from("user_profiles")
+                .update(payload)
+                .eq("user_id", value: userId)
+                .execute()
+
+            print("✅ DataManager: User profile updated")
+        } catch {
+            let userMessage = mapDataError(error)
+            print("❌ DataManager: Update user profile error: \(error.localizedDescription)")
+            throw DataError.databaseError(userMessage)
+        }
+    }
     
     /// Set baseline start date when wearable is connected
     func setBaselineStartDate() async throws {
@@ -3210,6 +3232,7 @@ struct UserProfileData: Codable {
     let optimal_vitality_target: Int?
     let vitality_score_current: Int?
     let vitality_progress_score_current: Int?
+    let vitality_score_updated_at: String?
 
     // Champion + notification preferences
     let champion_name: String?
@@ -3224,6 +3247,8 @@ struct UserProfileData: Codable {
     let quiet_hours_start: String?
     let quiet_hours_end: String?
     let quiet_hours_apply_critical: Bool?
+    let quiet_hours_notification_level: String?
+    let timezone: String?
 }
 
 // MARK: - Guided Setup Data Models

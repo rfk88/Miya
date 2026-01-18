@@ -644,6 +644,21 @@ struct VitalityMetricsBuilder {
         let avgSleepUnfilled = sleepValues.isEmpty ? nil : sleepValues.reduce(0, +) / Double(sleepValues.count)
         let avgSleep = backfillDoubleIfNeeded(avgSleepUnfilled) { $0.sleepHours }
         
+        // Average restorative sleep percent
+        let restorativeValues = window.compactMap { $0.restorativeSleepPercent }
+        let avgRestorativeUnfilled = restorativeValues.isEmpty ? nil : restorativeValues.reduce(0, +) / Double(restorativeValues.count)
+        let avgRestorative = backfillDoubleIfNeeded(avgRestorativeUnfilled) { $0.restorativeSleepPercent }
+        
+        // Average sleep efficiency percent
+        let efficiencyValues = window.compactMap { $0.sleepEfficiencyPercent }
+        let avgEfficiencyUnfilled = efficiencyValues.isEmpty ? nil : efficiencyValues.reduce(0, +) / Double(efficiencyValues.count)
+        let avgEfficiency = backfillDoubleIfNeeded(avgEfficiencyUnfilled) { $0.sleepEfficiencyPercent }
+        
+        // Average awake percent
+        let awakeValues = window.compactMap { $0.awakePercent }
+        let avgAwakeUnfilled = awakeValues.isEmpty ? nil : awakeValues.reduce(0, +) / Double(awakeValues.count)
+        let avgAwake = backfillDoubleIfNeeded(avgAwakeUnfilled) { $0.awakePercent }
+        
         // Average steps
         let stepsValues = window.compactMap { $0.steps }
         let avgStepsUnfilled = stepsValues.isEmpty ? nil : stepsValues.reduce(0, +) / stepsValues.count
@@ -660,21 +675,19 @@ struct VitalityMetricsBuilder {
         let avgRhr = backfillDoubleIfNeeded(avgRhrUnfilled) { $0.restingHr }
         
         // Build VitalityRawMetrics
-        // Note: VitalityData does not yet contain restorative %, efficiency, awake %, 
-        // movement minutes, active calories, or breathing rate, so those are nil
         return VitalityRawMetrics(
             age: age,
             sleepDurationHours: avgSleep,
-            restorativeSleepPercent: nil,
-            sleepEfficiencyPercent: nil,
-            awakePercent: nil,
-            movementMinutes: nil,
+            restorativeSleepPercent: avgRestorative,
+            sleepEfficiencyPercent: avgEfficiency,
+            awakePercent: avgAwake,
+            movementMinutes: nil,  // TODO: Add later when VitalityData includes movementMinutes
             steps: avgSteps,
-            activeCalories: nil,
+            activeCalories: nil,  // TODO: Add later when VitalityData includes activeCalories
             hrvMs: avgHrv,
             hrvType: nil,  // Legacy data doesn't track HRV type
             restingHeartRate: avgRhr,
-            breathingRate: nil
+            breathingRate: nil  // TODO: Add later when VitalityData includes breathingRate
         )
     }
 }

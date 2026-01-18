@@ -10,6 +10,9 @@ import Foundation
 struct VitalityData {
     let date: Date
     let sleepHours: Double?
+    let restorativeSleepPercent: Double?      // (REM + Deep) / Total × 100
+    let sleepEfficiencyPercent: Double?       // Sleep Duration / Time in Bed × 100
+    let awakePercent: Double?                 // Awake Time / Time in Bed × 100
     let steps: Int?
     let hrvMs: Double?
     let restingHr: Double?
@@ -194,6 +197,9 @@ class VitalityCalculator {
             let data = VitalityData(
                 date: date,
                 sleepHours: sleepStr.isEmpty ? nil : Double(sleepStr),
+                restorativeSleepPercent: nil,  // CSV doesn't contain this
+                sleepEfficiencyPercent: nil,   // CSV doesn't contain this
+                awakePercent: nil,             // CSV doesn't contain this
                 steps: stepsStr.isEmpty ? nil : Int(stepsStr),
                 hrvMs: hrvStr.isEmpty ? nil : Double(hrvStr),
                 restingHr: hrStr.isEmpty ? nil : Double(hrStr)
@@ -355,6 +361,9 @@ class VitalityCalculator {
                 results.append(VitalityData(
                     date: date,
                     sleepHours: data.sleep > 0 ? data.sleep : nil,
+                    restorativeSleepPercent: nil,  // Apple Health XML doesn't contain sleep stages
+                    sleepEfficiencyPercent: nil,   // Apple Health XML doesn't contain this
+                    awakePercent: nil,             // Apple Health XML doesn't contain this
                     steps: data.steps > 0 ? data.steps : nil,
                     hrvMs: avgHrv,
                     restingHr: avgRhr

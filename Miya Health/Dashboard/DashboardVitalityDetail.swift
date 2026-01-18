@@ -51,7 +51,7 @@ struct VitalityFactorDetailSheet: View {
                                 .font(.system(size: 14))
                             Text("Some data estimated from \(oldestSourceAgeInDays)d ago")
                                 .font(.system(size: 13))
-                                .foregroundColor(.primary)
+                                .foregroundColor(.miyaTextPrimary)
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
@@ -421,7 +421,7 @@ struct VitalityFactorDetailSheet: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
-        .background(Color(.systemGray6).opacity(0.3))
+        .background(Color(red: 0.95, green: 0.95, blue: 0.97).opacity(0.3))
         .cornerRadius(10)
     }
     

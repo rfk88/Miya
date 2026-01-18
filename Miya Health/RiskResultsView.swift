@@ -148,26 +148,53 @@ struct RiskResultsView: View {
                                     .font(.subheadline)
                                     .foregroundColor(.miyaTextSecondary)
                             }
-                        } else {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text(wearableSyncStatus ?? "If you connected a wearable, we’ll calculate your vitality automatically.")
-                                    .font(.subheadline)
+                        } else if isWearableSyncing {
+                            // STATE 2: Still syncing (0-60 seconds)
+                            VStack(alignment: .leading, spacing: 12) {
+                                ProgressView()
+                                
+                                Text("Building your baseline...")
+                                    .font(.system(size: 14))
                                     .foregroundColor(.miyaTextSecondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-
-                                Button {
-                                    Task { await computeWearableVitalityIfAvailable() }
-                                } label: {
-                                    Text(isWearableSyncing ? "Syncing…" : "Retry")
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundColor(.white)
-                                        .padding(.vertical, 10)
-                                        .padding(.horizontal, 16)
-                                        .background(isWearableSyncing ? Color.gray : Color.miyaPrimary)
-                                        .cornerRadius(10)
+                                
+                                // Show what we have so far
+                                if let status = wearableSyncStatus, !status.isEmpty {
+                                    Text(status)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .multilineTextAlignment(.center)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
-                                .disabled(isWearableSyncing)
+                                
+                                Text("This usually takes 1-2 minutes")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
+                            .padding(.vertical, 20)
+                        } else {
+                            // STATE 3: Not ready yet (after attempts exhausted)
+                            VStack(spacing: 16) {
+                                Image(systemName: "chart.xyaxis.line")
+                                    .font(.system(size: 40))
+                                    .foregroundColor(.miyaPrimary.opacity(0.5))
+                                
+                                VStack(spacing: 8) {
+                                    Text("Your Score is Computing")
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .foregroundColor(.miyaTextPrimary)
+                                    
+                                    Text("We're collecting data from your wearable. Your vitality score will appear on your dashboard in a few minutes.")
+                                        .font(.system(size: 13))
+                                        .foregroundColor(.miyaTextSecondary)
+                                        .multilineTextAlignment(.center)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                
+                                Text("Continue to dashboard to see progress →")
+                                    .font(.caption)
+                                    .foregroundColor(.miyaPrimary)
+                            }
+                            .padding(.vertical, 20)
                         }
                     }
                     .padding()
@@ -1188,7 +1215,7 @@ struct RiskResultsView: View {
             Spacer()
             Text(value.map { String(format: "%.2f", $0) } ?? "nil")
                 .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(.primary)
+                .foregroundColor(.miyaTextPrimary)
         }
     }
     
@@ -1423,8 +1450,6 @@ struct RiskResultsView: View {
     }
 
     private func computeWearableVitalityIfAvailable() async {
-        // Only attempt for self-setup users (guided invitees might not have full profile yet).
-        guard !isGuidedInviteeAwaitingAdmin else { return }
 
         await MainActor.run {
             isWearableSyncing = true
@@ -1446,7 +1471,7 @@ struct RiskResultsView: View {
         }
 
         // Poll a few times because webhooks may arrive a bit after the in-app ROOK sync completes.
-        for attempt in 1...8 {
+        for attempt in 1...12 {  // 12 × 5s = 60 seconds total
             do {
                 let rows = try await dataManager.fetchWearableDailyMetrics(days: 21)
 
@@ -1530,10 +1555,10 @@ struct RiskResultsView: View {
                         // Friendly, user-facing explanation of what we need and why.
                         if rows.isEmpty {
                             wearableSyncStatus =
-                                "We’re setting up your Vitality baseline. Apple Health shares summaries in batches, then we calculate your score. Keep your phone/watch with you today and check back soon. (\(attempt)/8)"
+                                "We're setting up your Vitality baseline. Apple Health shares summaries in batches, then we calculate your score. Keep your phone/watch with you today and check back soon. (\(attempt)/12)"
                         } else {
                             wearableSyncStatus =
-                                "We’re almost ready. To calculate Vitality we need a bit of sleep + movement + a heart signal (HRV or resting heart rate). Right now we have \(daysUsed)/7 days, sleep on \(sleepDays), steps on \(stepDays), and a heart signal on \(stressSignalDays). (\(attempt)/8)"
+                                "We're almost ready. To calculate Vitality we need a bit of sleep + movement + a heart signal (HRV or resting heart rate). Right now we have \(daysUsed)/7 days, sleep on \(sleepDays), steps on \(stepDays), and a heart signal on \(stressSignalDays). (\(attempt)/12)"
                         }
                     }
                     try await Task.sleep(nanoseconds: 5_000_000_000)

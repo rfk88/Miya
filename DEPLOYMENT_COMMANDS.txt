@@ -1,0 +1,202 @@
+# Miya Notification System - Quick Command Reference
+# Copy and paste these commands into your terminal
+
+# ============================================
+# STEP 1: Install Supabase CLI (if needed)
+# ============================================
+
+# macOS (Homebrew)
+brew install supabase/tap/supabase
+
+# OR via npm (any platform)
+npm install -g supabase
+
+# Verify installation
+supabase --version
+
+
+# ============================================
+# STEP 2: Login to Supabase
+# ============================================
+
+supabase login
+
+
+# ============================================
+# STEP 3: Link Your Project
+# ============================================
+
+cd /Users/ramikaawach/Desktop/Miya
+
+# Replace 'xmfgdeyrpzpqptckmcbr' with YOUR project reference ID
+# Get it from: https://supabase.com/dashboard → Your Project → Settings → General → Reference ID
+supabase link --project-ref xmfgdeyrpzpqptckmcbr
+
+
+# ============================================
+# STEP 4: Deploy Edge Functions
+# ============================================
+
+# Deploy notification worker
+supabase functions deploy process_notifications
+
+# Deploy Rook webhook
+supabase functions deploy rook
+
+# Deploy daily recompute
+supabase functions deploy rook_daily_recompute
+
+# (Optional) Deploy AI insight chat if you have it
+supabase functions deploy miya_insight_chat
+
+
+# ============================================
+# STEP 5: Apply Database Migrations
+# ============================================
+
+# Apply all migrations at once
+supabase db push
+
+
+# ============================================
+# STEP 6: Set Environment Variables
+# ============================================
+
+# MANUAL STEP - Do this in the Supabase Dashboard:
+# 1. Go to: https://supabase.com/dashboard → Your Project → Edge Functions → Settings
+# 2. Add these variables:
+#    - Name: MIYA_PATTERN_SHADOW_MODE
+#      Value: false
+#    - Name: MIYA_ADMIN_SECRET
+#      Value: <generate a secure random string below>
+
+# Generate a secure admin secret (run this command):
+openssl rand -base64 32
+
+# Copy the output and use it as your MIYA_ADMIN_SECRET
+
+
+# ============================================
+# STEP 7: Create Cron Job
+# ============================================
+
+# MANUAL STEP - Run this SQL in the Supabase Dashboard:
+# 1. Go to: https://supabase.com/dashboard → Your Project → SQL Editor
+# 2. Create a new query
+# 3. Copy and paste the SQL below
+# 4. REPLACE 'YOUR_PROJECT_REF' with your project reference ID
+# 5. REPLACE 'YOUR_ADMIN_SECRET_HERE' with the secret from Step 6
+# 6. Click RUN
+
+/*
+-- Enable pg_cron extension
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+
+-- Create cron job to process notifications every 5 minutes
+SELECT cron.schedule(
+  'process-notifications',
+  '*/5 * * * *',
+  $$
+  SELECT net.http_post(
+    url := 'https://YOUR_PROJECT_REF.supabase.co/functions/v1/process_notifications',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'x-miya-admin-secret', 'YOUR_ADMIN_SECRET_HERE'
+    ),
+    body := jsonb_build_object(
+      'batchSize', 50,
+      'maxAge', 24
+    )
+  );
+  $$
+);
+
+-- Verify cron job was created
+SELECT * FROM cron.job WHERE jobname = 'process-notifications';
+*/
+
+
+# ============================================
+# STEP 8: Test Your Deployment
+# ============================================
+
+# Test process_notifications endpoint
+# Replace 'xmfgdeyrpzpqptckmcbr' with YOUR project reference ID
+curl https://xmfgdeyrpzpqptckmcbr.supabase.co/functions/v1/process_notifications
+
+# Expected response: {"ok":true,"message":"process_notifications worker alive"}
+
+# Test rook endpoint
+curl https://xmfgdeyrpzpqptckmcbr.supabase.co/functions/v1/rook
+
+# Expected response: {"ok":true,"message":"rook webhook alive"}
+
+# Manually trigger notification processing (for testing)
+# Replace YOUR_ADMIN_SECRET_HERE and xmfgdeyrpzpqptckmcbr with your values
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "x-miya-admin-secret: YOUR_ADMIN_SECRET_HERE" \
+  -d '{"batchSize": 50, "maxAge": 24}' \
+  https://xmfgdeyrpzpqptckmcbr.supabase.co/functions/v1/process_notifications
+
+
+# ============================================
+# USEFUL COMMANDS
+# ============================================
+
+# View function logs
+supabase functions logs process_notifications --tail
+supabase functions logs rook --tail
+
+# List all deployed functions
+supabase functions list
+
+# Check database connection
+supabase db list
+
+# Redeploy a function (if you make changes)
+supabase functions deploy process_notifications
+
+
+# ============================================
+# TROUBLESHOOTING
+# ============================================
+
+# If migrations fail, apply them manually via SQL Editor:
+# 1. Go to: https://supabase.com/dashboard → Your Project → SQL Editor
+# 2. Open each migration file in order:
+#    - supabase/migrations/20260109120000_add_pattern_alerts.sql
+#    - supabase/migrations/20260125120000_add_quiet_hours_and_snooze.sql
+#    - supabase/migrations/20260110153000_add_get_family_pattern_alerts_rpc.sql
+# 3. Copy the contents and run in SQL Editor
+
+# Check cron job status
+# Run this in SQL Editor:
+/*
+SELECT * FROM cron.job WHERE jobname = 'process-notifications';
+SELECT * FROM cron.job_run_details ORDER BY start_time DESC LIMIT 10;
+*/
+
+# Check notification queue
+# Run this in SQL Editor:
+/*
+SELECT status, count(*) FROM notification_queue GROUP BY status;
+SELECT * FROM notification_queue ORDER BY created_at DESC LIMIT 10;
+*/
+
+
+# ============================================
+# YOU'RE DONE! 🎉
+# ============================================
+
+# Next steps:
+# 1. Rebuild your iOS app in Xcode (Cmd+B)
+# 2. Test the new features:
+#    - Settings → Timezone picker
+#    - Settings → Quiet hours configuration
+#    - Notification detail → Snooze button
+# 3. Monitor the logs to see notifications being processed
+
+# For complete documentation, see:
+# - DEPLOYMENT_GUIDE.md (detailed step-by-step)
+# - NOTIFICATION_SYSTEM_FINAL.md (complete system documentation)

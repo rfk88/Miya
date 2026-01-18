@@ -96,28 +96,8 @@ struct FamilyVitalityCard: View {
         .padding(.horizontal, DashboardDesign.cardPadding)
         .padding(.vertical, DashboardDesign.cardPadding)
         .background(
-            ZStack {
-                // Base white
-                RoundedRectangle(cornerRadius: DashboardDesign.cardCornerRadius)
-                    .fill(Color.white)
-                
-                // Gloss effect
-                RoundedRectangle(cornerRadius: DashboardDesign.cardCornerRadius)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.4),
-                                Color.white.opacity(0.0)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-            }
-            .overlay(
-                RoundedRectangle(cornerRadius: DashboardDesign.cardCornerRadius)
-                    .stroke(Color.white.opacity(0.8), lineWidth: 1)
-            )
+            RoundedRectangle(cornerRadius: DashboardDesign.cardCornerRadius)
+                .fill(Color.white)
         )
         .shadow(
             color: DashboardDesign.cardShadowStrong.color,
@@ -192,28 +172,8 @@ struct FamilyVitalityCard: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(
-                ZStack {
-                    // Base white
-                    RoundedRectangle(cornerRadius: DashboardDesign.cardCornerRadius, style: .continuous)
-                        .fill(Color.white)
-                    
-                    // Gloss effect
-                    RoundedRectangle(cornerRadius: DashboardDesign.cardCornerRadius, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.4),
-                                    Color.white.opacity(0.0)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                }
-                .overlay(
-                    RoundedRectangle(cornerRadius: DashboardDesign.cardCornerRadius, style: .continuous)
-                        .stroke(Color.white.opacity(0.8), lineWidth: 1)
-                )
+                RoundedRectangle(cornerRadius: DashboardDesign.cardCornerRadius, style: .continuous)
+                    .fill(Color.white)
             )
             .shadow(
                 color: DashboardDesign.cardShadow.color,

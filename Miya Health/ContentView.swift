@@ -398,9 +398,9 @@ struct EnterCodeView: View {
                 } label: {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 20, weight: .medium))
-                        .foregroundColor(.primary)
+                        .foregroundColor(.miyaTextPrimary)
                         .frame(width: 44, height: 44)
-                        .background(Color(.systemGray6))
+                        .background(Color(red: 0.95, green: 0.95, blue: 0.97))
                         .clipShape(Circle())
                 }
                 .padding(.top, 8)
@@ -471,7 +471,7 @@ struct EnterCodeView: View {
                     .autocorrectionDisabled()
                     .font(.system(size: 18, weight: .medium))
                     .padding()
-                    .background(Color(.systemGray6))
+                    .background(Color(red: 0.95, green: 0.95, blue: 0.97))
                     .cornerRadius(12)
             }
             
@@ -550,7 +550,7 @@ struct EnterCodeView: View {
                     .keyboardType(.emailAddress)
                     .autocorrectionDisabled()
                     .padding()
-                    .background(Color(.systemGray6))
+                    .background(Color(red: 0.95, green: 0.95, blue: 0.97))
                     .cornerRadius(12)
             }
             
@@ -562,7 +562,7 @@ struct EnterCodeView: View {
                 
                 SecureField("At least 8 characters", text: $password)
                     .padding()
-                    .background(Color(.systemGray6))
+                    .background(Color(red: 0.95, green: 0.95, blue: 0.97))
                     .cornerRadius(12)
             }
             
@@ -574,7 +574,7 @@ struct EnterCodeView: View {
                 
                 SecureField("Confirm your password", text: $confirmPassword)
                     .padding()
-                    .background(Color(.systemGray6))
+                    .background(Color(red: 0.95, green: 0.95, blue: 0.97))
                     .cornerRadius(12)
                 
                 if !confirmPassword.isEmpty && !passwordsMatch {
@@ -877,12 +877,12 @@ struct GuidedSetupPreviewView: View {
                         Spacer()
                         Text(item.1)
                             .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.primary)
+                            .foregroundColor(.miyaTextPrimary)
                     }
                 }
             }
             .padding()
-            .background(Color(.systemGray6))
+            .background(Color(red: 0.95, green: 0.95, blue: 0.97))
             .cornerRadius(12)
         }
     }
@@ -2398,7 +2398,7 @@ struct AboutYouView: View {
                                         HStack {
                                             Text(status.displayText)
                                                 .font(.system(size: 14))
-                                                .foregroundColor(.primary)
+                                                .foregroundColor(.miyaTextPrimary)
                                             Spacer()
                                             if smokingStatus == status {
                                                 Image(systemName: "checkmark")
@@ -2820,7 +2820,7 @@ struct HeartHealthView: View {
                                         HStack {
                                             Text(status.displayText)
                                                 .font(.system(size: 14))
-                                                .foregroundColor(.primary)
+                                                .foregroundColor(.miyaTextPrimary)
                                             Spacer()
                                             if bloodPressureStatus == status {
                                                 Image(systemName: "checkmark")
@@ -2859,7 +2859,7 @@ struct HeartHealthView: View {
                                         HStack {
                                             Text(status.displayText)
                                                 .font(.system(size: 14))
-                                                .foregroundColor(.primary)
+                                                .foregroundColor(.miyaTextPrimary)
                                             Spacer()
                                             if diabetesStatus == status {
                                                 Image(systemName: "checkmark")

@@ -326,6 +326,9 @@ struct VitalityImportView: View {
                             return VitalityData(
                                 date: shiftedDate,
                                 sleepHours: data.sleepHours,
+                                restorativeSleepPercent: data.restorativeSleepPercent,
+                                sleepEfficiencyPercent: data.sleepEfficiencyPercent,
+                                awakePercent: data.awakePercent,
                                 steps: data.steps,
                                 hrvMs: data.hrvMs,
                                 restingHr: data.restingHr

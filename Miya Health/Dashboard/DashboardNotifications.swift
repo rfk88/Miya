@@ -4,364 +4,12 @@ import Supabase
 
 // MARK: - Notification System Components
 // Extracted from DashboardView.swift - Phase 8 of refactoring
-
-// MARK: - Family Notification Item
-
-struct FamilyNotificationItem: Identifiable {
-    enum Kind {
-        case trend(TrendInsight)
-        case fallback(memberName: String, memberInitials: String, memberUserId: String?, pillar: VitalityPillar, title: String, body: String)
-    }
-    
-    let id: String
-    let kind: Kind
-    let pillar: VitalityPillar
-    let title: String
-    let body: String
-    let memberInitials: String
-    let memberName: String
-    
-    /// Extract member user ID from the item (for history fetching)
-    var memberUserId: String? {
-        switch kind {
-        case .trend(let insight):
-            return insight.memberUserId
-        case .fallback(_, _, let userId, _, _, _):
-            return userId
-        }
-    }
-    
-    /// Extract debug why text if available
-    var debugWhy: String? {
-        switch kind {
-        case .trend(let insight):
-            return insight.debugWhy
-        case .fallback:
-            return nil
-        }
-    }
-    
-    /// Extract window days if available (for defaulting segmented control)
-    var triggerWindowDays: Int? {
-        switch kind {
-        case .trend(let insight):
-            return insight.windowDays
-        case .fallback:
-            return nil
-        }
-    }
-    
-    static func build(
-        snapshot: FamilyVitalitySnapshot,
-        trendInsights: [TrendInsight],
-        trendCoverage: TrendCoverageStatus?,
-        factors: [VitalityFactor],
-        members: [FamilyMemberScore]
-    ) -> [FamilyNotificationItem] {
-        func memberPillarScore(userId: String?, factorName: String) -> Int? {
-            guard let uid = userId?.lowercased() else { return nil }
-            let f = factors.first(where: { $0.name.lowercased() == factorName.lowercased() })
-            return f?.memberScores.first(where: { $0.userId?.lowercased() == uid })?.currentScore
-        }
-        
-        func memberPillarScore(userId: String?, pillar: VitalityPillar) -> Int? {
-            switch pillar {
-            case .sleep: return memberPillarScore(userId: userId, factorName: "Sleep")
-            case .movement: return memberPillarScore(userId: userId, factorName: "Activity")
-            case .stress: return memberPillarScore(userId: userId, factorName: "Recovery")
-            }
-        }
-        
-        /// If a member's current pillar score is strong, suppress negative trend alerts (they've likely already recovered).
-        /// For all pillars (Sleep, Movement, Stress): HIGHER score = BETTER (better sleep, more movement, better stress management).
-        /// If current score >= 85, the member is doing well NOW, so we suppress alerts about past problems.
-        func isStillRelevantNegativeAlert(memberUserId: String?, pillar: VitalityPillar) -> Bool {
-            guard let current = memberPillarScore(userId: memberUserId, pillar: pillar) else {
-                #if DEBUG
-                print("🔔 NotificationFilter: memberUserId=\(memberUserId ?? "nil"), pillar=\(pillar), currentScore=nil → KEEP (no score available)")
-                #endif
-                return true
-            }
-            // Only suppress if current pillar score is very strong (>= 85), indicating full recovery.
-            // Lower threshold (75) was too aggressive and filtered out valid trend alerts.
-            let shouldKeep = current < 85
-            #if DEBUG
-            if shouldKeep {
-                print("🔔 NotificationFilter: memberUserId=\(memberUserId ?? "nil"), pillar=\(pillar), currentScore=\(current) → KEEP (score < 85, alert still relevant)")
-            } else {
-                print("🔔 NotificationFilter: memberUserId=\(memberUserId ?? "nil"), pillar=\(pillar), currentScore=\(current) → FILTER OUT (score >= 85, member has recovered)")
-            }
-            #endif
-            return shouldKeep
-        }
-        
-        // 1) Prefer true trend insights when available
-        if trendCoverage?.hasMinimumCoverage == true, !trendInsights.isEmpty {
-            #if DEBUG
-            print("🔔 Building notifications from \(trendInsights.count) trend insights")
-            #endif
-            let filtered = trendInsights
-                .filter { !$0.memberName.isEmpty }
-            #if DEBUG
-            print("🔔 After name filter: \(filtered.count) insights")
-            #endif
-            // Suppress stale negative alerts if the member is now doing well in that pillar.
-            let relevanceFiltered = filtered.filter { ins in
-                    switch ins.severity {
-                    case .attention, .watch:
-                        let keep = isStillRelevantNegativeAlert(memberUserId: ins.memberUserId, pillar: ins.pillar)
-                        #if DEBUG
-                        if !keep {
-                            let currentScore = memberPillarScore(userId: ins.memberUserId, pillar: ins.pillar) ?? 0
-                            print("🔔 Filtered out: \(ins.title) (current \(ins.pillar.displayName) score=\(currentScore) >= 85, member has recovered from past issue)")
-                        }
-                        #endif
-                        return keep
-                    case .celebrate:
-                        return true
-                    }
-                }
-            #if DEBUG
-            print("🔔 After relevance filter: \(relevanceFiltered.count) insights")
-            #endif
-            let final = relevanceFiltered.prefix(5).map { ins in
-                    let initials = makeInitials(from: ins.memberName)
-                    return FamilyNotificationItem(
-                        id: ins.id.uuidString,
-                        kind: .trend(ins),
-                        pillar: ins.pillar,
-                        title: ins.title,
-                        body: ins.body,
-                        memberInitials: initials,
-                        memberName: ins.memberName
-                    )
-                }
-            #if DEBUG
-            print("🔔 Final notification count: \(final.count)")
-            for item in final {
-                print("  - \(item.title)")
-            }
-            #endif
-            return final
-        }
-        
-        // 2) Fallback: derive a pillar per member from their pillar scores (Sleep / Activity / Stress)
-        // This avoids hardcoding everything to the family's focus pillar.
-        let others = members.filter { !$0.isMe && !$0.isPending && $0.hasScore && $0.isScoreFresh }
-        guard !others.isEmpty else { return [] }
-        
-        func lowestPillar(for member: FamilyMemberScore) -> (pillar: VitalityPillar, score: Int)? {
-            let sleep = memberPillarScore(userId: member.userId, factorName: "Sleep")
-            let movement = memberPillarScore(userId: member.userId, factorName: "Activity")
-            let stress = memberPillarScore(userId: member.userId, factorName: "Recovery")
-            let options: [(VitalityPillar, Int?)] = [(.sleep, sleep), (.movement, movement), (.stress, stress)]
-            let present = options.compactMap { (pillar, value) -> (VitalityPillar, Int)? in
-                value.map { (pillar, $0) }
-            }
-            guard let minPair = present.min(by: { $0.1 < $1.1 }) else { return nil }
-            return (minPair.0, minPair.1)
-        }
-        
-        return others.compactMap { m in
-            guard let lp = lowestPillar(for: m) else { return nil }
-            
-            // Relevance gate (fallback): only create a notification if there is an actual issue right now.
-            // This prevents "Terrible3 · Stress" from showing when all scores are 90+.
-            let currentVsOptimalOK: Bool = (m.optimalScore > 0) ? (Double(m.currentScore) / Double(m.optimalScore) >= 0.90) : (m.currentScore >= 80)
-            let pillarOK: Bool = lp.score >= 75
-            if currentVsOptimalOK && pillarOK {
-                return nil
-            }
-            
-            let initials = m.initials
-            let firstName = m.name.split(separator: " ").first.map(String.init) ?? m.name
-            let title: String
-            let body: String
-            switch lp.pillar {
-            case .sleep:
-                title = "\(firstName) · Sleep"
-                body = "Sleep is the biggest drag on \(firstName)'s vitality right now. A small bedtime consistency reset can help."
-            case .movement:
-                title = "\(firstName) · Movement"
-                body = "Movement is trending low for \(firstName). A simple daily steps goal is a good first unlock."
-            case .stress:
-                title = "\(firstName) · Stress"
-                body = "\(firstName)'s recovery signals look strained lately. Prioritizing rest and calm minutes can help."
-            }
-            return FamilyNotificationItem(
-                id: (m.userId ?? m.name) + "-" + lp.pillar.rawValue,
-                kind: .fallback(memberName: m.name, memberInitials: initials, memberUserId: m.userId, pillar: lp.pillar, title: title, body: body),
-                pillar: lp.pillar,
-                title: title,
-                body: body,
-                memberInitials: initials,
-                memberName: m.name
-            )
-        }
-        .prefix(3)
-        .map { $0 }
-    }
-    
-    private static func makeInitials(from name: String) -> String {
-        let parts = name.split(separator: " ").map(String.init)
-        let first = parts.first?.prefix(1) ?? ""
-        let second = parts.dropFirst().first?.prefix(1) ?? ""
-        let combined = String(first + second)
-        return combined.isEmpty ? String(name.prefix(2)).uppercased() : combined.uppercased()
-    }
-}
-
-// MARK: - Family Notifications Card
-
-struct FamilyNotificationsCard: View {
-    let items: [FamilyNotificationItem]
-    let onTap: (FamilyNotificationItem) -> Void
-    
-    private func pillarIcon(_ pillar: VitalityPillar) -> String {
-        switch pillar {
-        case .sleep: return "moon.stars.fill"
-        case .movement: return "figure.walk"
-        case .stress: return "heart.fill"
-        }
-    }
-    
-    private func pillarColor(_ pillar: VitalityPillar) -> Color {
-        switch pillar {
-        case .sleep: return DashboardDesign.sleepColor
-        case .movement: return DashboardDesign.movementColor
-        case .stress: return DashboardDesign.stressColor
-        }
-    }
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Header with better typography
-            Text("Family notifications")
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
-                .foregroundColor(DashboardDesign.secondaryTextColor)
-                .textCase(.uppercase)
-                .tracking(0.5)
-            
-            VStack(spacing: 10) {
-                ForEach(items) { item in
-                    Button {
-                        onTap(item)
-                    } label: {
-                        HStack(spacing: 14) {
-                            // Icon container - larger with gradient and shadow
-                            ZStack {
-                                // Gradient background
-                                Circle()
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [
-                                                pillarColor(item.pillar).opacity(0.25),
-                                                pillarColor(item.pillar).opacity(0.15)
-                                            ],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        )
-                                    )
-                                    .frame(width: 52, height: 52)
-                                
-                                // Icon
-                                Image(systemName: pillarIcon(item.pillar))
-                                    .font(.system(size: 22, weight: .semibold))
-                                    .foregroundStyle(
-                                        LinearGradient(
-                                            colors: [
-                                                pillarColor(item.pillar),
-                                                pillarColor(item.pillar).opacity(0.8)
-                                            ],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        )
-                                    )
-                            }
-                            
-                            // Text content with better spacing and hierarchy
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(item.title)
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(DashboardDesign.primaryTextColor)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .lineLimit(2)
-                                
-                                Text(item.body)
-                                    .font(.system(size: 14, weight: .regular))
-                                    .foregroundColor(DashboardDesign.secondaryTextColor)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .lineLimit(2)
-                            }
-                            
-                            Spacer(minLength: 8)
-                            
-                            // Chevron with subtle styling
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(DashboardDesign.secondaryTextColor.opacity(0.4))
-                        }
-                        .padding(16)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color.white)
-                                .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
-                                .shadow(color: Color.black.opacity(0.02), radius: 2, x: 0, y: 1)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(Color.black.opacity(0.04), lineWidth: 0.5)
-                        )
-                    }
-                    .buttonStyle(NotificationCardButtonStyle())
-                }
-            }
-        }
-        .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color.white)
-                .shadow(color: Color.black.opacity(0.06), radius: 16, x: 0, y: 4)
-                .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
-        )
-    }
-}
-
-// MARK: - Premium Button Style for Notification Cards
-struct NotificationCardButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
-            .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
-    }
-}
-
-// MARK: - Chat Models
-
-struct ChatMessage: Identifiable {
-    let id = UUID()
-    let role: MessageRole
-    let text: String
-    let timestamp: Date = Date()
-    
-    enum MessageRole {
-        case miya    // AI messages
-        case user    // User messages
-    }
-}
-
-struct PillPrompt: Identifiable {
-    let id = UUID()
-    let icon: String
-    let text: String
-    let category: PromptCategory
-    
-    enum PromptCategory {
-        case general          // Any suggested question
-        case reachOut         // Opens reach-out sheet
-        case dayByDay         // Day-by-day specific request
-    }
-}
+// Split into multiple files for better compilation performance:
+// - NotificationModels.swift: Data models
+// - FamilyNotificationsCard.swift: Card UI component
+// - NotificationDetailComponents.swift: UI components (bubbles, layouts, etc.)
+// - NotificationHelpers.swift: Helper functions and share sheet
+// - MessageTemplatesSheet.swift: Message templates UI
 
 // MARK: - Family Notification Detail Sheet
 
@@ -467,7 +115,13 @@ struct FamilyNotificationDetailSheet: View {
     @State private var chatError: String?
     @State private var alertStateId: String?
     @State private var memberHealthProfile: [String: Any]?  // Fetched member health data for AI context
+    @State private var memberRelationship: String?  // "Partner", "Parent", "Child", etc.
     @State private var retryCount = 0  // Track retry attempts to prevent infinite loops
+    
+    // Snooze functionality
+    @State private var showSnoozeOptions = false
+    @State private var isSnoozingAlert = false
+    @State private var snoozeError: String?
     
     private var config: PillarConfig {
         PillarConfig.forPillar(item.pillar)
@@ -709,15 +363,6 @@ struct FamilyNotificationDetailSheet: View {
         ]
     }
     
-    private func extractAlertStateId(from debugWhy: String) -> String? {
-        // Format: "serverPattern ... alertStateId=<uuid> ..."
-        let pattern = "alertStateId=([a-f0-9-]+)"
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
-              let match = regex.firstMatch(in: debugWhy, options: [], range: NSRange(debugWhy.startIndex..., in: debugWhy)),
-              let range = Range(match.range(at: 1), in: debugWhy)
-        else { return nil }
-        return String(debugWhy[range])
-    }
     
     private func openWhatsApp(with message: String) {
         let encoded = message.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
@@ -855,6 +500,9 @@ struct FamilyNotificationDetailSheet: View {
         let age = try? await dataManager.fetchMemberAge(userId: userId)
         await MainActor.run { memberAge = age }
         
+        // Fetch relationship (for AI context)
+        await fetchMemberRelationship(userId: userId)
+        
         guard let age = age else {
             await MainActor.run { optimalTarget = nil }
             return
@@ -899,6 +547,30 @@ struct FamilyNotificationDetailSheet: View {
         }
         
         await MainActor.run { optimalTarget = range }
+    }
+    
+    private func fetchMemberRelationship(userId: String) async {
+        do {
+            let supabase = SupabaseConfig.client
+            struct FamilyMemberRow: Decodable {
+                let relationship: String?
+            }
+            
+            let row: FamilyMemberRow = try await supabase
+                .from("family_members")
+                .select("relationship")
+                .eq("user_id", value: userId)
+                .single()
+                .execute()
+                .value
+            
+            await MainActor.run {
+                memberRelationship = row.relationship
+                print("✅ Fetched relationship: \(row.relationship ?? "nil")")
+            }
+        } catch {
+            print("❌ Error fetching relationship: \(error.localizedDescription)")
+        }
     }
     
     private func fetchAIInsightIfPossible() async {
@@ -1202,6 +874,11 @@ struct FamilyNotificationDetailSheet: View {
             context["member_health_profile"] = profileData
         }
         
+        // Add member relationship if available (e.g., "Partner", "Parent", "Child")
+        if let relationship = memberRelationship {
+            context["member_relationship"] = relationship
+        }
+        
         // Add available metrics data
         if !historyRows.isEmpty {
             let recentData = Array(historyRows.suffix(14)).map { day in
@@ -1272,6 +949,100 @@ struct FamilyNotificationDetailSheet: View {
                 "role": msg.role == .miya ? "assistant" : "user",
                 "text": msg.text
             ]
+        }
+    }
+    
+    // MARK: - Snooze & Dismiss Functions
+    
+    private func snoozeAlert(days: Int) async {
+        guard let alertId = alertStateId else {
+            snoozeError = "Unable to snooze: Alert ID not found"
+            return
+        }
+        
+        await MainActor.run {
+            isSnoozingAlert = true
+            snoozeError = nil
+        }
+        
+        do {
+            let supabase = SupabaseConfig.client
+            
+            struct SnoozeResult: Decodable {
+                let success: Bool
+                let alert_id: String?
+                let snooze_until: String?
+                let snooze_days: Int?
+            }
+            
+            let result: SnoozeResult = try await supabase
+                .rpc("snooze_pattern_alert", params: [
+                    "alert_id": AnyJSON.string(alertId),
+                    "snooze_for_days": AnyJSON.integer(days)
+                ])
+                .execute()
+                .value
+            
+            if result.success {
+                print("✅ Alert snoozed for \(days) days")
+                await MainActor.run {
+                    isSnoozingAlert = false
+                    dismiss()
+                }
+            } else {
+                throw NSError(domain: "snooze", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to snooze alert"])
+            }
+        } catch {
+            print("❌ Error snoozing alert: \(error.localizedDescription)")
+            await MainActor.run {
+                isSnoozingAlert = false
+                snoozeError = "Failed to snooze alert: \(error.localizedDescription)"
+            }
+        }
+    }
+    
+    private func dismissAlert() async {
+        guard let alertId = alertStateId else {
+            snoozeError = "Unable to dismiss: Alert ID not found"
+            return
+        }
+        
+        await MainActor.run {
+            isSnoozingAlert = true
+            snoozeError = nil
+        }
+        
+        do {
+            let supabase = SupabaseConfig.client
+            
+            struct DismissResult: Decodable {
+                let success: Bool
+                let alert_id: String?
+                let dismissed_at: String?
+            }
+            
+            let result: DismissResult = try await supabase
+                .rpc("dismiss_pattern_alert", params: [
+                    "alert_id": AnyJSON.string(alertId)
+                ])
+                .execute()
+                .value
+            
+            if result.success {
+                print("✅ Alert dismissed permanently")
+                await MainActor.run {
+                    isSnoozingAlert = false
+                    dismiss()
+                }
+            } else {
+                throw NSError(domain: "dismiss", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to dismiss alert"])
+            }
+        } catch {
+            print("❌ Error dismissing alert: \(error.localizedDescription)")
+            await MainActor.run {
+                isSnoozingAlert = false
+                snoozeError = "Failed to dismiss alert: \(error.localizedDescription)"
+            }
         }
     }
     
@@ -1453,10 +1224,21 @@ struct FamilyNotificationDetailSheet: View {
     // MARK: - Dynamic Pill Generation (Option B: GPT-Generated)
     
     private func extractSuggestedPrompts(from aiResponse: String) -> [PillPrompt] {
+        let firstName = item.memberName.split(separator: " ").first.map(String.init) ?? item.memberName
+        
+        // ALWAYS start with "Reach out" as the first pill
+        var pills: [PillPrompt] = [
+            PillPrompt(
+                icon: "🤝",
+                text: "Reach out to \(firstName)",
+                category: .reachOut
+            )
+        ]
+        
         // Look for SUGGESTED_PROMPTS: section
         guard let range = aiResponse.range(of: "SUGGESTED_PROMPTS:") else {
             print("⚠️ PILLS: No SUGGESTED_PROMPTS found in AI response")
-            return []
+            return pills  // Return just "Reach out" if no suggestions
         }
         
         let promptsSection = String(aiResponse[range.upperBound...])
@@ -1469,8 +1251,8 @@ struct FamilyNotificationDetailSheet: View {
         
         print("✅ PILLS: Extracted \(lines.count) suggestions: \(lines)")
         
-        // Map to PillPrompts with smart icons
-        let pills = lines.prefix(3).map { text -> PillPrompt in
+        // Add up to 2 more pills from AI suggestions (total 3 pills including "Reach out")
+        let dynamicPills = lines.prefix(2).map { text -> PillPrompt in
             let icon = selectIconForPrompt(text)
             return PillPrompt(
                 icon: icon,
@@ -1479,7 +1261,8 @@ struct FamilyNotificationDetailSheet: View {
             )
         }
         
-        return Array(pills)
+        pills.append(contentsOf: dynamicPills)
+        return pills
     }
     
     private func cleanAIResponse(_ response: String) -> String {
@@ -1543,10 +1326,12 @@ struct FamilyNotificationDetailSheet: View {
     }
     
     private func generateOpeningMessage() -> String {
-        let name = item.memberName
-        let firstName = name.split(separator: " ").first.map(String.init) ?? name
+        let firstName = item.memberName.split(separator: " ").first.map(String.init) ?? item.memberName
         let pillar = item.pillar
         let severity = severityLabel.lowercased()
+        
+        // Get relationship-aware references
+        let (memberRef, memberPossessive) = getRelationshipReferences()
         
         // Get duration from item (parse from debugWhy or use default)
         let duration = parseDuration(from: item.debugWhy)
@@ -1557,23 +1342,55 @@ struct FamilyNotificationDetailSheet: View {
         switch duration {
         // 3-day patterns (early warning)
         case 1...3:
-            return "Hey — I noticed \(firstName)'s \(metricName) has dropped over the last \(duration) days. This is an early warning. Let's talk about it so we can see how you can best support \(firstName)."
+            return "Hey — I noticed \(memberPossessive) \(metricName) has dropped over the last \(duration) days. This is an early warning. Let's talk about it so we can see how you can best support \(memberRef)."
         
         // 7-day patterns (needs attention)
         case 4...7:
-            return "Hey — \(firstName)'s pattern of lower \(metricName) has been going on for \(duration) days. I can see a drop in their baseline. Let's talk about this pattern and reach out to \(firstName) so we can fix it before it grows."
+            return "Hey — \(memberPossessive) pattern of lower \(metricName) has been going on for \(duration) days. I can see a drop in their baseline. Let's talk about this pattern and reach out to \(memberRef) so we can fix it before it grows."
         
         // 14-day patterns (critical)
         case 8...14:
-            return "Hey — \(firstName)'s \(metricName) has been below baseline for \(duration) days now. This needs attention. Let's figure out what's going on and how to help \(firstName) get back on track."
+            return "Hey — \(memberPossessive) \(metricName) has been below baseline for \(duration) days now. This needs attention. Let's figure out what's going on and how to help \(memberRef) get back on track."
         
         // 21+ day patterns (urgent - long-standing issue)
         case 15...:
-            return "Hey — \(firstName)'s \(metricName) has been below baseline for \(duration) days. This pattern has been going on for a while and needs your attention. Let's figure out what's happening and how to best support \(firstName)."
+            return "Hey — \(memberPossessive) \(metricName) has been below baseline for \(duration) days. This pattern has been going on for a while and needs your attention. Let's figure out what's happening and how to best support \(memberRef)."
         
         // Fallback (shouldn't reach here, but just in case)
         default:
-            return "Hey — I noticed \(firstName)'s \(metricName) has been off lately for about \(duration) days. Let's talk about what's going on and how you can support \(firstName)."
+            return "Hey — I noticed \(memberPossessive) \(metricName) has been off lately for about \(duration) days. Let's talk about what's going on and how you can support \(memberRef)."
+        }
+    }
+    
+    private func getRelationshipReferences() -> (memberRef: String, memberPossessive: String) {
+        let firstName = item.memberName.split(separator: " ").first.map(String.init) ?? item.memberName
+        
+        // Use relationship if available, otherwise fall back to name
+        guard let relationship = memberRelationship?.lowercased() else {
+            return (firstName, "\(firstName)'s")
+        }
+        
+        switch relationship {
+        case "partner", "wife", "husband":
+            // For partner/wife/husband, use "your wife" or "your husband" or "your partner"
+            if relationship == "wife" {
+                return ("your wife", "your wife's")
+            } else if relationship == "husband" {
+                return ("your husband", "your husband's")
+            } else {
+                return ("your partner", "your partner's")
+            }
+        case "parent":
+            return ("your parent", "your parent's")
+        case "child":
+            return ("your child", "your child's")
+        case "sibling":
+            return ("your sibling", "your sibling's")
+        case "grandparent":
+            return ("your grandparent", "your grandparent's")
+        default:
+            // For "Other" or unknown, use name
+            return (firstName, "\(firstName)'s")
         }
     }
     
@@ -1628,7 +1445,15 @@ struct FamilyNotificationDetailSheet: View {
     }
     
     private func getInitialPrompts() -> [PillPrompt] {
+        let firstName = item.memberName.split(separator: " ").first.map(String.init) ?? item.memberName
+        
+        // ALWAYS start with "Reach out" as the first pill
         return [
+            PillPrompt(
+                icon: "🤝",
+                text: "Reach out to \(firstName)",
+                category: .reachOut
+            ),
             PillPrompt(
                 icon: "📊",
                 text: "Show me the numbers",
@@ -1637,11 +1462,6 @@ struct FamilyNotificationDetailSheet: View {
             PillPrompt(
                 icon: "💡",
                 text: "Why is this happening?",
-                category: .general
-            ),
-            PillPrompt(
-                icon: "🎯",
-                text: "What can help?",
                 category: .general
             )
         ]
@@ -1750,7 +1570,7 @@ struct FamilyNotificationDetailSheet: View {
                 }
             }
             .padding(16)
-            .background(Color(.systemGray6).opacity(0.5))
+            .background(Color(red: 0.95, green: 0.95, blue: 0.97).opacity(0.5))
             .cornerRadius(12)
         } else if isLoading {
             HStack(spacing: 12) {
@@ -1781,7 +1601,7 @@ struct FamilyNotificationDetailSheet: View {
                 }
             }
             .padding(16)
-            .background(Color(.systemGray6).opacity(0.5))
+            .background(Color(red: 0.95, green: 0.95, blue: 0.97).opacity(0.5))
             .cornerRadius(12)
         } else if historyRows.count < 7 {
             // Insufficient data state
@@ -1812,7 +1632,7 @@ struct FamilyNotificationDetailSheet: View {
                 }
             }
             .padding(16)
-            .background(Color(.systemGray6).opacity(0.5))
+            .background(Color(red: 0.95, green: 0.95, blue: 0.97).opacity(0.5))
             .cornerRadius(12)
         } else {
             metricsDisplayView
@@ -1838,7 +1658,7 @@ struct FamilyNotificationDetailSheet: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(12)
-                .background(Color(.systemGray6).opacity(0.5))
+                .background(Color(red: 0.95, green: 0.95, blue: 0.97).opacity(0.5))
                 .cornerRadius(8)
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
@@ -1924,7 +1744,7 @@ struct FamilyNotificationDetailSheet: View {
                     .padding(16)
                     .background(
                         RoundedRectangle(cornerRadius: 12)
-                            .fill(Color(.secondarySystemBackground))
+                            .fill(Color(red: 0.97, green: 0.97, blue: 0.98))
                     )
                 }
                 
@@ -2127,7 +1947,7 @@ struct FamilyNotificationDetailSheet: View {
             .padding(16)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(.secondarySystemBackground))
+                    .fill(Color(red: 0.97, green: 0.97, blue: 0.98))
             )
             .padding(.bottom, 8)
             .onAppear {
@@ -2402,7 +2222,7 @@ struct FamilyNotificationDetailSheet: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color(.systemGray6).opacity(0.5))
+                .fill(Color(red: 0.95, green: 0.95, blue: 0.97).opacity(0.5))
         )
     }
     
@@ -2512,180 +2332,243 @@ struct FamilyNotificationDetailSheet: View {
     // MARK: - Main Body View
     
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                if isInitializing {
-                    // Loading state - show immediately
-                    VStack(spacing: 16) {
-                        Spacer()
-                        
-                        ActivityIndicator()
-                            .animated(true)
-                            .style(.large)
-                        
-                        Text("Miya is analyzing \(item.memberName)'s data...")
-                            .font(.system(size: 16))
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 40)
-                        
-                        Spacer()
-                    }
-                } else {
-                    VStack(spacing: 0) {
-                        // Chat messages area - Custom Whoop-style UI
-                        ScrollViewReader { proxy in
-                            ScrollView {
-                                LazyVStack(alignment: .leading, spacing: 16) {
-                                    ForEach(chatMessages) { message in
-                                        WhoopStyleBubble(message: message, memberName: item.memberName)
-                                            .id(message.id)
-                                    }
-                                    
-                                    // Animated typing indicator while AI responds
-                                    if isAITyping {
-                                        HStack(spacing: 10) {
-                                            Circle()
-                                                .fill(Color.blue.opacity(0.1))
-                                                .frame(width: 32, height: 32)
-                                                .overlay(
-                                                    Text("M")
-                                                        .font(.system(size: 14, weight: .semibold))
-                                                        .foregroundColor(.blue)
-                                                )
-                                            
-                                            HStack(spacing: 6) {
-                                                ForEach(0..<3) { index in
-                                                    TypingDot(delay: Double(index) * 0.2)
-                                                }
-                                            }
-                                            .padding(14)
-                                            .background(Color(.systemGray6))
-                                            .cornerRadius(16)
-                                        }
-                                        .padding(.leading, 16)
-                                    }
-                                    
-                                    // Error display
-                                    if let error = chatError {
-                                        HStack(spacing: 10) {
-                                            Image(systemName: "exclamationmark.triangle.fill")
-                                                .foregroundColor(.orange)
-                                            Text(error)
-                                                .font(.system(size: 14))
-                                                .foregroundColor(.secondary)
-                                        }
-                                        .padding()
-                                        .background(Color.orange.opacity(0.1))
-                                        .cornerRadius(12)
-                                        .padding(.horizontal)
-                                    }
-                                }
-                                .padding()
-                            }
-                            .onChange(of: chatMessages.count) { _ in
-                                if let last = chatMessages.last {
-                                    withAnimation {
-                                        proxy.scrollTo(last.id, anchor: .bottom)
-                                    }
-                                }
-                            }
-                        }
-                        
-                        Divider()
-                        
-                        // Pill prompt suggestions (optional shortcuts)
-                        if !availablePrompts.isEmpty && !isSending {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    ForEach(availablePrompts) { prompt in
-                                        Button {
-                                            if prompt.category == .reachOut {
-                                                showMessageTemplates = true
-                                            } else {
-                                                // Send this prompt as a message
-                                                Task {
-                                                    await sendMessage(text: prompt.text)
-                                                }
-                                            }
-                                        } label: {
-                                            HStack(spacing: 6) {
-                                                Text(prompt.icon)
-                                                    .font(.system(size: 14))
-                                                Text(prompt.text)
-                                                    .font(.system(size: 14, weight: .medium))
-                                                    .lineLimit(1)
-                                            }
-                                            .padding(.horizontal, 14)
-                                            .padding(.vertical, 10)
-                                            .background(Color(.systemGray6))
-                                            .cornerRadius(20)
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 20)
-                                                    .stroke(Color(.systemGray4), lineWidth: 1)
-                                            )
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                                .padding(.horizontal, 16)
-                            }
-                            .padding(.vertical, 12)
-                            
-                            Divider()
-                        }
-                        
-                        // Text input field (ALWAYS visible)
-                        HStack(spacing: 12) {
-                            TextField("Ask Miya anything...", text: $inputText, axis: .vertical)
-                                .textFieldStyle(.plain)
-                                .padding(12)
-                                .background(Color(.systemGray6))
-                                .cornerRadius(20)
-                                .lineLimit(1...4)
-                                .disabled(isSending)
-                            
-                            Button {
-                                Task {
-                                    await sendMessage(text: inputText)
-                                }
-                            } label: {
-                                Image(systemName: "arrow.up.circle.fill")
-                                    .font(.system(size: 32))
-                                    .foregroundColor(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending ? .gray : .blue)
-                            }
-                            .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                    }
-                }
+        AnyView(
+            NavigationStack {
+                mainContent
             }
             .navigationTitle(item.memberName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if alertStateId != nil {
+                        Button {
+                            showSnoozeOptions = true
+                        } label: {
+                            Image(systemName: "bell.slash")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
                 }
             }
+            .confirmationDialog("Snooze this alert", isPresented: $showSnoozeOptions, titleVisibility: .visible) {
+                Button("Snooze for 1 day") {
+                    Task { await snoozeAlert(days: 1) }
+                }
+                Button("Snooze for 3 days") {
+                    Task { await snoozeAlert(days: 3) }
+                }
+                Button("Snooze for 7 days") {
+                    Task { await snoozeAlert(days: 7) }
+                }
+                Button("Dismiss permanently") {
+                    Task { await dismissAlert() }
+                }
+                .foregroundColor(.red)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Choose how long to hide this alert. You can always view it again in your family's health history.")
+            }
+            .alert("Snooze Error", isPresented: .constant(snoozeError != nil)) {
+                Button("OK") { snoozeError = nil }
+            } message: {
+                if let error = snoozeError {
+                    Text(error)
+                }
+            }
             .sheet(isPresented: $showMessageTemplates) {
-                MessageTemplatesSheet(
-                    item: item,
-                    suggestedMessages: suggestedMessages,
-                    onSendMessage: { message, platform in
-                        if platform == .whatsapp {
-                            openWhatsApp(with: message)
-                        } else {
-                            openMessages(with: message)
-                        }
-                        showMessageTemplates = false
-                    }
-                )
+                messageTemplatesSheetView
             }
             .task {
                 await initializeConversation()
             }
+        )
+    }
+    
+    @ViewBuilder
+    private var mainContent: some View {
+        if isInitializing {
+            loadingView
+        } else {
+            chatContentView
         }
+    }
+    
+    private var loadingView: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            
+            ActivityIndicator()
+                .animated(true)
+                .style(.large)
+            
+            Text("Miya is analyzing \(item.memberName)'s data...")
+                .font(.system(size: 16))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+            
+            Spacer()
+        }
+    }
+    
+    private var chatContentView: some View {
+        VStack(spacing: 0) {
+            chatMessagesView
+            Divider()
+            if !availablePrompts.isEmpty && !isSending {
+                promptSuggestionsView
+                Divider()
+            }
+            textInputView
+        }
+    }
+    
+    private var chatMessagesView: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    ForEach(chatMessages) { message in
+                        WhoopStyleBubble(message: message, memberName: item.memberName)
+                            .id(message.id)
+                    }
+                    
+                    if isAITyping {
+                        typingIndicatorView
+                    }
+                    
+                    if let error = chatError {
+                        errorView(error)
+                    }
+                }
+                .padding()
+            }
+            .onChange(of: chatMessages.count) { oldValue, newValue in
+                if let last = chatMessages.last {
+                    withAnimation {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+            }
+        }
+    }
+    
+    private var typingIndicatorView: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(Color.blue.opacity(0.1))
+                .frame(width: 32, height: 32)
+                .overlay(
+                    Text("M")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.blue)
+                )
+            
+            HStack(spacing: 6) {
+                ForEach(0..<3) { index in
+                    TypingDot(delay: Double(index) * 0.2)
+                }
+            }
+            .padding(14)
+            .background(Color(red: 0.95, green: 0.95, blue: 0.97))
+            .cornerRadius(16)
+        }
+        .padding(.leading, 16)
+    }
+    
+    @ViewBuilder
+    private func errorView(_ error: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.orange)
+            Text(error)
+                .font(.system(size: 14))
+                .foregroundColor(.secondary)
+        }
+        .padding()
+        .background(Color.orange.opacity(0.1))
+        .cornerRadius(12)
+        .padding(.horizontal)
+    }
+    
+    private var promptSuggestionsView: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(availablePrompts) { prompt in
+                    Button {
+                        if prompt.category == .reachOut {
+                            showMessageTemplates = true
+                        } else {
+                            Task {
+                                await sendMessage(text: prompt.text)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(prompt.icon)
+                                .font(.system(size: 14))
+                            Text(prompt.text)
+                                .font(.system(size: 14, weight: .medium))
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color(red: 0.95, green: 0.95, blue: 0.97))
+                        .cornerRadius(20)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20)
+                                .stroke(Color(red: 0.82, green: 0.82, blue: 0.84), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        .padding(.vertical, 12)
+    }
+    
+    private var textInputView: some View {
+        HStack(spacing: 12) {
+            TextField("Ask Miya anything...", text: $inputText, axis: .vertical)
+                .textFieldStyle(.plain)
+                .padding(12)
+                .background(Color(red: 0.95, green: 0.95, blue: 0.97))
+                .cornerRadius(20)
+                .lineLimit(1...4)
+                .disabled(isSending)
+            
+            Button {
+                Task {
+                    await sendMessage(text: inputText)
+                }
+            } label: {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 32))
+                    .foregroundColor(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending ? .gray : .blue)
+            }
+            .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+    
+    private var messageTemplatesSheetView: some View {
+        MessageTemplatesSheet(
+            item: item,
+            suggestedMessages: suggestedMessages,
+            onSendMessage: { [self] message, platform in
+                if platform == .whatsapp {
+                    openWhatsApp(with: message)
+                } else {
+                    openMessages(with: message)
+                }
+                showMessageTemplates = false
+            }
+        )
     }
     
     // MARK: - Old Body View (to be removed after testing)
@@ -2773,7 +2656,7 @@ struct FamilyNotificationDetailSheet: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(
                                     RoundedRectangle(cornerRadius: 12)
-                                        .fill(Color(.secondarySystemBackground))
+                                        .fill(Color(red: 0.97, green: 0.97, blue: 0.98))
                                 )
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 12)
@@ -2837,7 +2720,7 @@ struct FamilyNotificationDetailSheet: View {
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 14)
                                     .padding(.horizontal, 20)
-                                    .background(Color(.systemGray5))
+                                    .background(Color(red: 0.90, green: 0.90, blue: 0.92))
                                     .foregroundColor(.miyaTextPrimary)
                                     .cornerRadius(12)
                                 }
@@ -3114,506 +2997,5 @@ struct FamilyNotificationDetailSheet: View {
                 await fetchAIInsightIfPossible()
             }
         }
-    }
-}
-
-// MARK: - Whoop-Style Chat Bubble
-
-struct WhoopStyleBubble: View {
-    let message: ChatMessage
-    let memberName: String
-    
-    private func parseMarkdown(_ markdown: String) -> AttributedString {
-        // Parse markdown to AttributedString for bold, bullets, etc.
-        do {
-            var options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-            options.allowsExtendedAttributes = true
-            return try AttributedString(markdown: markdown, options: options)
-        } catch {
-            // Fallback to plain text if markdown parsing fails
-            return AttributedString(markdown)
-        }
-    }
-    
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            if message.role == .miya {
-                // Miya avatar - circular with gradient
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.blue.opacity(0.8), Color.purple.opacity(0.6)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 32, height: 32)
-                    .overlay(
-                        Text("M")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(.white)
-                    )
-                
-                // Message bubble - Whoop-style rounded with markdown support
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(parseMarkdown(message.text))
-                        .font(.system(size: 16, weight: .regular))
-                        .foregroundColor(.primary)
-                }
-                .padding(14)
-                .background(Color(.systemGray6))
-                .cornerRadius(18)
-                .frame(maxWidth: UIScreen.main.bounds.width * 0.75, alignment: .leading)
-                
-                Spacer()
-            } else {
-                Spacer()
-                
-                // User message bubble - blue gradient
-                Text(message.text)
-                    .font(.system(size: 16, weight: .regular))
-                    .foregroundColor(.white)
-                    .padding(14)
-                    .background(
-                        LinearGradient(
-                            colors: [Color.blue, Color.blue.opacity(0.8)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .cornerRadius(18)
-                    .frame(maxWidth: UIScreen.main.bounds.width * 0.70, alignment: .trailing)
-            }
-        }
-    }
-}
-
-// MARK: - Pill Prompt Grid (kept for suggestion shortcuts)
-
-struct PillPromptGrid: View {
-    let prompts: [PillPrompt]
-    let onTap: (PillPrompt) -> Void
-    
-    var body: some View {
-        FlowLayout(spacing: 8) {
-            ForEach(prompts) { prompt in
-                PillButton(prompt: prompt) {
-                    onTap(prompt)
-                }
-            }
-        }
-    }
-}
-
-struct PillButton: View {
-    let prompt: PillPrompt
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Text(prompt.icon)
-                    .font(.system(size: 14))
-                Text(prompt.text)
-                    .font(.system(size: 14, weight: .medium))
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color(.systemGray6))
-            .cornerRadius(20)
-            .overlay(
-                RoundedRectangle(cornerRadius: 20)
-                    .stroke(Color(.systemGray4), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// Flow layout for pill wrapping (1-2 rows max)
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 8
-    
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Self.Subviews, cache: inout ()) -> CGSize {
-        let result = FlowResult(
-            in: proposal.replacingUnspecifiedDimensions().width,
-            subviews: subviews,
-            spacing: spacing
-        )
-        return result.size
-    }
-    
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Self.Subviews, cache: inout ()) {
-        let result = FlowResult(
-            in: bounds.width,
-            subviews: subviews,
-            spacing: spacing
-        )
-        for (index, subview) in subviews.enumerated() {
-            subview.place(at: result.positions[index], proposal: ProposedViewSize.unspecified)
-        }
-    }
-}
-
-struct FlowResult {
-    var size: CGSize = .zero
-    var positions: [CGPoint] = []
-    
-    init(in maxWidth: CGFloat, subviews: FlowLayout.Subviews, spacing: CGFloat) {
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var lineHeight: CGFloat = 0
-        
-        for subview in subviews {
-            let size = subview.sizeThatFits(ProposedViewSize.unspecified)
-            
-            if x + size.width > maxWidth && x > 0 {
-                x = 0
-                y += lineHeight + spacing
-                lineHeight = 0
-            }
-            
-            positions.append(CGPoint(x: x, y: y))
-            lineHeight = max(lineHeight, size.height)
-            x += size.width + spacing
-        }
-        
-        self.size = CGSize(width: maxWidth, height: y + lineHeight)
-    }
-}
-
-// MARK: - Helper Components
-
-struct MiyaShareSheetView: UIViewControllerRepresentable {
-    let activityItems: [Any]
-    
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(
-            activityItems: activityItems,
-            applicationActivities: nil
-        )
-    }
-    
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
-        // nothing to update
-    }
-}
-
-struct MiyaInsightChatSheet: View {
-    let alertItem: FamilyNotificationItem
-    @Environment(\.dismiss) private var dismiss
-    
-    @State private var inputText = ""
-    @State private var messages: [(role: String, text: String)] = []
-    @State private var isSending = false
-    @State private var errorText: String?
-    
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                if errorText != nil || messages.isEmpty {
-                    VStack(spacing: 12) {
-                        if let err = errorText {
-                            Text(err)
-                                .font(.system(size: 14))
-                                .foregroundColor(.red)
-                                .multilineTextAlignment(.center)
-                                .padding()
-                        }
-                        if messages.isEmpty {
-                            Text("Ask a question about this pattern")
-                                .font(.system(size: 15))
-                                .foregroundColor(.secondary)
-                                .padding()
-                        }
-                    }
-                    .frame(maxHeight: .infinity)
-                }
-                
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(Array(messages.enumerated()), id: \.offset) { _, msg in
-                            HStack {
-                                if msg.role == "user" {
-                                    Spacer()
-                                    Text(msg.text)
-                                        .font(.system(size: 15))
-                                        .padding(12)
-                                        .background(Color.blue.opacity(0.1))
-                                        .cornerRadius(12)
-                                        .frame(maxWidth: .infinity * 0.75, alignment: .trailing)
-                                } else {
-                                    Text(msg.text)
-                                        .font(.system(size: 15))
-                                        .padding(12)
-                                        .background(Color(.systemGray6))
-                                        .cornerRadius(12)
-                                        .frame(maxWidth: .infinity * 0.75, alignment: .leading)
-                                    Spacer()
-                                }
-                            }
-                        }
-                    }
-                    .padding()
-                }
-                
-                Divider()
-                
-                HStack(spacing: 12) {
-                    TextField("Ask a question...", text: $inputText)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(isSending)
-                    
-                    Button {
-                        Task { await send() }
-                    } label: {
-                        if isSending {
-                            ProgressView().scaleEffect(0.8)
-                        } else {
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.system(size: 28))
-                                .foregroundColor(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .gray : .blue)
-                        }
-                    }
-                    .disabled(isSending || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                .padding()
-            }
-            .navigationTitle("Ask Miya")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Close") { dismiss() }
-                }
-            }
-        }
-    }
-    
-    private func send() async {
-        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        inputText = ""
-        errorText = nil
-        
-        messages.append((role: "user", text: text))
-        isSending = true
-        defer { isSending = false }
-        
-        do {
-            // Extract alert_state_id from debugWhy (format: "serverPattern ... alertStateId=<uuid> ...")
-            guard let debugWhy = alertItem.debugWhy,
-                  debugWhy.contains("serverPattern"),
-                  let alertStateId = extractAlertStateId(from: debugWhy)
-            else {
-                errorText = "Ask Miya is available for server pattern alerts."
-                return
-            }
-            
-            let supabase = SupabaseConfig.client
-            let session = try await supabase.auth.session
-            guard let url = URL(string: "\(SupabaseConfig.supabaseURL)/functions/v1/miya_insight_chat") else { throw URLError(.badURL) }
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
-            req.setValue(SupabaseConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
-            req.httpBody = try JSONSerialization.data(withJSONObject: ["alert_state_id": alertStateId, "message": text])
-            
-            let (data, response) = try await URLSession.shared.data(for: req)
-            let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
-            let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            guard (obj?["ok"] as? Bool) == true else {
-                let errBody = (obj?["error"] as? String) ?? String(data: data, encoding: .utf8) ?? "Unknown"
-                throw NSError(domain: "miya_insight_chat", code: httpStatus, userInfo: [NSLocalizedDescriptionKey: "Chat failed (status \(httpStatus)): \(errBody)"])
-            }
-            let reply = obj?["reply"] as? String ?? "Sorry — I couldn't generate a response."
-            messages.append((role: "assistant", text: reply))
-        } catch {
-            errorText = error.localizedDescription
-        }
-    }
-    
-    private func extractAlertStateId(from debugWhy: String) -> String? {
-        // Format: "serverPattern ... alertStateId=<uuid> ..."
-        let pattern = "alertStateId=([a-f0-9-]+)"
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
-              let match = regex.firstMatch(in: debugWhy, options: [], range: NSRange(debugWhy.startIndex..., in: debugWhy)),
-              let range = Range(match.range(at: 1), in: debugWhy)
-        else { return nil }
-        return String(debugWhy[range])
-    }
-}
-
-// MARK: - Message Templates Sheet
-
-struct MessageTemplatesSheet: View {
-    let item: FamilyNotificationItem
-    let suggestedMessages: [(label: String, text: String)]
-    let onSendMessage: (String, MessagePlatform) -> Void
-    
-    @Environment(\.dismiss) private var dismiss
-    @State private var selectedMessageIndex: Int = 0
-    @State private var customMessage: String = ""
-    @State private var showCustomInput: Bool = false
-    
-    enum MessagePlatform {
-        case whatsapp
-        case imessage
-    }
-    
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                Text("Choose a message to send to \(item.memberName)")
-                    .font(.system(size: 16))
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.top, 20)
-                
-                // Pre-templated messages as pills
-                VStack(spacing: 12) {
-                    ForEach(suggestedMessages.indices, id: \.self) { index in
-                        Button {
-                            selectedMessageIndex = index
-                            showCustomInput = false
-                        } label: {
-                            HStack {
-                                Text(suggestedMessages[index].text)
-                                    .font(.system(size: 15))
-                                    .foregroundColor(.primary)
-                                    .multilineTextAlignment(.leading)
-                                Spacer()
-                                if selectedMessageIndex == index && !showCustomInput {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.blue)
-                                }
-                            }
-                            .padding(16)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(selectedMessageIndex == index && !showCustomInput
-                                          ? Color.blue.opacity(0.1)
-                                          : Color(.systemGray6))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(selectedMessageIndex == index && !showCustomInput
-                                            ? Color.blue
-                                            : Color.clear, lineWidth: 2)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    
-                    // Custom message option
-                    Button {
-                        showCustomInput = true
-                    } label: {
-                        HStack {
-                            Image(systemName: "pencil")
-                            Text("Write my own message")
-                                .font(.system(size: 15))
-                            Spacer()
-                            if showCustomInput {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.blue)
-                            }
-                        }
-                        .padding(16)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(showCustomInput ? Color.blue.opacity(0.1) : Color(.systemGray6))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(showCustomInput ? Color.blue : Color.clear, lineWidth: 2)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    
-                    if showCustomInput {
-                        TextField("Type your message...", text: $customMessage, axis: .vertical)
-                            .textFieldStyle(.roundedBorder)
-                            .lineLimit(3...6)
-                            .padding(.horizontal, 16)
-                    }
-                }
-                .padding(.horizontal, 20)
-                
-                Spacer()
-                
-                // Send buttons
-                VStack(spacing: 12) {
-                    Button {
-                        let message = showCustomInput ? customMessage : suggestedMessages[selectedMessageIndex].text
-                        onSendMessage(message, .whatsapp)
-                        dismiss()
-                    } label: {
-                        HStack {
-                            Image(systemName: "message.fill")
-                            Text("Send via WhatsApp")
-                                .font(.system(size: 16, weight: .semibold))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.green)
-                        .foregroundColor(.white)
-                        .cornerRadius(12)
-                    }
-                    .disabled(showCustomInput && customMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    
-                    Button {
-                        let message = showCustomInput ? customMessage : suggestedMessages[selectedMessageIndex].text
-                        onSendMessage(message, .imessage)
-                        dismiss()
-                    } label: {
-                        HStack {
-                            Image(systemName: "message.fill")
-                            Text("Send via iMessage")
-                                .font(.system(size: 16, weight: .semibold))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(12)
-                    }
-                    .disabled(showCustomInput && customMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 20)
-            }
-            .navigationTitle("Reach Out")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Animated Typing Dot
-struct TypingDot: View {
-    let delay: Double
-    @State private var isAnimating = false
-    
-    var body: some View {
-        Circle()
-            .fill(Color.gray.opacity(0.6))
-            .frame(width: 8, height: 8)
-            .scaleEffect(isAnimating ? 1.2 : 0.8)
-            .opacity(isAnimating ? 1.0 : 0.4)
-            .animation(
-                Animation.easeInOut(duration: 0.6)
-                    .repeatForever(autoreverses: true)
-                    .delay(delay),
-                value: isAnimating
-            )
-            .onAppear {
-                isAnimating = true
-            }
     }
 }

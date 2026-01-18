@@ -179,28 +179,28 @@ begin
         round(
           avg(member_scores.vitality_score_current) filter (
             where member_scores.vitality_score_current is not null
-              and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+              and member_scores.vitality_score_updated_at >= now() - interval '7 days'
           )
         )::int as family_vitality_score,
         count(member_scores.user_id) filter (
           where member_scores.vitality_score_current is not null
-            and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+            and member_scores.vitality_score_updated_at >= now() - interval '7 days'
         )::int as members_with_data,
         (select count(*) from active_members)::int as members_total,
         max(member_scores.vitality_score_updated_at) filter (
           where member_scores.vitality_score_current is not null
-            and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+            and member_scores.vitality_score_updated_at >= now() - interval '7 days'
         ) as last_updated_at,
         (
           count(member_scores.user_id) filter (
             where member_scores.vitality_score_current is not null
-              and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+              and member_scores.vitality_score_updated_at >= now() - interval '7 days'
           ) > 0
         ) as has_recent_data,
         round(
           avg(member_scores.vitality_progress_score_current) filter (
             where member_scores.vitality_progress_score_current is not null
-              and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+              and member_scores.vitality_score_updated_at >= now() - interval '7 days'
           )
         )::int as family_progress_score
       from member_scores;
@@ -226,22 +226,22 @@ begin
         round(
           avg(member_scores.vitality_score_current) filter (
             where member_scores.vitality_score_current is not null
-              and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+              and member_scores.vitality_score_updated_at >= now() - interval '7 days'
           )
         )::int as family_vitality_score,
         count(member_scores.user_id) filter (
           where member_scores.vitality_score_current is not null
-            and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+            and member_scores.vitality_score_updated_at >= now() - interval '7 days'
         )::int as members_with_data,
         (select count(*) from active_members)::int as members_total,
         max(member_scores.vitality_score_updated_at) filter (
           where member_scores.vitality_score_current is not null
-            and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+            and member_scores.vitality_score_updated_at >= now() - interval '7 days'
         ) as last_updated_at,
         (
           count(member_scores.user_id) filter (
             where member_scores.vitality_score_current is not null
-              and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+              and member_scores.vitality_score_updated_at >= now() - interval '7 days'
           ) > 0
         ) as has_recent_data,
         null::int as family_progress_score
@@ -270,28 +270,28 @@ begin
         round(
           avg(member_scores.vitality_score_current) filter (
             where member_scores.vitality_score_current is not null
-              and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+              and member_scores.vitality_score_updated_at >= now() - interval '7 days'
           )
         )::int as family_vitality_score,
         count(member_scores.user_id) filter (
           where member_scores.vitality_score_current is not null
-            and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+            and member_scores.vitality_score_updated_at >= now() - interval '7 days'
         )::int as members_with_data,
         (select count(*) from active_members)::int as members_total,
         max(member_scores.vitality_score_updated_at) filter (
           where member_scores.vitality_score_current is not null
-            and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+            and member_scores.vitality_score_updated_at >= now() - interval '7 days'
         ) as last_updated_at,
         (
           count(member_scores.user_id) filter (
             where member_scores.vitality_score_current is not null
-              and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+              and member_scores.vitality_score_updated_at >= now() - interval '7 days'
           ) > 0
         ) as has_recent_data,
         round(
           avg(member_scores.vitality_progress_score_current) filter (
             where member_scores.vitality_progress_score_current is not null
-              and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+              and member_scores.vitality_score_updated_at >= now() - interval '7 days'
           )
         )::int as family_progress_score
       from member_scores;
@@ -316,22 +316,22 @@ begin
         round(
           avg(member_scores.vitality_score_current) filter (
             where member_scores.vitality_score_current is not null
-              and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+              and member_scores.vitality_score_updated_at >= now() - interval '7 days'
           )
         )::int as family_vitality_score,
         count(member_scores.user_id) filter (
           where member_scores.vitality_score_current is not null
-            and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+            and member_scores.vitality_score_updated_at >= now() - interval '7 days'
         )::int as members_with_data,
         (select count(*) from active_members)::int as members_total,
         max(member_scores.vitality_score_updated_at) filter (
           where member_scores.vitality_score_current is not null
-            and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+            and member_scores.vitality_score_updated_at >= now() - interval '7 days'
         ) as last_updated_at,
         (
           count(member_scores.user_id) filter (
             where member_scores.vitality_score_current is not null
-              and member_scores.vitality_score_updated_at >= now() - interval '3 days'
+              and member_scores.vitality_score_updated_at >= now() - interval '7 days'
           ) > 0
         ) as has_recent_data,
         null::int as family_progress_score

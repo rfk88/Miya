@@ -388,34 +388,55 @@ Deno.serve(async (req) => {
 
       // SLEEP METRICS
       // -------------
+      // Handle nested Rook sleep structure: sleep_health.summary.sleep_summary.duration
+      const sleepDuration = 
+        deepFindByKey(body, "duration") ?? 
+        deepFindByKey(body, "sleep_summary") ?? 
+        body;
+      
       const sleepSeconds =
         asNumber(body.sleep_duration_seconds_int) ??
+        asNumber(deepFindByKey(sleepDuration, "sleep_duration_seconds_int")) ??
         asNumber(deepFindByKey(body, "sleep_duration_seconds_int")) ??
         asNumber(body.sleepDurationSeconds) ??
         asNumber(deepFindByKey(body, "sleepDurationSeconds"));
       const sleepMinutes = sleepSeconds != null ? Math.round(sleepSeconds / 60) : null;
       
+      if (isSleepSummary) {
+        console.log("🌙 MIYA_SLEEP_EXTRACTION", { 
+          sleepMinutes, 
+          sleepSeconds,
+          hasDuration: !!sleepDuration,
+          dataStructure: body.data_structure 
+        });
+      }
+      
       const deepSleepSeconds =
+        asNumber(deepFindByKey(sleepDuration, "deep_sleep_duration_seconds_int")) ??
         asNumber(deepFindByKey(body, "deep_sleep_duration_seconds_int")) ??
         asNumber(deepFindByKey(body, "deepSleepDuration"));
       const deepSleepMinutes = deepSleepSeconds != null ? Math.round(deepSleepSeconds / 60) : null;
       
       const remSleepSeconds =
+        asNumber(deepFindByKey(sleepDuration, "rem_sleep_duration_seconds_int")) ??
         asNumber(deepFindByKey(body, "rem_sleep_duration_seconds_int")) ??
         asNumber(deepFindByKey(body, "remSleepDuration"));
       const remSleepMinutes = remSleepSeconds != null ? Math.round(remSleepSeconds / 60) : null;
       
       const lightSleepSeconds =
+        asNumber(deepFindByKey(sleepDuration, "light_sleep_duration_seconds_int")) ??
         asNumber(deepFindByKey(body, "light_sleep_duration_seconds_int")) ??
         asNumber(deepFindByKey(body, "lightSleepDuration"));
       const lightSleepMinutes = lightSleepSeconds != null ? Math.round(lightSleepSeconds / 60) : null;
       
       const awakeSeconds =
+        asNumber(deepFindByKey(sleepDuration, "time_awake_during_sleep_seconds_int")) ??
         asNumber(deepFindByKey(body, "time_awake_during_sleep_seconds_int")) ??
         asNumber(deepFindByKey(body, "awakeTime"));
       const awakeMinutes = awakeSeconds != null ? Math.round(awakeSeconds / 60) : null;
       
       const timeInBedSeconds =
+        asNumber(deepFindByKey(sleepDuration, "time_in_bed_seconds_int")) ??
         asNumber(deepFindByKey(body, "time_in_bed_seconds_int")) ??
         asNumber(deepFindByKey(body, "timeInBed"));
       
@@ -426,16 +447,21 @@ Deno.serve(async (req) => {
           : null;
       
       const timeToFallAsleepSeconds =
+        asNumber(deepFindByKey(sleepDuration, "time_to_fall_asleep_seconds_int")) ??
         asNumber(deepFindByKey(body, "time_to_fall_asleep_seconds_int")) ??
         asNumber(deepFindByKey(body, "sleepLatency"));
       const timeToFallAsleepMinutes = timeToFallAsleepSeconds != null ? Math.round(timeToFallAsleepSeconds / 60) : null;
 
       // HEART METRICS
       // -------------
+      // Handle nested Rook sleep structure for heart rate data
+      const heartRate = deepFindByKey(body, "heart_rate") ?? body;
+      
       const hrvMs =
         isSleepSummary
           ? (asNumber(body.hrv_ms) ??
               asNumber(body.hrv) ??
+              asNumber(deepFindByKey(heartRate, "hrv_avg_sdnn_float")) ??
               asNumber(deepFindByKey(body, "hrv_avg_sdnn_float")) ??
               asNumber(deepFindByKey(body, "hrv_sdnn_ms_double")) ??
               asNumber(deepFindByKey(body, "hrvAvgSdnnNumber")))
@@ -443,7 +469,8 @@ Deno.serve(async (req) => {
       
       const hrvRmssdMs =
         isSleepSummary
-          ? (asNumber(deepFindByKey(body, "hrv_rmssd_ms_double")) ??
+          ? (asNumber(deepFindByKey(heartRate, "hrv_avg_rmssd_float")) ??
+              asNumber(deepFindByKey(body, "hrv_rmssd_ms_double")) ??
               asNumber(deepFindByKey(body, "hrv_avg_rmssd_float")) ??
               asNumber(deepFindByKey(body, "hrvAvgRmssdNumber")))
           : null;
@@ -463,11 +490,16 @@ Deno.serve(async (req) => {
 
       // RESPIRATORY METRICS
       // -------------------
+      // Handle nested Rook sleep structure for breathing data
+      const breathing = deepFindByKey(body, "breathing") ?? body;
+      
       const breathsAvgPerMin =
+        asNumber(deepFindByKey(breathing, "breaths_avg_per_min_int")) ??
         asNumber(deepFindByKey(body, "breaths_avg_per_min_int")) ??
         asNumber(deepFindByKey(body, "breathingRate"));
       
       const spo2AvgPct =
+        asNumber(deepFindByKey(breathing, "saturation_avg_percentage_int")) ??
         asNumber(deepFindByKey(body, "saturation_avg_percentage_int")) ??
         asNumber(deepFindByKey(body, "bloodOxygenSaturation"));
 
@@ -509,31 +541,62 @@ Deno.serve(async (req) => {
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       
       // Determine Miya user UUID:
-      // 1. If rookUserId is already a UUID, use it directly (SDK set client_user_id correctly)
-      // 2. If not, look up in rook_user_mapping table
+      // CRITICAL: ALWAYS look up existing mappings first
+      // NEVER assume rookUserId == Supabase user_id, even if it's a valid UUID!
+      // The Rook SDK may generate device UUIDs that are NOT the user's Supabase ID.
       let userId: string | null = null;
       let mappingSource: string | null = null;
       
-      if (rookUserId && uuidRegex.test(rookUserId)) {
-        userId = rookUserId;
-        mappingSource = "direct_uuid";
-        console.log("🟢 MIYA_ROOK_USER_ID_DIRECT", { rookUserId, userId });
-      } else if (rookUserId) {
-        // Not a UUID, try to map it
-        const { data: mapping, error: mappingErr } = await supabase
-          .from("rook_user_mapping")
+      if (rookUserId) {
+        // Step 1: Check if we've seen this device before (existing wearable_daily_metrics)
+        const { data: existingMetrics, error: metricsErr } = await supabase
+          .from("wearable_daily_metrics")
           .select("user_id")
           .eq("rook_user_id", rookUserId)
+          .not("user_id", "is", null)
+          .limit(1)
           .maybeSingle();
         
-        if (mappingErr) {
-          console.error("🔴 MIYA_MAPPING_LOOKUP_ERROR", { rookUserId, error: mappingErr.message });
-        } else if (mapping?.user_id) {
-          userId = mapping.user_id;
-          mappingSource = "mapping_table";
-          console.log("🟢 MIYA_ROOK_USER_ID_MAPPED", { rookUserId, userId, source: mappingSource });
+        if (!metricsErr && existingMetrics?.user_id) {
+          userId = existingMetrics.user_id;
+          mappingSource = "existing_metrics";
+          console.log("🟢 MIYA_ROOK_USER_ID_FROM_EXISTING", { rookUserId, userId });
         } else {
-          console.log("🟡 MIYA_ROOK_USER_ID_UNMAPPED", { rookUserId, hint: "Need to add mapping for this Rook user ID" });
+          // Step 2: Try rook_user_mapping table
+          const { data: mapping, error: mappingErr } = await supabase
+            .from("rook_user_mapping")
+            .select("user_id")
+            .eq("rook_user_id", rookUserId)
+            .maybeSingle();
+          
+          if (!mappingErr && mapping?.user_id) {
+            userId = mapping.user_id;
+            mappingSource = "mapping_table";
+            console.log("🟢 MIYA_ROOK_USER_ID_MAPPED", { rookUserId, userId });
+          } else {
+            // Step 3: LAST RESORT - check if rookUserId exactly matches a user_profile.user_id
+            // This handles the rare case where setUserId() actually worked correctly
+            if (uuidRegex.test(rookUserId)) {
+              const { data: profile, error: profileErr } = await supabase
+                .from("user_profiles")
+                .select("user_id")
+                .eq("user_id", rookUserId)
+                .maybeSingle();
+              
+              if (!profileErr && profile) {
+                userId = rookUserId;
+                mappingSource = "direct_match";
+                console.log("🟢 MIYA_ROOK_USER_ID_DIRECT_MATCH", { rookUserId, userId });
+              } else {
+                console.log("🟡 MIYA_ROOK_USER_ID_UNMAPPED", { 
+                  rookUserId, 
+                  hint: "New device - needs mapping in rook_user_mapping or correct setUserId() call" 
+                });
+              }
+            } else {
+              console.log("🟡 MIYA_ROOK_USER_ID_NOT_UUID", { rookUserId });
+            }
+          }
         }
       }
 

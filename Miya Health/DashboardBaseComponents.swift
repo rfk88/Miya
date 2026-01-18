@@ -82,7 +82,7 @@ enum DashboardDesign {
     }
     
     static var cardBackgroundColor: Color {
-        Color.white.opacity(0.7)  // Base for glass effect
+        Color.white  // Solid white, no transparency
     }
     
     static var groupedBackground: Color {
@@ -90,11 +90,11 @@ enum DashboardDesign {
     }
     
     static var secondaryBackgroundColor: Color {
-        Color(.secondarySystemBackground)
+        Color(red: 0.97, green: 0.97, blue: 0.98)  // Light gray, no system adaptation
     }
     
     static var tertiaryBackgroundColor: Color {
-        Color(.tertiarySystemBackground)
+        Color(red: 0.95, green: 0.95, blue: 0.97)  // Fixed light gray
     }
     
     // Text colors (matching onboarding - use actual Miya colors)
@@ -110,36 +110,16 @@ enum DashboardDesign {
         Color.miyaTextSecondary.opacity(0.7)  // Lighter version
     }
     
-    // MARK: - Glass Effect Helper (with stronger shadows and gloss)
+    // MARK: - Glass Effect Helper (clean white cards)
     static func glassCardBackground(tint: Color = .white) -> some View {
-        ZStack {
-            // Base white background
-            RoundedRectangle(cornerRadius: cardCornerRadius)
-                .fill(Color.white)
-            
-            // Glass material overlay for gloss
-            RoundedRectangle(cornerRadius: cardCornerRadius)
-                .fill(.ultraThinMaterial)
-            
-            // Gloss gradient for depth
-            RoundedRectangle(cornerRadius: cardCornerRadius)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.4),
-                            Color.white.opacity(0.05)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        }
-        .shadow(
-            color: cardShadow.color,
-            radius: cardShadow.radius,
-            x: cardShadow.x,
-            y: cardShadow.y
-        )
+        RoundedRectangle(cornerRadius: cardCornerRadius)
+            .fill(Color.white)
+            .shadow(
+                color: cardShadow.color,
+                radius: cardShadow.radius,
+                x: cardShadow.x,
+                y: cardShadow.y
+            )
     }
     
     // MARK: - Card Modifier (glass effect with enhanced shadows)
@@ -256,12 +236,6 @@ struct DashboardTopBar: View {
             DashboardDesign.miyaEmeraldSoft
                 .ignoresSafeArea(edges: [.top])
 
-            // Subtle blur effect for depth (refined opacity)
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .ignoresSafeArea(edges: [.top])
-                .opacity(0.1)
-
             HStack(spacing: 0) {
                 // LEFT — Burger menu (premium tap target)
                 Button {
@@ -310,5 +284,48 @@ struct DashboardTopBar: View {
             .padding(.horizontal, DashboardDesign.smallSpacing)
         }
         .frame(height: 56)
+    }
+}
+
+// MARK: - Pillar Status Indicator
+
+struct PillarStatusIndicator: View {
+    let name: String
+    let current: Int
+    let target: Int
+    
+    var progress: Double {
+        Double(current) / Double(target)
+    }
+    
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack {
+                Circle()
+                    .stroke(Color.gray.opacity(0.2), lineWidth: 3)
+                    .frame(width: 40, height: 40)
+                
+                Circle()
+                    .trim(from: 0, to: min(progress, 1.0))
+                    .stroke(Color.miyaPrimary, lineWidth: 3)
+                    .frame(width: 40, height: 40)
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeInOut(duration: 0.5), value: progress)
+                
+                if progress >= 1.0 {
+                    Image(systemName: "checkmark")
+                        .foregroundColor(.green)
+                        .font(.system(size: 16, weight: .bold))
+                } else {
+                    Text("\(current)")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.miyaTextPrimary)
+                }
+            }
+            
+            Text(name)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
     }
 }

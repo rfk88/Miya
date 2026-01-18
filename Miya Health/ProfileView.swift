@@ -219,7 +219,7 @@ struct SemiCircleGauge: View {
                 // Background arc (full semicircle)
                 ArcShape(progress: 1.0)
                     .stroke(
-                        Color(.systemGray5),
+                        Color(red: 0.90, green: 0.90, blue: 0.92),
                         style: StrokeStyle(lineWidth: 10, lineCap: .round)
                     )
                 

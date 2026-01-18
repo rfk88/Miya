@@ -1,11 +1,15 @@
 -- =====================================================
 -- RPC: get_family_pattern_alerts(family_id uuid)
 -- Returns active pattern alerts (pattern_alert_state) for all members in a family.
+-- UPDATED: Excludes the calling user's own alerts (self-notifications filtered)
 --
 -- Authorization:
 -- - Caller must be a member of the family (auth.uid()).
 -- - Uses SECURITY DEFINER so a caregiver can read member alerts.
 -- =====================================================
+
+-- Drop existing function first (if it exists)
+drop function if exists public.get_family_pattern_alerts(uuid);
 
 create or replace function public.get_family_pattern_alerts(
   family_id uuid
@@ -65,6 +69,7 @@ begin
     from public.family_members fm
     where fm.family_id = get_family_pattern_alerts.family_id
       and fm.user_id is not null
+      and fm.user_id != auth.uid()  -- 🚨 EXCLUDE CURRENT USER
   )
     and pas.episode_status = 'active'
   order by pas.current_level desc, pas.active_since desc;

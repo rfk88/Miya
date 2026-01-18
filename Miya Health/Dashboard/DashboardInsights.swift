@@ -109,7 +109,7 @@ struct FamilyVitalityInsightsCard: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("No recent data yet")
                             .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.primary)
+                            .foregroundColor(.miyaTextPrimary)
                         
                         Text("Connect wearables and sync data to see family insights.")
                             .font(.system(size: 13))
@@ -150,7 +150,7 @@ struct FamilyVitalityInsightsCard: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(snapshot.headline)
                             .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.primary)
+                            .foregroundColor(.miyaTextPrimary)
                             .fixedSize(horizontal: false, vertical: true)
                         
                         if let sub = snapshot.subheadline {
@@ -253,7 +253,7 @@ struct TrendInsightCard: View {
                     // Title: "Dad · Sleep"
                     Text(insight.title)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.primary)
+                        .foregroundColor(.miyaTextPrimary)
                     
                     // Body: one-liner insight
                     Text(insight.body)
@@ -283,7 +283,7 @@ struct TrendInsightCard: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+                .fill(Color(red: 0.97, green: 0.97, blue: 0.98))
         )
     }
 }
@@ -319,7 +319,7 @@ struct RecommendationRowView: View {
             
             Text(row.text)
                 .font(.system(size: 13))
-                .foregroundColor(.primary)
+                .foregroundColor(.miyaTextPrimary)
                 .fixedSize(horizontal: false, vertical: true)
             
             Spacer()
@@ -327,7 +327,7 @@ struct RecommendationRowView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+                .fill(Color(red: 0.97, green: 0.97, blue: 0.98))
         )
         .onTapGesture {
             onTap()
@@ -382,7 +382,7 @@ struct FamilyHelpActionCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(card.title)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.primary)
+                        .foregroundColor(.miyaTextPrimary)
                     
                     Text(card.recommendation)
                         .font(.system(size: 12))
@@ -411,7 +411,7 @@ struct FamilyHelpActionCard: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+                .fill(Color(red: 0.97, green: 0.97, blue: 0.98))
         )
     }
 }

@@ -48,6 +48,9 @@ struct VitalityJSONParser {
                 results.append(VitalityData(
                     date: date,
                     sleepHours: record.sleep_hours,
+                    restorativeSleepPercent: record.restorative_sleep_percent,
+                    sleepEfficiencyPercent: record.sleep_efficiency_percent,
+                    awakePercent: record.awake_percent,
                     steps: record.steps,
                     hrvMs: record.hrv_ms,
                     restingHr: record.resting_hr.map { Double($0) }
@@ -69,6 +72,9 @@ struct VitalityJSONParser {
 private struct VitalityRecord: Codable {
     let date: String
     let sleep_hours: Double?
+    let restorative_sleep_percent: Double?
+    let sleep_efficiency_percent: Double?
+    let awake_percent: Double?
     let steps: Int?
     let hrv_ms: Double?
     let resting_hr: Int?
