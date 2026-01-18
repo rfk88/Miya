@@ -363,11 +363,81 @@ REMEMBER YOUR MISSION:
       };
     }
     
+    // Extract member health profile if available
+    const memberHealthProfile = clientContext?.member_health_profile || {};
+    
+    // Build health profile summary for AI
+    let healthProfileText = '';
+    if (Object.keys(memberHealthProfile).length > 0) {
+      const parts: string[] = [];
+      
+      // Demographics
+      if (memberHealthProfile.age) parts.push(`${memberHealthProfile.age} years old`);
+      if (memberHealthProfile.gender) parts.push(`${memberHealthProfile.gender}`);
+      
+      // Physical measurements
+      if (memberHealthProfile.bmi) {
+        parts.push(`BMI: ${memberHealthProfile.bmi}`);
+      } else if (memberHealthProfile.weight_kg && memberHealthProfile.height_cm) {
+        parts.push(`${memberHealthProfile.weight_kg}kg, ${memberHealthProfile.height_cm}cm`);
+      }
+      
+      // Risk assessment
+      if (memberHealthProfile.risk_band) {
+        parts.push(`Cardiovascular risk: ${memberHealthProfile.risk_band}`);
+      }
+      if (memberHealthProfile.optimal_vitality_target) {
+        parts.push(`Target vitality score: ${memberHealthProfile.optimal_vitality_target}/100`);
+      }
+      
+      // Health conditions
+      const conditions: string[] = [];
+      if (memberHealthProfile.blood_pressure_status && memberHealthProfile.blood_pressure_status !== 'normal') {
+        conditions.push(`BP: ${memberHealthProfile.blood_pressure_status}`);
+      }
+      if (memberHealthProfile.diabetes_status && memberHealthProfile.diabetes_status !== 'none') {
+        conditions.push(`Diabetes: ${memberHealthProfile.diabetes_status}`);
+      }
+      if (memberHealthProfile.smoking_status && memberHealthProfile.smoking_status !== 'never') {
+        conditions.push(`Smoking: ${memberHealthProfile.smoking_status}`);
+      }
+      if (memberHealthProfile.has_prior_heart_attack) {
+        conditions.push('Prior heart attack');
+      }
+      if (memberHealthProfile.has_prior_stroke) {
+        conditions.push('Prior stroke');
+      }
+      
+      // Family history
+      const familyHistory: string[] = [];
+      if (memberHealthProfile.family_heart_disease_early) {
+        familyHistory.push('early heart disease');
+      }
+      if (memberHealthProfile.family_stroke_early) {
+        familyHistory.push('early stroke');
+      }
+      if (memberHealthProfile.family_type2_diabetes) {
+        familyHistory.push('type 2 diabetes');
+      }
+      
+      if (parts.length > 0) {
+        healthProfileText = `\n\nMEMBER HEALTH PROFILE:\n${parts.join(', ')}`;
+      }
+      if (conditions.length > 0) {
+        healthProfileText += `\nHealth conditions: ${conditions.join(', ')}`;
+      }
+      if (familyHistory.length > 0) {
+        healthProfileText += `\nFamily history: ${familyHistory.join(', ')}`;
+      }
+      
+      healthProfileText += '\n\nUSE THIS CONTEXT: When making recommendations, consider their age, risk profile, and health conditions. Tailor advice to their specific situation (e.g., gentler recommendations for higher risk individuals, age-appropriate suggestions).';
+    }
+    
     // Add structured context as "source of truth"
     const systemWithContext = system + `
 
 HEALTH INSIGHT (source of truth):
-${JSON.stringify(healthInsight, null, 2)}
+${JSON.stringify(healthInsight, null, 2)}${healthProfileText}
 
 Only reference data from above. If asked about something not listed, say you don't have that data.`;
 

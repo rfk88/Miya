@@ -466,6 +466,7 @@ struct FamilyNotificationDetailSheet: View {
     @State private var isInitializing = true
     @State private var chatError: String?
     @State private var alertStateId: String?
+    @State private var memberHealthProfile: [String: Any]?  // Fetched member health data for AI context
     @State private var retryCount = 0  // Track retry attempts to prevent infinite loops
     
     private var config: PillarConfig {
@@ -1038,6 +1039,7 @@ struct FamilyNotificationDetailSheet: View {
         await loadHistory()
         await calculateOptimalTarget()
         await fetchAIInsightIfPossible()
+        await loadMemberHealthProfile()  // 🔥 NEW: Load health context for AI
         
         // Generate warm opening message
         let openingMessage = generateOpeningMessage()
@@ -1052,6 +1054,127 @@ struct FamilyNotificationDetailSheet: View {
             
             // Hide loading state
             isInitializing = false
+        }
+    }
+    
+    // MARK: - Load Member Health Profile
+    
+    private func loadMemberHealthProfile() async {
+        guard let memberUserId = item.memberUserId else {
+            print("⚠️ CHAT: No memberUserId available for health profile")
+            return
+        }
+        
+        do {
+            // Fetch user profile from database
+            struct UserProfileRow: Decodable {
+                let user_id: String?
+                let gender: String?
+                let ethnicity: String?
+                let date_of_birth: String?
+                let height_cm: Double?
+                let weight_kg: Double?
+                let risk_band: String?
+                let risk_points: Int?
+                let optimal_vitality_target: Int?
+                let blood_pressure_status: String?
+                let diabetes_status: String?
+                let smoking_status: String?
+                let has_prior_heart_attack: Bool?
+                let has_prior_stroke: Bool?
+                let family_heart_disease_early: Bool?
+                let family_stroke_early: Bool?
+                let family_type2_diabetes: Bool?
+            }
+            
+            let supabase = SupabaseConfig.client
+            let profiles: [UserProfileRow] = try await supabase
+                .from("user_profiles")
+                .select("user_id,gender,ethnicity,date_of_birth,height_cm,weight_kg,risk_band,risk_points,optimal_vitality_target,blood_pressure_status,diabetes_status,smoking_status,has_prior_heart_attack,has_prior_stroke,family_heart_disease_early,family_stroke_early,family_type2_diabetes")
+                .eq("user_id", value: memberUserId)
+                .limit(1)
+                .execute()
+                .value
+            
+            guard let profile = profiles.first else {
+                print("⚠️ CHAT: No profile found for user \(memberUserId)")
+                return
+            }
+            
+            var profileData: [String: Any] = [:]
+            
+            // Demographics
+            if let age = memberAge {
+                profileData["age"] = age
+            }
+            if let gender = profile.gender {
+                profileData["gender"] = gender
+            }
+            if let ethnicity = profile.ethnicity {
+                profileData["ethnicity"] = ethnicity
+            }
+            
+            // Physical measurements
+            if let heightCm = profile.height_cm {
+                profileData["height_cm"] = heightCm
+            }
+            if let weightKg = profile.weight_kg {
+                profileData["weight_kg"] = weightKg
+                // Calculate BMI if we have both height and weight
+                if let heightCm = profile.height_cm, heightCm > 0 {
+                    let heightM = heightCm / 100.0
+                    let bmi = weightKg / (heightM * heightM)
+                    profileData["bmi"] = String(format: "%.1f", bmi)
+                }
+            }
+            
+            // Risk assessment
+            if let riskBand = profile.risk_band {
+                profileData["risk_band"] = riskBand
+            }
+            if let riskPoints = profile.risk_points {
+                profileData["risk_points"] = riskPoints
+            }
+            if let optimalTarget = profile.optimal_vitality_target {
+                profileData["optimal_vitality_target"] = optimalTarget
+            }
+            
+            // Health conditions
+            if let bpStatus = profile.blood_pressure_status {
+                profileData["blood_pressure_status"] = bpStatus
+            }
+            if let diabStatus = profile.diabetes_status {
+                profileData["diabetes_status"] = diabStatus
+            }
+            if let smokingStatus = profile.smoking_status {
+                profileData["smoking_status"] = smokingStatus
+            }
+            if let priorHeartAttack = profile.has_prior_heart_attack {
+                profileData["has_prior_heart_attack"] = priorHeartAttack
+            }
+            if let priorStroke = profile.has_prior_stroke {
+                profileData["has_prior_stroke"] = priorStroke
+            }
+            
+            // Family history
+            if let familyHeart = profile.family_heart_disease_early {
+                profileData["family_heart_disease_early"] = familyHeart
+            }
+            if let familyStroke = profile.family_stroke_early {
+                profileData["family_stroke_early"] = familyStroke
+            }
+            if let familyDiabetes = profile.family_type2_diabetes {
+                profileData["family_type2_diabetes"] = familyDiabetes
+            }
+            
+            await MainActor.run {
+                memberHealthProfile = profileData
+                print("✅ CHAT: Loaded health profile with \(profileData.count) fields")
+            }
+            
+        } catch {
+            print("⚠️ CHAT: Failed to load member health profile: \(error.localizedDescription)")
+            // Non-critical - chat will work without health context
         }
     }
     
@@ -1072,6 +1195,12 @@ struct FamilyNotificationDetailSheet: View {
             "severity": severityLabel,
             "duration_days": parseDuration(from: item.debugWhy)
         ]
+        
+        // 🔥 NEW: Add comprehensive user health profile context
+        // We'll fetch this asynchronously when loading history, store it in state
+        if let profileData = memberHealthProfile {
+            context["member_health_profile"] = profileData
+        }
         
         // Add available metrics data
         if !historyRows.isEmpty {

@@ -6243,9 +6243,17 @@ struct LoginView: View {
             // 2. Restore currentFamilyId from UserDefaults (backup)
             dataManager.restorePersistedState()
             
-            // 3. 🔥 LOAD USER PROFILE FROM DATABASE
+            // 3. Dismiss immediately to prevent UI freeze
+            await MainActor.run {
+                isLoading = false
+                dismiss()
+                onSuccess()
+            }
+            
+            // 4. 🔥 LOAD USER PROFILE FROM DATABASE IN BACKGROUND
+            // This happens AFTER dismissal so UI doesn't freeze
             if let profile = try await dataManager.loadUserProfile() {
-                print("📥 LoginView: Loading profile data into OnboardingManager")
+                print("📥 LoginView: Loading profile data into OnboardingManager (background)")
                 
                 // Populate OnboardingManager with database data
                 await MainActor.run {
@@ -6341,16 +6349,19 @@ struct LoginView: View {
             print("✅ GUIDED_INVITEE_LOGIN: memberId=\(onboardingManager.invitedMemberId ?? "nil") status=\(onboardingManager.guidedSetupStatus?.rawValue ?? "nil") currentStep=\(onboardingManager.currentStep)")
             #endif
             
-            await MainActor.run {
-                isLoading = false
-                dismiss()
-                onSuccess()
-            }
+            print("✅ LoginView: Background profile loading complete")
+            
         } catch {
-            await MainActor.run {
-                isLoading = false
-                errorMessage = error.localizedDescription
-                print("❌ LoginView: Login failed - \(error.localizedDescription)")
+            // Only show error if we haven't dismissed yet (auth failed)
+            // If error happens during background profile load, just log it
+            if isLoading {
+                await MainActor.run {
+                    isLoading = false
+                    errorMessage = error.localizedDescription
+                    print("❌ LoginView: Login failed - \(error.localizedDescription)")
+                }
+            } else {
+                print("⚠️ LoginView: Background profile load error (non-critical) - \(error.localizedDescription)")
             }
         }
     }
