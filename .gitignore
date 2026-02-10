@@ -100,3 +100,13 @@ Miya Health/SupabaseConfig.swift
 *.key
 
 
+
+# macOS / local
+.DS_Store
+
+# Supabase temp
+supabase/.temp/
+
+# Local IDE
+xcuserdata/
+*.code-workspace
