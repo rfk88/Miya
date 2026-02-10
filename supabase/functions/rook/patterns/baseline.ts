@@ -84,3 +84,76 @@ export function computeBaselineForEndDate(
   };
 }
 
+/**
+ * Detect if there's a data gap (zero values or missing days)
+ * @param recentDays - Array of recent day values
+ * @returns true if gap detected
+ */
+function hasDataGap(recentDays: Array<{ date: string; value: number | null }>): boolean {
+  // Check for zero values (user didn't wear device)
+  const hasZero = recentDays.some(day => day.value === 0);
+  
+  // Check for null/missing values
+  const hasMissing = recentDays.some(day => day.value === null);
+  
+  return hasZero || hasMissing;
+}
+
+/**
+ * Enhanced baseline computation with gap detection and minimum data check
+ * Returns baseline, recent, gap detection, and minimum data validation
+ * @param allDays - All available daily data points
+ * @param endDate - End date for computation (YYYY-MM-DD)
+ * @param metricName - Name of the metric being analyzed
+ * @returns Object with baseline, recent, gap detection, and data sufficiency
+ */
+export function computeBaselineWithGapDetection(
+  allDays: Array<{ date: string; value: number | null }>,
+  endDate: string,
+  metricName: string
+): {
+  baseline: number;
+  recent: number;
+  isGapDetected: boolean;
+  hasMinimumData: boolean;
+  totalDays: number;
+} | null {
+  // Check minimum 7-day requirement
+  const hasMinimumData = allDays.length >= 7;
+  
+  // Try to compute baseline using existing function
+  const result = computeBaselineForEndDate(allDays, endDate, metricName);
+  
+  if (!result) {
+    return {
+      baseline: 0,
+      recent: 0,
+      isGapDetected: false,
+      hasMinimumData,
+      totalDays: allDays.length
+    };
+  }
+  
+  // Check for data gap in recent period (last 3 days)
+  const recentEnd = allDays.findIndex(d => d.date === endDate);
+  if (recentEnd === -1) {
+    return {
+      baseline: result.baseline,
+      recent: result.recent,
+      isGapDetected: false,
+      hasMinimumData,
+      totalDays: allDays.length
+    };
+  }
+  
+  const recentDays = allDays.slice(Math.max(0, recentEnd - 2), recentEnd + 1);
+  const isGapDetected = hasDataGap(recentDays);
+  
+  return {
+    baseline: result.baseline,
+    recent: result.recent,
+    isGapDetected,
+    hasMinimumData,
+    totalDays: allDays.length
+  };
+}

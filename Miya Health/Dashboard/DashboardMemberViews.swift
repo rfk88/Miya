@@ -45,7 +45,8 @@ struct FamilyMembersStrip: View {
                     FamilyMemberProfileView(
                         memberUserId: uid,
                         memberName: member.name,
-                        familyId: fid
+                        familyId: fid,
+                        isCurrentUser: member.isMe
                     )
                 } else {
                 ProfileView(

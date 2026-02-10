@@ -229,9 +229,9 @@ struct LandingView: View {
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var dataManager: DataManager
     
-    /// Global loading flag (auth/data). Keep UI consistent without touching workflows.
+    /// Global loading flag (auth/data/profile). Keep UI consistent without touching workflows.
     private var isGlobalLoading: Bool {
-        authManager.isLoading || dataManager.isLoading
+        authManager.isLoading || dataManager.isLoading || authManager.isLoadingProfile
     }
     
     /// Returns the view for the saved onboarding step
@@ -260,14 +260,12 @@ struct LandingView: View {
         case 5:
             MedicalHistoryView()
         case 6:
-            RiskResultsView()
-        case 7:
             if onboardingManager.isInvitedUser {
                 AlertsChampionView()
             } else {
                 FamilyMembersInviteView()
             }
-        case 8:
+        case 7:
             AlertsChampionView()
         default:
             SuperadminOnboardingView()
@@ -285,6 +283,11 @@ struct LandingView: View {
                 NavigationStack {
                     GuidedSetupReviewView(memberId: memberId)
                 }
+            }
+            // LOADING GUARD: If authenticated but profile is loading, show loading state (prevents onboarding flash)
+            else if authManager.isAuthenticated && authManager.isLoadingProfile {
+                // Show empty view - loading overlay will handle the UI
+                Color.clear
             }
             // If authenticated and onboarding is complete, show dashboard
             else if authManager.isAuthenticated && onboardingManager.isOnboardingComplete {
@@ -910,7 +913,7 @@ struct SuperadminOnboardingView: View {
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
     
-    private let totalSteps: Int = 8
+    private let totalSteps: Int = 7
     private let currentStep: Int = 1
     
     private var passwordsMatch: Bool {
@@ -1229,7 +1232,7 @@ struct FamilySetupView: View {
     @State private var errorMessage: String = ""
     @State private var navigateToNextStep: Bool = false
     
-    private let totalSteps: Int = 8
+    private let totalSteps: Int = 7
     private let currentStep: Int = 2
     
     private var isFormValid: Bool {
@@ -1566,8 +1569,8 @@ struct WearableSelectionView: View {
     @State private var authorizationDataSource: String? = nil
     @State private var authorizationDataSourceName: String? = nil
     
-    private let totalSteps: Int = 8
-    private let currentStep: Int = 3
+    private let totalSteps: Int = 7
+    private let currentStep: Int = 2
     
     private var canContinue: Bool {
         let can = !connectedWearables.isEmpty
@@ -1696,9 +1699,9 @@ struct WearableSelectionView: View {
                     } else {
                         // Navigation depends on whether this is a guided setup invite
                         if isGuidedSetupInvite {
-                            // Guided Setup: After wearables, take them to vitality setup (RiskResultsView) and then dashboard.
+                            // Guided Setup: After wearables, take them directly to onboarding complete (dashboard).
                             NavigationLink {
-                                RiskResultsView()
+                                OnboardingCompleteView(membersCount: 0)
                                     .environmentObject(onboardingManager)
                                     .environmentObject(dataManager)
                             } label: {
@@ -2190,8 +2193,8 @@ struct AboutYouView: View {
     @EnvironmentObject var dataManager: DataManager
     @EnvironmentObject var onboardingManager: OnboardingManager
     
-    private let totalSteps: Int = 8
-    private let currentStep: Int = 4
+    private let totalSteps: Int = 7
+    private let currentStep: Int = 3
     
     @State private var selectedGender: Gender? = nil
     @State private var dateOfBirth: Date = Calendar.current.date(byAdding: .year, value: -30, to: Date()) ?? Date()
@@ -2215,6 +2218,11 @@ struct AboutYouView: View {
     private var age: Int {
         let components = Calendar.current.dateComponents([.year], from: dateOfBirth, to: Date())
         return components.year ?? 0
+    }
+    
+    private var showBreakouts: Bool {
+        // Show educational breakouts only for self-onboarding (not guided setup)
+        onboardingManager.guidedSetupStatus == nil
     }
     
     // Convert imperial to metric for storage
@@ -2618,7 +2626,15 @@ struct AboutYouView: View {
                 
                 // Hidden NavigationLink for programmatic navigation
                 NavigationLink(
-                    destination: HeartHealthView(),
+                    destination: Group {
+                        if showBreakouts {
+                            Breakout1View()
+                                .environmentObject(onboardingManager)
+                                .environmentObject(dataManager)
+                        } else {
+                            HeartHealthView()
+                        }
+                    },
                     isActive: $navigateToNextStep
                 ) {
                     EmptyView()
@@ -2756,8 +2772,8 @@ struct HeartHealthView: View {
     @EnvironmentObject var dataManager: DataManager
     @EnvironmentObject var onboardingManager: OnboardingManager
     
-    private let totalSteps: Int = 8
-    private let currentStep: Int = 5
+    private let totalSteps: Int = 7
+    private let currentStep: Int = 4
     
     // WHO Risk fields
     @State private var bloodPressureStatus: BloodPressureStatus = .unknown
@@ -3153,8 +3169,8 @@ struct MedicalHistoryView: View {
     @EnvironmentObject var dataManager: DataManager
     @EnvironmentObject var onboardingManager: OnboardingManager
     
-    private let totalSteps: Int = 8
-    private let currentStep: Int = 6
+    private let totalSteps: Int = 7
+    private let currentStep: Int = 5
     
     // WHO Family History fields
     @State private var familyHeartDiseaseEarly: Bool = false
@@ -3165,6 +3181,15 @@ struct MedicalHistoryView: View {
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
     @State private var navigateToNextStep: Bool = false
+    
+    private var showBreakouts: Bool {
+        // Show educational breakouts only for self-onboarding (not guided setup)
+        onboardingManager.guidedSetupStatus == nil
+    }
+    
+    private var isGuidedInviteeAwaitingAdmin: Bool {
+        onboardingManager.isInvitedUser && onboardingManager.guidedSetupStatus == .acceptedAwaitingData
+    }
     
     var body: some View {
         ZStack {
@@ -3328,11 +3353,27 @@ struct MedicalHistoryView: View {
                 }
                 .padding(.bottom, 16)
                 
-                // Hidden NavigationLink - goes to Risk Results
+                // Hidden NavigationLink - goes to Breakout 2 (self-onboarding) or next step based on user type
                 NavigationLink(
-                    destination: RiskResultsView()
-                        .environmentObject(onboardingManager)
-                        .environmentObject(dataManager),
+                    destination: Group {
+                        if showBreakouts {
+                            Breakout2View()
+                                .environmentObject(onboardingManager)
+                                .environmentObject(dataManager)
+                        } else if isGuidedInviteeAwaitingAdmin {
+                            OnboardingCompleteView(membersCount: 0)
+                                .environmentObject(onboardingManager)
+                                .environmentObject(dataManager)
+                        } else if onboardingManager.isInvitedUser {
+                            AlertsChampionView()
+                                .environmentObject(onboardingManager)
+                                .environmentObject(dataManager)
+                        } else {
+                            FamilyMembersInviteView()
+                                .environmentObject(onboardingManager)
+                                .environmentObject(dataManager)
+                        }
+                    },
                     isActive: $navigateToNextStep
                 ) {
                     EmptyView()
@@ -3470,8 +3511,8 @@ struct AlertsChampionView: View {
     @EnvironmentObject var dataManager: DataManager
     @EnvironmentObject var onboardingManager: OnboardingManager
     
-    private let totalSteps: Int = 8
-    private let currentStep: Int = 8  // Final step
+    private let totalSteps: Int = 7
+    private let currentStep: Int = 7  // Final step
     
     @State private var navigateToNextStep: Bool = false
     
@@ -3640,8 +3681,8 @@ struct AlertsChampionView: View {
             .padding(.horizontal, 24)
         }
         .onAppear {
-            // Step 8: Privacy & Alerts Preview (Final Step)
-            onboardingManager.setCurrentStep(8)
+            // Step 7: Privacy & Alerts Preview (Final Step)
+            onboardingManager.setCurrentStep(7)
         }
     }
 }
@@ -3778,9 +3819,9 @@ struct WellbeingPrivacyView: View {
     @EnvironmentObject var dataManager: DataManager
     @EnvironmentObject var onboardingManager: OnboardingManager
     
-    // Progress shows step 7 of 8 here.
-    private let totalSteps: Int = 8
-    private let currentStep: Int = 7
+    // Progress shows step 6 of 7 here.
+    private let totalSteps: Int = 7
+    private let currentStep: Int = 6
     
     @State private var tier1Option: Tier1SharingOption = .family
     @State private var tier2Option: Tier2SharingOption = .meOnly
@@ -3982,8 +4023,8 @@ struct WellbeingPrivacyView: View {
             Text(errorMessage)
         }
         .onAppear {
-            // Step 7: Wellbeing Privacy
-            onboardingManager.setCurrentStep(7)
+            // Step 6: Wellbeing Privacy
+            onboardingManager.setCurrentStep(6)
         }
     }
     
@@ -4398,7 +4439,7 @@ struct FamilyMembersInviteView: View {
         }
         .onAppear {
             if !isPresentedFromDashboard {
-                onboardingManager.setCurrentStep(7)
+                onboardingManager.setCurrentStep(6)
             }
             Task {
                 await loadExistingInvites()
@@ -6100,8 +6141,8 @@ struct OnboardingCompleteView: View {
                         Text("• Start tracking")
                         Text("  Daily activities and wellness metrics at your fingertips.")
                         
-                        Text("• Meet your AI coach")
-                        Text("  Get calm, clear guidance from Arlo for your whole family.")
+                        Text("• Meet Miya")
+                        Text("  Get calm, clear guidance from Miya for your whole family.")
                     }
                     .font(.system(size: 13))
                     .foregroundColor(.miyaTextSecondary)
@@ -6252,6 +6293,11 @@ struct LoginView: View {
             
             // 4. 🔥 LOAD USER PROFILE FROM DATABASE IN BACKGROUND
             // This happens AFTER dismissal so UI doesn't freeze
+            // Set loading flag to prevent onboarding flash during profile load
+            await MainActor.run {
+                authManager.isLoadingProfile = true
+            }
+            
             if let profile = try await dataManager.loadUserProfile() {
                 print("📥 LoginView: Loading profile data into OnboardingManager (background)")
                 
@@ -6351,6 +6397,11 @@ struct LoginView: View {
             
             print("✅ LoginView: Background profile loading complete")
             
+            // Clear loading flag - profile is loaded, ready to route to dashboard/onboarding
+            await MainActor.run {
+                authManager.isLoadingProfile = false
+            }
+            
         } catch {
             // Only show error if we haven't dismissed yet (auth failed)
             // If error happens during background profile load, just log it
@@ -6362,6 +6413,10 @@ struct LoginView: View {
                 }
             } else {
                 print("⚠️ LoginView: Background profile load error (non-critical) - \(error.localizedDescription)")
+                // Clear loading flag even on error
+                await MainActor.run {
+                    authManager.isLoadingProfile = false
+                }
             }
         }
     }

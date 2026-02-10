@@ -6,61 +6,88 @@ import SwiftUIX
 
 struct AllNotificationsView: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var localNotifications: [FamilyNotificationItem] = []
     
     let notifications: [FamilyNotificationItem]
     let onTap: (FamilyNotificationItem) -> Void
     let onSnooze: (FamilyNotificationItem, Int?) -> Void
     
-    @State private var showingSnoozeAlert = false
-    @State private var selectedNotification: FamilyNotificationItem?
-    
-    private var groupedNotifications: [(memberName: String, memberInitials: String, notifications: [FamilyNotificationItem])] {
-        let grouped = Dictionary(grouping: notifications) { $0.memberName }
-        
-        return grouped.map { (memberName: $0.key, memberInitials: $0.value.first?.memberInitials ?? "", notifications: $0.value) }
-            .sorted { $0.memberName < $1.memberName }
+    private typealias MemberGroup = (memberName: String, memberInitials: String, notifications: [FamilyNotificationItem])
+
+    private var groupedNotifications: [MemberGroup] {
+        let grouped: [String: [FamilyNotificationItem]] = Dictionary(grouping: localNotifications) { item in
+            item.memberName
+        }
+
+        var result: [(memberName: String, memberInitials: String, notifications: [FamilyNotificationItem])] = []
+        result.reserveCapacity(grouped.count)
+
+        for (memberName, items) in grouped {
+            let initials = items.first?.memberInitials ?? ""
+            result.append((memberName: memberName, memberInitials: initials, notifications: items))
+        }
+
+        result.sort { $0.memberName < $1.memberName }
+        return result
     }
     
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(spacing: 20) {
-                    if notifications.isEmpty {
-                        emptyState
-                    } else {
-                        ForEach(groupedNotifications, id: \.memberName) { group in
-                            memberSection(group: group)
+            content
+                .navigationTitle("Family Notifications")
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Done") {
+                            dismiss()
                         }
+                        .fontWeight(.semibold)
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
-            }
-            .background(Color(UIColor.systemGroupedBackground))
-            .navigationTitle("Family Notifications")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                    .fontWeight(.semibold)
-                }
+        }
+        .onAppear { localNotifications = notifications }
+    .onChange(of: notifications.map(\.id)) { _, _ in
+        localNotifications = notifications
+    }
+    }
+
+    // MARK: - Main Content (split for compiler)
+
+    @ViewBuilder
+    private var content: some View {
+        if localNotifications.isEmpty {
+            emptyState
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(UIColor.systemGroupedBackground))
+        } else {
+            notificationsList
+        }
+    }
+
+    private var notificationsList: some View {
+        List {
+            ForEach(groupedNotifications, id: \.memberName) { group in
+                memberSection(group)
             }
         }
-        .confirmationDialog(
-            "Snooze Notification",
-            isPresented: $showingSnoozeAlert,
-            titleVisibility: .visible,
-            presenting: selectedNotification
-        ) { notification in
-            Button("1 day") { onSnooze(notification, 1) }
-            Button("3 days") { onSnooze(notification, 3) }
-            Button("7 days") { onSnooze(notification, 7) }
-            Button("Dismiss permanently") { onSnooze(notification, nil) }
-            Button("Cancel", role: .cancel) { }
-        } message: { _ in
-            Text("How long would you like to snooze this notification?")
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Color(UIColor.systemGroupedBackground))
+    }
+
+    @ViewBuilder
+    private func memberSection(_ group: MemberGroup) -> some View {
+        Section {
+            ForEach(sortedBySeverity(group.notifications)) { notification in
+                notificationRow(notification: notification)
+                    .modifier(NotificationRowStyle())
+            }
+        } header: {
+            memberHeader(group: group)
+                .textCase(nil)
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 6)
         }
     }
     
@@ -89,142 +116,139 @@ struct AllNotificationsView: View {
         .frame(maxWidth: .infinity)
     }
     
-    // MARK: - Member Section
+    // MARK: - Member Header
     @ViewBuilder
-    private func memberSection(group: (memberName: String, memberInitials: String, notifications: [FamilyNotificationItem])) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Member header
-            HStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(Color(UIColor.systemGray5))
-                        .frame(width: 40, height: 40)
-                    
-                    Text(group.memberInitials)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(DashboardDesign.primaryTextColor)
-                }
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(group.memberName)
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(DashboardDesign.primaryTextColor)
-                    
-                    Text("\(group.notifications.count) notification\(group.notifications.count == 1 ? "" : "s")")
-                        .font(.system(size: 14))
-                        .foregroundColor(DashboardDesign.secondaryTextColor)
-                }
-                
-                Spacer()
+    private func memberHeader(group: MemberGroup) -> some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(Color(UIColor.systemGray5))
+                    .frame(width: 40, height: 40)
+
+                Text(group.memberInitials)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(DashboardDesign.primaryTextColor)
             }
-            .padding(.horizontal, 4)
-            
-            VStack(spacing: 10) {
-                ForEach(sortedBySeverity(group.notifications)) { notification in
-                    notificationCard(notification: notification)
-                }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(group.memberName)
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(DashboardDesign.primaryTextColor)
+
+                Text("\(group.notifications.count) notification\(group.notifications.count == 1 ? "" : "s")")
+                    .font(.system(size: 14))
+                    .foregroundColor(DashboardDesign.secondaryTextColor)
             }
+
+            Spacer()
         }
+    }
+
+    private struct NotificationRowStyle: ViewModifier {
+        func body(content: Content) -> some View {
+            content
+                .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+        }
+    }
+
+    // MARK: - Notification Row (Swipe)
+    @ViewBuilder
+    private func notificationRow(notification: FamilyNotificationItem) -> some View {
+        notificationCard(notification: notification)
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                Button {
+                    let id = notification.id
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        localNotifications.removeAll { $0.id == id }
+                    }
+                    onSnooze(notification, defaultSnoozeDays(for: notification))
+                } label: {
+                    Label("Snooze notification", systemImage: "bell.slash.fill")
+                }
+                .tint(.orange)
+            }
+            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                Button {
+                    onTap(notification)
+                } label: {
+                    Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
+                }
+                .tint(.blue)
+            }
     }
     
     // MARK: - Notification Card
     @ViewBuilder
     private func notificationCard(notification: FamilyNotificationItem) -> some View {
-        Button {
-            onTap(notification)
-        } label: {
-            HStack(spacing: 14) {
-                ZStack {
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    severityColor(notification).opacity(0.25),
-                                    severityColor(notification).opacity(0.15)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 52, height: 52)
-                    
-                    Image(systemName: pillarIcon(notification.pillar))
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [
-                                    severityColor(notification),
-                                    severityColor(notification).opacity(0.8)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                    
-                    severityBadge(notification)
-                        .offset(x: 18, y: -18)
-                }
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(notification.title)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(DashboardDesign.primaryTextColor)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .lineLimit(2)
-                    
-                    Text(notification.body)
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundColor(DashboardDesign.secondaryTextColor)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .lineLimit(2)
-                }
-                
-                Spacer(minLength: 8)
-                
-                VStack(spacing: 8) {
-                    Button {
-                        selectedNotification = notification
-                        showingSnoozeAlert = true
-                    } label: {
-                        Image(systemName: "bell.slash.fill")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(DashboardDesign.secondaryTextColor.opacity(0.6))
-                            .frame(width: 36, height: 36)
-                            .background(
-                                Circle()
-                                    .fill(Color(UIColor.systemGray6))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(DashboardDesign.secondaryTextColor.opacity(0.4))
-                }
-            }
-            .padding(16)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.white)
-                    .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
-                    .shadow(color: Color.black.opacity(0.02), radius: 2, x: 0, y: 1)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(
+        HStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(
                         LinearGradient(
                             colors: [
-                                severityColor(notification).opacity(0.2),
-                                severityColor(notification).opacity(0.1)
+                                severityColor(notification).opacity(0.25),
+                                severityColor(notification).opacity(0.15)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1.5
+                        )
                     )
-            )
+                    .frame(width: 52, height: 52)
+                
+                Image(systemName: pillarIcon(notification.pillar))
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [
+                                severityColor(notification),
+                                severityColor(notification).opacity(0.8)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                
+                severityBadge(notification)
+                    .offset(x: 18, y: -18)
+            }
+            
+            Text(notification.displayLine)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(DashboardDesign.secondaryTextColor)
+                .lineLimit(2)
+                .truncationMode(.tail)
+            
+            Spacer(minLength: 8)
+            
+            VStack {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(DashboardDesign.secondaryTextColor.opacity(0.4))
+            }
         }
-        .buttonStyle(NotificationCardButtonStyle())
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white)
+                .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+                .shadow(color: Color.black.opacity(0.02), radius: 2, x: 0, y: 1)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            severityColor(notification).opacity(0.2),
+                            severityColor(notification).opacity(0.1)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1.5
+                )
+        )
     }
     
     // MARK: - Severity Badge
@@ -284,6 +308,31 @@ struct AllNotificationsView: View {
         case .sleep: return "moon.stars.fill"
         case .movement: return "figure.run"
         case .stress: return "heart.fill"
+        }
+    }
+    
+    private func defaultSnoozeDays(for notification: FamilyNotificationItem) -> Int {
+        // “Snooze until next trigger” based on current trigger window
+        // Uses existing model value: notification.triggerWindowDays (3/7/14/21)
+        guard let current = notification.triggerWindowDays else {
+            return 3 // fallback if we don’t know the trigger window
+        }
+
+        let next: Int? = {
+            switch current {
+            case 3: return 7
+            case 7: return 14
+            case 14: return 21
+            default: return nil
+            }
+        }()
+
+        // If there’s a next trigger, snooze for the delta.
+        // If not (e.g. already at 21), fall back to 7 so the action still behaves predictably.
+        if let next = next, next > current {
+            return next - current
+        } else {
+            return 7
         }
     }
 }

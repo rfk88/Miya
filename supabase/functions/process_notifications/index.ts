@@ -97,11 +97,11 @@ async function shouldSendNotification(
       return { shouldSend: false, reason: "push_disabled" };
     }
 
-    // Check if alert is snoozed
+    // Check if alert is dismissed or snoozed FOR THIS RECIPIENT
     if (alertStateId) {
       const { data: alert, error: alertErr } = await supabase
         .from("pattern_alert_state")
-        .select("snooze_until, dismissed_at")
+        .select("dismissed_at")
         .eq("id", alertStateId)
         .maybeSingle();
 
@@ -112,8 +112,18 @@ async function shouldSendNotification(
           return { shouldSend: false, reason: "alert_dismissed" };
         }
 
-        if (alert.snooze_until) {
-          const snoozeUntil = new Date(alert.snooze_until);
+        // Check if THIS USER has snoozed this alert
+        const { data: snooze, error: snoozeErr } = await supabase
+          .from("alert_snoozes")
+          .select("snoozed_until")
+          .eq("alert_id", alertStateId)
+          .eq("user_id", recipientUserId)  // Per-user snooze check!
+          .maybeSingle();
+
+        if (snoozeErr) {
+          console.error("Error fetching snooze state:", snoozeErr);
+        } else if (snooze?.snoozed_until) {
+          const snoozeUntil = new Date(snooze.snoozed_until);
           if (snoozeUntil > new Date()) {
             return { shouldSend: false, reason: "alert_snoozed" };
           }

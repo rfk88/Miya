@@ -31,10 +31,11 @@ struct AccountSidebarView: View {
     @State private var isSavingProfile: Bool = false
     @State private var profileErrorMessage: String?
     
-    @State private var isEditingFamilyName: Bool = false
-    @State private var draftFamilyName: String = ""
-    @State private var isSavingFamilyName: Bool = false
-    @State private var familyNameErrorMessage: String?
+    // DISABLED: Family name editing state variables (feature temporarily removed)
+    // @State private var isEditingFamilyName: Bool = false
+    // @State private var draftFamilyName: String = ""
+    // @State private var isSavingFamilyName: Bool = false
+    // @State private var familyNameErrorMessage: String?
     
     // Device detail state
     @State private var activeDevice: ConnectedDevice? = nil
@@ -351,96 +352,7 @@ struct AccountSidebarView: View {
                                         .foregroundColor(.white)
                                     }
                                     Spacer()
-                                    if isSuperAdmin, onSaveFamilyName != nil {
-                                        Button {
-                                            draftFamilyName = localFamilyName
-                                            familyNameErrorMessage = nil
-                                            withAnimation(.easeInOut(duration: 0.2)) {
-                                                isEditingFamilyName = true
-                                            }
-                                        } label: {
-                                            Text(isEditingFamilyName ? "Editing…" : "Edit")
-                                                .font(.system(size: 12, weight: .semibold))
-                                                .padding(.vertical, 4)
-                                                .padding(.horizontal, 10)
-                                                .background(Color.white.opacity(0.18))
-                                                .foregroundColor(.white)
-                                                .cornerRadius(10)
-                                        }
-                                    }
-                                }
-                                
-                                if isEditingFamilyName {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        TextField("Family name", text: $draftFamilyName)
-                                            .padding(10)
-                                            .background(Color.miyaBackground)
-                                            .cornerRadius(10)
-                                        
-                                        if let familyNameErrorMessage {
-                                            Text(familyNameErrorMessage)
-                                                .font(.footnote)
-                                                .foregroundColor(.red.opacity(0.9))
-                                        }
-                                        
-                                        HStack {
-                                            Button {
-                                                withAnimation(.easeInOut(duration: 0.2)) {
-                                                    isEditingFamilyName = false
-                                                }
-                                                familyNameErrorMessage = nil
-                                            } label: {
-                                                Text("Cancel")
-                                                    .font(.system(size: 13, weight: .semibold))
-                                                    .frame(maxWidth: .infinity)
-                                                    .padding(.vertical, 8)
-                                            }
-                                            
-                                            Button {
-                                                Task {
-                                                    guard let onSaveFamilyName else {
-                                                        withAnimation(.easeInOut(duration: 0.2)) {
-                                                            isEditingFamilyName = false
-                                                        }
-                                                        return
-                                                    }
-                                                    let trimmed = draftFamilyName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                                    guard !trimmed.isEmpty else {
-                                                        familyNameErrorMessage = "Family name can't be empty."
-                                                        return
-                                                    }
-                                                    isSavingFamilyName = true
-                                                    do {
-                                                        try await onSaveFamilyName(trimmed)
-                                                        localFamilyName = trimmed
-                                                        familyNameErrorMessage = nil
-                                                        withAnimation(.easeInOut(duration: 0.2)) {
-                                                            isEditingFamilyName = false
-                                                        }
-                                                    } catch {
-                                                        familyNameErrorMessage = error.localizedDescription
-                                                    }
-                                                    isSavingFamilyName = false
-                                                }
-                                            } label: {
-                                                HStack {
-                                                    if isSavingFamilyName {
-                                                        ProgressView()
-                                                            .progressViewStyle(.circular)
-                                                    }
-                                                    Text("Save")
-                                                        .font(.system(size: 13, weight: .semibold))
-                                                }
-                                                .frame(maxWidth: .infinity)
-                                                .padding(.vertical, 8)
-                                            }
-                                            .background(Color.miyaEmerald)
-                                            .foregroundColor(.white)
-                                            .cornerRadius(10)
-                                            .disabled(isSavingFamilyName)
-                                        }
-                                    }
-                                    .padding(.top, 8)
+                                    // DISABLED: Family name edit temporarily removed due to crash
                                 }
                                 }
                                 

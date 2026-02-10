@@ -49,6 +49,45 @@ struct FamilyNotificationItem: Identifiable {
         }
     }
     
+    /// Single-line display for cards: "Pillar is X% below/above Name's baseline (3d)" when body has that pattern, else title.
+    var displayLine: String {
+        switch kind {
+        case .fallback(_, _, _, _, let title, _):
+            return title
+        case .trend(let insight):
+            let b = insight.body
+            let hasIs = b.contains(" is ")
+            let hasBelow = b.contains(" below ")
+            let hasAbove = b.contains(" above ")
+            let hasBaseline = b.contains("'s baseline")
+            guard hasIs, (hasBelow || hasAbove), hasBaseline,
+                  let isRange = b.range(of: " is ") else {
+                return insight.title
+            }
+            // Stat part: substring after " is ", strip " (last …)" and trim
+            var statPart = String(b[isRange.upperBound...])
+            if let lastRange = statPart.range(of: " (last ") {
+                statPart = String(statPart[..<lastRange.lowerBound])
+            }
+            statPart = statPart.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Metric from title: strip " below baseline" / " above baseline"
+            let metric = insight.title
+                .replacingOccurrences(of: " below baseline", with: "")
+                .replacingOccurrences(of: " above baseline", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            // Trigger from body: " (last 3d)." → second line "(3d)"
+            var triggerSuffix = ""
+            if let lastPrefix = b.range(of: " (last "),
+               let closeParen = b[lastPrefix.upperBound...].firstIndex(of: ")") {
+                let token = String(b[lastPrefix.upperBound..<closeParen]).trimmingCharacters(in: .whitespaces)
+                if !token.isEmpty {
+                    triggerSuffix = "\n(\(token))"
+                }
+            }
+            return "\(metric) is \(statPart)\(triggerSuffix)"
+        }
+    }
+    
     static func build(
         snapshot: FamilyVitalitySnapshot,
         trendInsights: [TrendInsight],

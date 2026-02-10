@@ -59,7 +59,7 @@ struct VitalityFactor: Identifiable {
 // MARK: - PILLAR DETAIL MODELS
 
 enum TrendDirection {
-    case up, down, stable
+    case up, down, stable, insufficientData
 }
 
 struct SubMetric {

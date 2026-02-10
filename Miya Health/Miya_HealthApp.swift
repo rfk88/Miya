@@ -82,6 +82,11 @@ struct Miya_HealthApp: App {
                     
                     // If user is authenticated, fetch their family data (source of truth from DB)
                     if authManager.isAuthenticated {
+                        // Set loading flag to prevent onboarding flash during app launch restoration
+                        await MainActor.run {
+                            authManager.isLoadingProfile = true
+                        }
+                        
                         do {
                             try await dataManager.fetchFamilyData()
                         } catch {
@@ -90,12 +95,18 @@ struct Miya_HealthApp: App {
                         
                         // Refresh guided context for status-first routing (e.g., force review screen)
                         await onboardingManager.refreshGuidedContextFromDB(dataManager: dataManager)
+                        
+                        // Clear loading flag - profile/family data is loaded
+                        await MainActor.run {
+                            authManager.isLoadingProfile = false
+                        }
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .userDidLogout)) { _ in
                     // Reset all state on logout
                     onboardingManager.reset()
                     dataManager.resetCaches()
+                    authManager.isLoadingProfile = false  // Clear loading flag on logout
                     appSessionId = UUID() // Force view hierarchy rebuild
                     print("🔄 App: Session reset complete (logout)")
                 }

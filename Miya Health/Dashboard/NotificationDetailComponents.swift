@@ -68,7 +68,7 @@ struct WhoopStyleBubble: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(parseMarkdown(message.text))
                         .font(.system(size: 16, weight: .regular))
-                        .foregroundColor(.miyaTextPrimary)
+                        .foregroundColor(Color.miyaTextPrimary)
                 }
                 .padding(14)
                 .background(Color(red: 0.95, green: 0.95, blue: 0.97))

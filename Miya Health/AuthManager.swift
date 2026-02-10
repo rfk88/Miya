@@ -17,6 +17,7 @@ class AuthManager: ObservableObject {
     
     @Published var isLoading: Bool = false
     @Published var isAuthenticated: Bool = false
+    @Published var isLoadingProfile: Bool = false  // Tracks profile/onboarding data loading after auth
     
     // MARK: - Supabase Client
     

@@ -14,8 +14,8 @@ final class RookService {
 
     private func configure() {
         // TODO: move creds to secure config before production
-        let clientUUID = "4f2ad4b6-ee91-42d4-bf37-39496ea46724"
-        let secretKey  = "Izjhk4eYBDsDe7ml4aYdI7xtHpTYObL6sYEO"
+        let clientUUID = "64ab5fac-5196-4b33-bddf-d8ec50f9a63d"
+        let secretKey  = "u5k0G2ZDBde69rBqAsSmvsLHrUZOUGvUjXxf"
 
         RookConnectConfigurationManager.shared.setEnvironment(.sandbox)
         RookConnectConfigurationManager.shared.setConfiguration(

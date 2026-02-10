@@ -19,6 +19,7 @@ struct FamilyNotificationDetailSheet: View {
     let dataManager: DataManager // Changed from @EnvironmentObject to parameter
     
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authManager: AuthManager
     
     // MARK: - Pillar Configuration
     
@@ -103,6 +104,7 @@ struct FamilyNotificationDetailSheet: View {
     @State private var feedbackIsHelpful: Bool? = nil
     @State private var aiInsightRecentValue: Double?
     @State private var aiInsightDeviationPercent: Double?
+    @State private var hasMinimumDataForPercentage: Bool = true
     
     // NEW: Chat-specific state
     @State private var chatMessages: [ChatMessage] = []
@@ -501,7 +503,7 @@ struct FamilyNotificationDetailSheet: View {
         await MainActor.run { memberAge = age }
         
         // Fetch relationship (for AI context)
-        await fetchMemberRelationship(userId: userId)
+        await fetchMemberRelationship(userId: userId, authManager: authManager)
         
         guard let age = age else {
             await MainActor.run { optimalTarget = nil }
@@ -549,7 +551,23 @@ struct FamilyNotificationDetailSheet: View {
         await MainActor.run { optimalTarget = range }
     }
     
-    private func fetchMemberRelationship(userId: String) async {
+    private func fetchMemberRelationship(userId: String, authManager: AuthManager) async {
+        // Check if user is viewing their own data
+        guard let currentUserId = await authManager.getCurrentUserId() else {
+            print("⚠️ Cannot determine current user")
+            return
+        }
+        
+        if userId == currentUserId {
+            // Viewing own data - no relationship needed
+            await MainActor.run {
+                memberRelationship = nil
+                print("✅ Viewing own data - no relationship (will use 'you'/'your')")
+            }
+            return
+        }
+        
+        // Viewing someone else's data - fetch relationship
         do {
             let supabase = SupabaseConfig.client
             struct FamilyMemberRow: Decodable {
@@ -651,9 +669,11 @@ struct FamilyNotificationDetailSheet: View {
                     aiInsightBaselineValue = evidence["baseline_value"] as? Double
                     aiInsightRecentValue = evidence["recent_value"] as? Double
                     aiInsightDeviationPercent = evidence["deviation_percent"] as? Double
+                    hasMinimumDataForPercentage = evidence["has_minimum_data"] as? Bool ?? true
                     print("  - evidence baseline: \(aiInsightBaselineValue ?? 0)")
                     print("  - evidence recent: \(aiInsightRecentValue ?? 0)")
                     print("  - evidence deviation: \(aiInsightDeviationPercent ?? 0)")
+                    print("  - has minimum data: \(hasMinimumDataForPercentage)")
                 }
                 
                 if let ms = obj?["message_suggestions"] as? [[String: Any]] {
@@ -713,8 +733,11 @@ struct FamilyNotificationDetailSheet: View {
         await fetchAIInsightIfPossible()
         await loadMemberHealthProfile()  // 🔥 NEW: Load health context for AI
         
+        // Get current user ID for relationship context
+        let currentUserId = await authManager.getCurrentUserId()
+        
         // Generate warm opening message
-        let openingMessage = generateOpeningMessage()
+        let openingMessage = generateOpeningMessage(currentUserId: currentUserId)
         
         await MainActor.run {
             chatMessages = [
@@ -879,15 +902,101 @@ struct FamilyNotificationDetailSheet: View {
             context["member_relationship"] = relationship
         }
         
-        // Add available metrics data
-        if !historyRows.isEmpty {
-            let recentData = Array(historyRows.suffix(14)).map { day in
+        // Add available metrics data - use correct source based on metric type
+        var recentDataArray: [[String: Any]] = []
+        
+        if metricInfo.unit == "ms" && !rawMetrics.isEmpty {
+            // HRV alert - send raw HRV values in ms
+            recentDataArray = Array(rawMetrics.suffix(14)).compactMap { day -> [String: Any]? in
+                guard let hrvMs = day.hrvMs else { return nil }
+                return [
+                    "date": day.date,
+                    "value": hrvMs  // Actual HRV in milliseconds
+                ]
+            }
+        } else if metricInfo.unit == "bpm" && !rawMetrics.isEmpty {
+            // Resting HR alert - send raw resting HR values
+            recentDataArray = Array(rawMetrics.suffix(14)).compactMap { day -> [String: Any]? in
+                guard let restingHr = day.restingHr else { return nil }
+                return [
+                    "date": day.date,
+                    "value": restingHr  // Actual resting HR in bpm
+                ]
+            }
+        } else if metricInfo.unit == "hours" && !rawMetrics.isEmpty {
+            // Sleep duration alert - send raw sleep hours
+            recentDataArray = Array(rawMetrics.suffix(14)).compactMap { day -> [String: Any]? in
+                guard let sleepMinutes = day.sleepMinutes else { return nil }
+                let sleepHours = Double(sleepMinutes) / 60.0
+                return [
+                    "date": day.date,
+                    "value": sleepHours  // Actual sleep in hours
+                ]
+            }
+        } else if metricInfo.unit == "steps" && !rawMetrics.isEmpty {
+            // Steps alert - send raw step counts
+            recentDataArray = Array(rawMetrics.suffix(14)).compactMap { day -> [String: Any]? in
+                guard let steps = day.steps else { return nil }
+                return [
+                    "date": day.date,
+                    "value": steps  // Actual steps count
+                ]
+            }
+        } else if !historyRows.isEmpty {
+            // Pillar vitality score alert - send pillar scores (0-100)
+            recentDataArray = Array(historyRows.suffix(14)).map { day in
                 [
                     "date": day.date,
-                    "value": day.value as Any? ?? NSNull()  // null, not 0
+                    "value": day.value as Any? ?? NSNull()  // Pillar score (0-100)
                 ] as [String : Any]
             }
-            context["recent_daily_values"] = recentData
+        }
+        
+        if !recentDataArray.isEmpty {
+            context["recent_daily_values"] = recentDataArray
+            
+            // Add current average based on metric type
+            let recentValues = Array(recentDataArray.suffix(7))
+            let values = recentValues.compactMap { $0["value"] as? Double }
+            
+            if !values.isEmpty {
+                let avg = values.reduce(0, +) / Double(values.count)
+                
+                if metricInfo.unit == "hours" {
+                    context["current_average"] = round(avg * 10) / 10  // 1 decimal for hours
+                } else {
+                    context["current_average"] = Int(avg.rounded())
+                }
+                
+                // Add trend summary for easier understanding
+                if values.count >= 2 {
+                    let first = values.first!
+                    let last = values.last!
+                    let min = values.min()!
+                    let max = values.max()!
+                    
+                    let overallChange = first != 0 ? ((last - first) / first) * 100 : 0
+                    let trendDirection: String
+                    if overallChange > 5 {
+                        trendDirection = "increasing"
+                    } else if overallChange < -5 {
+                        trendDirection = "decreasing"
+                    } else {
+                        trendDirection = "stable"
+                    }
+                    
+                    context["trend_summary"] = [
+                        "direction": trendDirection,
+                        "percent_change": Int(overallChange.rounded()),
+                        "min": metricInfo.unit == "hours" ? round(min * 10) / 10 : min,
+                        "max": metricInfo.unit == "hours" ? round(max * 10) / 10 : max,
+                        "average": metricInfo.unit == "hours" ? round(avg * 10) / 10 : avg,
+                        "first_value": metricInfo.unit == "hours" ? round(first * 10) / 10 : first,
+                        "last_value": metricInfo.unit == "hours" ? round(last * 10) / 10 : last,
+                        "data_points": values.count
+                    ] as [String : Any]
+                }
+            }
         }
         
         // Add optimal range if available
@@ -1325,13 +1434,13 @@ struct FamilyNotificationDetailSheet: View {
         ]
     }
     
-    private func generateOpeningMessage() -> String {
+    private func generateOpeningMessage(currentUserId: String?) -> String {
         let firstName = item.memberName.split(separator: " ").first.map(String.init) ?? item.memberName
         let pillar = item.pillar
         let severity = severityLabel.lowercased()
         
         // Get relationship-aware references
-        let (memberRef, memberPossessive) = getRelationshipReferences()
+        let (memberRef, memberPossessive) = getRelationshipReferences(currentUserId: currentUserId)
         
         // Get duration from item (parse from debugWhy or use default)
         let duration = parseDuration(from: item.debugWhy)
@@ -1362,8 +1471,14 @@ struct FamilyNotificationDetailSheet: View {
         }
     }
     
-    private func getRelationshipReferences() -> (memberRef: String, memberPossessive: String) {
+    private func getRelationshipReferences(currentUserId: String?) -> (memberRef: String, memberPossessive: String) {
         let firstName = item.memberName.split(separator: " ").first.map(String.init) ?? item.memberName
+        
+        // CRITICAL: Check if viewing own data
+        if let currentUserId = currentUserId, item.memberUserId == currentUserId {
+            print("✅ getRelationshipReferences: Viewing SELF - using 'you'/'your'")
+            return ("you", "your")
+        }
         
         // Use relationship if available, otherwise fall back to name
         guard let relationship = memberRelationship?.lowercased() else {
@@ -1709,7 +1824,7 @@ struct FamilyNotificationDetailSheet: View {
                         }
                         
                         // Change indicator
-                        if deviationPct != 0 {
+                        if hasMinimumDataForPercentage && deviationPct != 0 {
                             HStack(spacing: 6) {
                                 Image(systemName: deviationPct < 0 ? "arrow.down" : "arrow.up")
                                     .font(.system(size: 11, weight: .semibold))
@@ -1723,6 +1838,12 @@ struct FamilyNotificationDetailSheet: View {
                                 RoundedRectangle(cornerRadius: 8)
                                     .fill(deviationPct < 0 ? Color.red.opacity(0.1) : Color.green.opacity(0.1))
                             )
+                        } else if !hasMinimumDataForPercentage {
+                            Text("Building baseline...")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
                         }
                         
                         // Optimal range (if available)
@@ -2446,6 +2567,7 @@ struct FamilyNotificationDetailSheet: View {
                 }
                 .padding()
             }
+            .scrollDismissesKeyboard(.interactively)
             .onChange(of: chatMessages.count) { oldValue, newValue in
                 if let last = chatMessages.last {
                     withAnimation {

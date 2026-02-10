@@ -7,6 +7,9 @@ struct FamilyNotificationsCard: View {
     let items: [FamilyNotificationItem]
     let onTap: (FamilyNotificationItem) -> Void
     let onSeeAll: () -> Void
+    let onSnooze: (FamilyNotificationItem, Int?) -> Void
+    
+    @State private var itemToSnooze: FamilyNotificationItem?
     
     private var displayedItems: [FamilyNotificationItem] {
         sortedBySeverity(items).prefix(3).map { $0 }
@@ -75,97 +78,15 @@ struct FamilyNotificationsCard: View {
                         HStack(spacing: 4) {
                             Text("See all (\(items.count))")
                                 .font(.system(size: 13, weight: .semibold))
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .semibold))
                         }
-                        .foregroundColor(.miyaPrimary)
+                    .foregroundColor(.miyaPrimary)
                     }
                 }
             }
             
             VStack(spacing: 10) {
                 ForEach(displayedItems) { item in
-                    Button {
-                        onTap(item)
-                    } label: {
-                        HStack(spacing: 14) {
-                            ZStack {
-                                Circle()
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [
-                                                severityColor(item).opacity(0.25),
-                                                severityColor(item).opacity(0.15)
-                                            ],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        )
-                                    )
-                                    .frame(width: 52, height: 52)
-                                
-                                // Icon
-                                Image(systemName: pillarIcon(item.pillar))
-                                    .font(.system(size: 22, weight: .semibold))
-                                    .foregroundStyle(
-                                        LinearGradient(
-                                            colors: [
-                                                severityColor(item),
-                                                severityColor(item).opacity(0.8)
-                                            ],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        )
-                                    )
-                                
-                                severityBadge(item)
-                                    .offset(x: 18, y: -18)
-                            }
-                            
-                            // Text content with better spacing and hierarchy
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(item.title)
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(DashboardDesign.primaryTextColor)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .lineLimit(2)
-                                
-                                Text(item.body)
-                                    .font(.system(size: 14, weight: .regular))
-                                    .foregroundColor(DashboardDesign.secondaryTextColor)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .lineLimit(2)
-                            }
-                            
-                            Spacer(minLength: 8)
-                            
-                            // Chevron with subtle styling
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(DashboardDesign.secondaryTextColor.opacity(0.4))
-                        }
-                        .padding(16)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color.white)
-                                .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
-                                .shadow(color: Color.black.opacity(0.02), radius: 2, x: 0, y: 1)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(
-                                    LinearGradient(
-                                        colors: [
-                                            severityColor(item).opacity(0.2),
-                                            severityColor(item).opacity(0.1)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    lineWidth: 1.5
-                                )
-                        )
-                    }
-                    .buttonStyle(NotificationCardButtonStyle())
+                    notificationRow(item)
                 }
             }
         }
@@ -176,6 +97,138 @@ struct FamilyNotificationsCard: View {
                 .shadow(color: Color.black.opacity(0.06), radius: 16, x: 0, y: 4)
                 .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
         )
+    }
+    
+    @ViewBuilder
+    private func notificationRow(_ item: FamilyNotificationItem) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Button {
+                onTap(item)
+            } label: {
+                notificationCard(item)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                itemToSnooze = item
+            } label: {
+                Image(systemName: "bell.slash")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(DashboardDesign.secondaryTextColor)
+                    .padding(8)
+                    .background(
+                        Circle()
+                            .fill(Color.white)
+                            .shadow(color: Color.black.opacity(0.08), radius: 6, x: 0, y: 2)
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(8)
+        }
+        .alert(
+            "Are you sure you want to snooze this?",
+            isPresented: Binding(
+                get: { itemToSnooze != nil },
+                set: { if !$0 { itemToSnooze = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) {
+                itemToSnooze = nil
+            }
+            Button("Snooze") {
+                if let item = itemToSnooze {
+                    onSnooze(item, defaultSnoozeDays(for: item))
+                }
+                itemToSnooze = nil
+            }
+        }
+    }
+
+    private func notificationCard(_ item: FamilyNotificationItem) -> some View {
+        HStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                severityColor(item).opacity(0.25),
+                                severityColor(item).opacity(0.15)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 40, height: 40)
+
+                // Icon
+                Image(systemName: pillarIcon(item.pillar))
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [
+                                severityColor(item),
+                                severityColor(item).opacity(0.8)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+
+                severityBadge(item)
+                    .offset(x: 14, y: -14)
+            }
+
+            Text(item.displayLine)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(DashboardDesign.secondaryTextColor)
+                .lineLimit(2)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 8)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white)
+                .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+                .shadow(color: Color.black.opacity(0.02), radius: 2, x: 0, y: 1)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            severityColor(item).opacity(0.2),
+                            severityColor(item).opacity(0.1)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1.5
+                )
+        )
+    }
+
+    private func defaultSnoozeDays(for notification: FamilyNotificationItem) -> Int {
+        // “Snooze until next trigger” based on current trigger window
+        guard let current = notification.triggerWindowDays else {
+            return 3
+        }
+
+        let next: Int? = {
+            switch current {
+            case 3: return 7
+            case 7: return 14
+            case 14: return 21
+            default: return nil
+            }
+        }()
+
+        if let next = next, next > current {
+            return next - current
+        } else {
+            return 7
+        }
     }
     
     @ViewBuilder
@@ -204,3 +257,27 @@ struct NotificationCardButtonStyle: ButtonStyle {
             .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
     }
 }
+
+// MARK: - Conditional modifier helper
+private extension View {
+    @ViewBuilder
+    func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
+        }
+    }
+}
+
+#Preview("FamilyNotificationsCard") {
+    FamilyNotificationsCard(
+        items: [],
+        onTap: { _ in },
+        onSeeAll: {},
+        onSnooze: { _, _ in }
+    )
+    .padding()
+    .background(Color.gray.opacity(0.08))
+}
+ 

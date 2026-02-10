@@ -90,7 +90,7 @@ struct ProfileView: View {
                     .cornerRadius(18)
                     .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 3)
                     
-                    // ARLO HEALTH AGENT CARD
+                    // MIYA HEALTH AGENT CARD
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Text("How is \(memberName) doing?")
@@ -104,16 +104,16 @@ struct ProfileView: View {
                                 .foregroundColor(.miyaPrimary)
                         }
                         
-                        Text("Arlo will summarise sleep, activity and stress trends for \(memberName) once wearables are connected to Miya.")
+                        Text("Miya will summarise sleep, activity and stress trends for \(memberName) once wearables are connected to Miya.")
                             .font(.system(size: 12))
                             .foregroundColor(.miyaTextSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                         
                         Button {
-                            // Later: trigger Arlo insight sheet
-                            print("Ask Arlo about \(memberName)")
+                            // Later: trigger Miya insight sheet
+                            print("Ask Miya about \(memberName)")
                         } label: {
-                            Text("Ask Arlo about \(memberName)")
+                            Text("Ask Miya about \(memberName)")
                                 .font(.system(size: 14, weight: .semibold))
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 10)

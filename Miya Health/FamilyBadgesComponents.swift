@@ -506,26 +506,11 @@ struct BadgeDetailSheet: View {
                     }
                     .padding(.top, 8)
                     
-                    // Explanation section
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Why you won:")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(DashboardDesign.primaryTextColor)
-                        
-                        Text(explanation(for: winner.badgeType))
-                            .font(.system(size: 15, weight: .regular))
-                            .foregroundColor(DashboardDesign.secondaryTextColor)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    
-                    // Metrics section
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Your Results:")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(DashboardDesign.primaryTextColor)
-                        
-                        metricsView(for: winner)
-                    }
+                    // Narrative insight (no section title)
+                    Text(narrativeInsight(for: winner))
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundColor(DashboardDesign.secondaryTextColor)
+                        .fixedSize(horizontal: false, vertical: true)
                     
                     // Motivational message
                     Text(motivationalMessage(for: winner.badgeType))
@@ -603,131 +588,104 @@ struct BadgeDetailSheet: View {
         }
     }
     
-    private func explanation(for badgeType: String) -> String {
-        switch badgeType {
-        case "daily_most_sleep":
-            return "Your sleep score improved the most today compared to yesterday!"
-        case "daily_most_movement":
-            return "Your activity score improved the most today compared to yesterday!"
-        case "daily_most_stressfree":
-            return "Your recovery score improved the most today compared to yesterday!"
-        case "weekly_vitality_mvp":
-            return "You had the biggest improvement in total vitality score this week compared to last week!"
-        case "weekly_sleep_mvp":
-            return "You had the biggest improvement in sleep score this week compared to last week!"
-        case "weekly_movement_mvp":
-            return "You had the biggest improvement in activity score this week compared to last week!"
-        case "weekly_stressfree_mvp":
-            return "You had the biggest improvement in recovery score this week compared to last week!"
-        case "weekly_family_anchor":
-            return "You had the highest average vitality score this week across all family members!"
-        case "weekly_consistency_mvp":
-            return "Your vitality scores were the most stable this week with minimal ups and downs!"
-        case "weekly_balanced_week":
-            return "You maintained the best balance across all three health pillars (Sleep, Activity, Recovery)!"
-        case "weekly_biggest_comeback_day":
-            return "You had the biggest single-day improvement in vitality score this week!"
-        case "weekly_sleep_streak_leader":
-            return "You had the longest streak of days with strong sleep scores (75+ points)!"
-        case "weekly_movement_streak_leader":
-            return "You had the longest streak of days with strong activity scores (75+ points)!"
-        case "weekly_stress_streak_leader":
-            return "You had the longest streak of days with strong recovery scores (75+ points)!"
-        case "weekly_data_champion":
-            return "You had the most days with complete health data (at least 2 out of 3 pillars)!"
-        default:
-            return "You earned this badge for outstanding performance!"
-        }
-    }
-    
-    @ViewBuilder
-    private func metricsView(for winner: BadgeEngine.Winner) -> some View {
+    private func narrativeInsight(for winner: BadgeEngine.Winner) -> String {
         let meta = winner.metadata
         
         switch winner.badgeType {
-        case "daily_most_sleep", "daily_most_movement", "daily_most_stressfree":
-            // Daily badges: show yesterday vs today
-            if let todayVal = meta["todayValue"] as? Int,
-               let yesterdayVal = meta["yesterdayValue"] as? Int,
-               let percentIncrease = meta["percentIncrease"] as? Double {
-                VStack(alignment: .leading, spacing: 8) {
-                    MetricRow(label: "Yesterday", value: "\(yesterdayVal)/100")
-                    MetricRow(label: "Today", value: "\(todayVal)/100")
-                    MetricRow(label: "Improvement", value: "+\(todayVal - yesterdayVal) points (+\(Int(percentIncrease.rounded()))%)")
-                }
-                .padding(16)
-                .background(DashboardDesign.tertiaryBackgroundColor)
-                .cornerRadius(12)
-            } else {
-                EmptyView()
+        // Daily badges - show % improvement from yesterday
+        case "daily_most_sleep":
+            if let percentIncrease = meta["percentIncrease"] as? Double {
+                return "Your sleep improved +\(Int(percentIncrease.rounded()))% from yesterday - the biggest improvement in your family!"
             }
+            return "Your sleep improved the most today compared to yesterday!"
             
-        case "weekly_vitality_mvp", "weekly_sleep_mvp", "weekly_movement_mvp", "weekly_stressfree_mvp":
-            // Weekly improvement badges: show last week vs this week
-            if let thisAvg = meta["thisAvg"] as? Double,
-               let prevAvg = meta["prevAvg"] as? Double,
-               let percentIncrease = meta["percentIncrease"] as? Double {
-                VStack(alignment: .leading, spacing: 8) {
-                    MetricRow(label: "Last Week Average", value: "\(Int(prevAvg.rounded()))/100")
-                    MetricRow(label: "This Week Average", value: "\(Int(thisAvg.rounded()))/100")
-                    MetricRow(label: "Improvement", value: "+\(Int(thisAvg - prevAvg)) points (+\(Int(percentIncrease.rounded()))%)")
-                }
-                .padding(16)
-                .background(DashboardDesign.tertiaryBackgroundColor)
-                .cornerRadius(12)
-            } else {
-                EmptyView()
+        case "daily_most_movement":
+            if let percentIncrease = meta["percentIncrease"] as? Double {
+                return "Your activity improved +\(Int(percentIncrease.rounded()))% from yesterday - the biggest improvement in your family!"
             }
+            return "Your activity improved the most today compared to yesterday!"
             
+        case "daily_most_stressfree":
+            if let percentIncrease = meta["percentIncrease"] as? Double {
+                return "Your recovery improved +\(Int(percentIncrease.rounded()))% from yesterday - the biggest improvement in your family!"
+            }
+            return "Your recovery improved the most today compared to yesterday!"
+        
+        // Weekly improvement badges - show % improvement from last week
+        case "weekly_vitality_mvp":
+            if let percentIncrease = meta["percentIncrease"] as? Double {
+                return "Your overall vitality improved +\(Int(percentIncrease.rounded()))% this week compared to last week - the biggest improvement in your family!"
+            }
+            return "You had the biggest improvement in total vitality this week compared to last week!"
+            
+        case "weekly_sleep_mvp":
+            if let percentIncrease = meta["percentIncrease"] as? Double {
+                return "Your sleep improved +\(Int(percentIncrease.rounded()))% this week compared to last week - the biggest improvement in your family!"
+            }
+            return "You had the biggest improvement in sleep this week compared to last week!"
+            
+        case "weekly_movement_mvp":
+            if let percentIncrease = meta["percentIncrease"] as? Double {
+                return "Your activity improved +\(Int(percentIncrease.rounded()))% this week compared to last week - the biggest improvement in your family!"
+            }
+            return "You had the biggest improvement in activity this week compared to last week!"
+            
+        case "weekly_stressfree_mvp":
+            if let percentIncrease = meta["percentIncrease"] as? Double {
+                return "Your recovery improved +\(Int(percentIncrease.rounded()))% this week compared to last week - the biggest improvement in your family!"
+            }
+            return "You had the biggest improvement in recovery this week compared to last week!"
+        
+        // Family Anchor - highest average
         case "weekly_family_anchor":
-            // Show average score
-            if let thisAvg = meta["thisAvg"] as? Double {
-                VStack(alignment: .leading, spacing: 8) {
-                    MetricRow(label: "Your Week Average", value: "\(Int(thisAvg.rounded()))/100")
-                }
-                .padding(16)
-                .background(DashboardDesign.tertiaryBackgroundColor)
-                .cornerRadius(12)
-            } else {
-                EmptyView()
-            }
-            
+            return "You had the highest overall vitality this week, setting the bar for your family. You're the steady rock everyone can count on!"
+        
+        // Consistency MVP - show stability
         case "weekly_consistency_mvp":
-            // Show standard deviation
             if let stddev = meta["stddev"] as? Double {
-                VStack(alignment: .leading, spacing: 8) {
-                    MetricRow(label: "Standard Deviation", value: "±\(Int(stddev.rounded())) points")
-                    Text("(Lower is better - you had minimal ups and downs)")
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundColor(DashboardDesign.secondaryTextColor)
-                        .padding(.top, 4)
-                }
-                .padding(16)
-                .background(DashboardDesign.tertiaryBackgroundColor)
-                .cornerRadius(12)
-            } else {
-                EmptyView()
+                return "Your scores stayed incredibly stable all week with only ±\(Int(stddev.rounded())) points of variation - consistency is the foundation of lasting health!"
             }
-            
+            return "Your vitality scores were the most stable this week with minimal ups and downs!"
+        
+        // Balanced Week - all pillars strong
         case "weekly_balanced_week":
-            // Show all three pillar averages
-            if let sleepAvg = meta["sleepAvg"] as? Double,
-               let movementAvg = meta["movementAvg"] as? Double,
-               let stressAvg = meta["stressAvg"] as? Double {
-                VStack(alignment: .leading, spacing: 8) {
-                    MetricRow(label: "Sleep", value: "\(Int(sleepAvg.rounded()))/100")
-                    MetricRow(label: "Activity", value: "\(Int(movementAvg.rounded()))/100")
-                    MetricRow(label: "Recovery", value: "\(Int(stressAvg.rounded()))/100")
-                }
-                .padding(16)
-                .background(DashboardDesign.tertiaryBackgroundColor)
-                .cornerRadius(12)
-            } else {
-                EmptyView()
+            return "You kept all three health pillars (Sleep, Activity, Recovery) consistently strong throughout the week. Your lowest pillar was still excellent, showing true balance across the board!"
+        
+        // Biggest Comeback - single day improvement
+        case "weekly_biggest_comeback_day":
+            if let maxDelta = meta["maxDelta"] as? Int {
+                return "You made an incredible +\(maxDelta) point comeback - the biggest single-day jump in your family this week!"
             }
+            return "You had the biggest single-day improvement in vitality score this week!"
+        
+        // Streak badges - days above threshold
+        case "weekly_sleep_streak_leader":
+            if let streakDays = meta["streakDays"] as? Int {
+                return "You maintained a \(streakDays)-day streak of strong sleep scores (75+ points) - building healthy habits one day at a time!"
+            }
+            return "You had the longest streak of days with strong sleep scores!"
             
+        case "weekly_movement_streak_leader":
+            if let streakDays = meta["streakDays"] as? Int {
+                return "You maintained a \(streakDays)-day streak of strong activity scores (75+ points) - building healthy habits one day at a time!"
+            }
+            return "You had the longest streak of days with strong activity scores!"
+            
+        case "weekly_stress_streak_leader":
+            if let streakDays = meta["streakDays"] as? Int {
+                return "You maintained a \(streakDays)-day streak of strong recovery scores (75+ points) - building healthy habits one day at a time!"
+            }
+            return "You had the longest streak of days with strong recovery scores!"
+        
+        // Data Champion - most complete days
+        case "weekly_data_champion":
+            if let days = meta["daysWith2PlusPillars"] as? Int {
+                return "You logged complete health data for \(days) days this week - consistent tracking helps the whole family stay on track!"
+            }
+            return "You had the most days with complete health data this week!"
+        
         default:
-            EmptyView()
+            return "You earned this badge for outstanding performance!"
         }
     }
     
@@ -753,24 +711,6 @@ struct BadgeDetailSheet: View {
             return "Thanks for keeping your data complete! It helps everyone."
         default:
             return "Keep up the excellent work!"
-        }
-    }
-}
-
-// MARK: - Metric Row Helper
-private struct MetricRow: View {
-    let label: String
-    let value: String
-    
-    var body: some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 14, weight: .regular))
-                .foregroundColor(DashboardDesign.secondaryTextColor)
-            Spacer()
-            Text(value)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(DashboardDesign.primaryTextColor)
         }
     }
 }

@@ -214,6 +214,37 @@ Deno.serve(async (req) => {
           console.log("🔴 MIYA_ACTIVITY_EVENT_NO_USER_MAPPING", { rookUserId });
           return jsonResponse({ ok: true, message: "activity_event received but user not mapped" });
         }
+
+        // Keep rook_user_mapping warm for future lookups:
+        // whenever we successfully resolve both userId and rookUserId, upsert a mapping row.
+        try {
+          const mappingRecord: Record<string, unknown> = {
+            user_id: userId,
+            rook_user_id: rookUserId,
+            mapping_source: "webhook_activity_event",
+          };
+          const { error: mapErr } = await supabase
+            .from("rook_user_mapping")
+            .upsert(mappingRecord, { onConflict: "rook_user_id" });
+          if (mapErr) {
+            console.error("🟡 MIYA_ACTIVITY_EVENT_MAPPING_UPSERT_ERROR", {
+              rookUserId,
+              userId,
+              error: mapErr.message,
+            });
+          } else {
+            console.log("🟢 MIYA_ACTIVITY_EVENT_MAPPING_UPSERT_OK", {
+              rookUserId,
+              userId,
+            });
+          }
+        } catch (mapUnexpectedErr) {
+          console.error("🟡 MIYA_ACTIVITY_EVENT_MAPPING_UNHANDLED_ERROR", {
+            rookUserId,
+            userId,
+            error: String(mapUnexpectedErr),
+          });
+        }
         
         // Process each activity event
         const exerciseRecords = [];
@@ -505,12 +536,16 @@ Deno.serve(async (req) => {
 
       // CALORIE METRICS
       // ---------------
-      // Prefer net active calories (more accurate for movement)
+      // Prefer net active calories (more accurate for movement). Support multiple provider key names.
       const caloriesActive =
         asNumber(deepFindByKey(body, "calories_net_active_kcal_float")) ??
         asNumber(deepFindByKey(body, "active_calories_kcal_double")) ??
         asNumber(deepFindByKey(body, "activeCalories")) ??
-        asNumber(deepFindByKey(body, "active_energy_burned_kcal_double"));
+        asNumber(deepFindByKey(body, "active_energy_burned_kcal_double")) ??
+        asNumber(deepFindByKey(body, "active_energy_burned")) ??
+        asNumber(deepFindByKey(body, "calories_active_kcal")) ??
+        asNumber(deepFindByKey(body, "activeEnergyBurned")) ??
+        asNumber(deepFindByKey(body, "calories_active"));
 
       const caloriesTotal =
         asNumber(deepFindByKey(body, "total_calories_kcal_double")) ??
@@ -520,6 +555,17 @@ Deno.serve(async (req) => {
 
       const scoreRaw = asNumber(body.score ?? body.rookScore ?? deepFindByKey(body, "score"));
       const scoreNormalized = asNumber(body.normalizedScore ?? deepFindByKey(body, "normalizedScore"));
+
+      // Debug: when we have movement data but no active calories, log so we can spot missing keys in payloads
+      if ((steps != null || movementMinutes != null) && caloriesActive == null && metricDate) {
+        console.log("🟡 MIYA_ACTIVE_CALORIES_MISSING", {
+          metric_date: metricDate,
+          rook_user_id: rookUserId ?? null,
+          has_steps: steps != null,
+          has_movement_minutes: movementMinutes != null,
+          hint: "Movement pillar will use steps/movement_minutes only; add payload key if your source sends active calories under a different name.",
+        });
+      }
 
         // Upsert into wearable_daily_metrics keyed on (rook_user_id, metric_date, source)
         // updated_at is automatically handled by database trigger
@@ -548,7 +594,7 @@ Deno.serve(async (req) => {
       let mappingSource: string | null = null;
       
       if (rookUserId) {
-        // Step 1: Check if we've seen this device before (existing wearable_daily_metrics)
+        // Step 1: Check if we've seen this device/user before in wearable_daily_metrics
         const { data: existingMetrics, error: metricsErr } = await supabase
           .from("wearable_daily_metrics")
           .select("user_id")
@@ -575,7 +621,7 @@ Deno.serve(async (req) => {
             console.log("🟢 MIYA_ROOK_USER_ID_MAPPED", { rookUserId, userId });
           } else {
             // Step 3: LAST RESORT - check if rookUserId exactly matches a user_profile.user_id
-            // This handles the rare case where setUserId() actually worked correctly
+            // This handles the case where Rook user_id is already the Miya auth UUID.
             if (uuidRegex.test(rookUserId)) {
               const { data: profile, error: profileErr } = await supabase
                 .from("user_profiles")
@@ -601,6 +647,39 @@ Deno.serve(async (req) => {
       }
 
       if (rookUserId && metricDate && anyMetric) {
+        // Keep rook_user_mapping warm for future lookups whenever we know both IDs.
+        if (userId) {
+          try {
+            const mappingRecord: Record<string, unknown> = {
+              user_id: userId,
+              rook_user_id: rookUserId,
+              mapping_source: mappingSource ?? "webhook_daily_summary",
+            };
+            const { error: mapErr } = await supabase
+              .from("rook_user_mapping")
+              .upsert(mappingRecord, { onConflict: "rook_user_id" });
+            if (mapErr) {
+              console.error("🟡 MIYA_DAILY_MAPPING_UPSERT_ERROR", {
+                rookUserId,
+                userId,
+                error: mapErr.message,
+              });
+            } else {
+              console.log("🟢 MIYA_DAILY_MAPPING_UPSERT_OK", {
+                rookUserId,
+                userId,
+                mappingSource,
+              });
+            }
+          } catch (mapUnexpectedErr) {
+            console.error("🟡 MIYA_DAILY_MAPPING_UNHANDLED_ERROR", {
+              rookUserId,
+              userId,
+              error: String(mapUnexpectedErr),
+            });
+          }
+        }
+
         // IMPORTANT: do not overwrite existing non-null values with nulls.
         // We only include fields that we actually extracted (not null/undefined).
         const record: Record<string, unknown> = {

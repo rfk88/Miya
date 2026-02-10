@@ -1149,7 +1149,7 @@ class DataManager: ObservableObject {
     }
 
     /// Fetch recent daily metrics extracted from ROOK webhooks.
-    /// - Note: `rook_user_id` is the same UUID we pass as the ROOK user (auth user id).
+    /// - Note: Queries by `user_id` (Supabase auth UUID) so data is found after webhook mapping or backfill.
     func fetchWearableDailyMetrics(days: Int = 14) async throws -> [WearableDailyMetricRow] {
         guard let userId = await currentUserId else {
             throw DataError.notAuthenticated
@@ -1164,7 +1164,7 @@ class DataManager: ObservableObject {
             let rows: [WearableDailyMetricRow] = try await supabase
                 .from("wearable_daily_metrics")
                 .select("metric_date, steps, sleep_minutes, movement_minutes, deep_sleep_minutes, rem_sleep_minutes, sleep_efficiency_pct, hrv_ms, resting_hr, source")
-                .eq("rook_user_id", value: userId)
+                .eq("user_id", value: userId)
                 .gte("metric_date", value: cutoff)
                 .order("metric_date", ascending: true)
                 .execute()
@@ -1183,9 +1183,10 @@ class DataManager: ObservableObject {
     
     /// Fetch recent daily metrics extracted from ROOK webhooks for a specific user.
     /// - Parameters:
-    ///   - userId: User UUID to fetch metrics for (used as rook_user_id)
+    ///   - userId: Supabase user UUID (auth user id) to fetch metrics for.
     ///   - days: Number of days to look back (default 21)
     /// - Returns: Array of WearableDailyMetricRow sorted by date
+    /// - Note: Queries by `user_id` so family member charts/details show data (rook_user_id often differs from auth UUID).
     func fetchWearableDailyMetricsForUser(userId: String, days: Int = 21) async throws -> [WearableDailyMetricRow] {
         let cutoffDate = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
         let df = DateFormatter()
@@ -1196,7 +1197,7 @@ class DataManager: ObservableObject {
             let rows: [WearableDailyMetricRow] = try await supabase
                 .from("wearable_daily_metrics")
                 .select("metric_date, steps, sleep_minutes, movement_minutes, deep_sleep_minutes, rem_sleep_minutes, sleep_efficiency_pct, hrv_ms, resting_hr, source")
-                .eq("rook_user_id", value: userId)
+                .eq("user_id", value: userId)
                 .gte("metric_date", value: cutoff)
                 .order("metric_date", ascending: true)
                 .execute()

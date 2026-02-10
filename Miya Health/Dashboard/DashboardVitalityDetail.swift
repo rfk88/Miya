@@ -228,8 +228,9 @@ struct VitalityFactorDetailSheet: View {
     // MARK: - Trend Computation
     
     private func computeTrend(from last7Days: [BackfilledDataPoint]) -> (direction: TrendDirection, percentChange: Double?) {
+        // Don't show trend if < 7 days of total data
         guard last7Days.count >= 7 else {
-            return (.stable, nil)
+            return (.insufficientData, nil)
         }
         
         // Last 3 days
@@ -434,20 +435,33 @@ struct VitalityFactorDetailSheet: View {
                 return ("arrow.down", Color.red, percentChange.map { String(format: "%.0f%%", $0) } ?? "-")
             case .stable:
                 return ("arrow.right", Color.gray, "→")
+            case .insufficientData:
+                return ("", Color.secondary, "Building baseline...")
             }
         }()
         
-        return HStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(color)
-            Text(text)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(color)
+        // For insufficient data, show text without background
+        if direction == .insufficientData {
+            return AnyView(
+                Text(text)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(color)
+            )
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(color.opacity(0.15))
-        .cornerRadius(6)
+        
+        return AnyView(
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(color)
+                Text(text)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(color)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(color.opacity(0.15))
+            .cornerRadius(6)
+        )
     }
 }

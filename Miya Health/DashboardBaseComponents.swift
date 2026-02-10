@@ -73,7 +73,7 @@ enum DashboardDesign {
     static let stressColor = Color.orange  // Real orange
     static let vitalityColor = Color.blue  // Real blue
     
-    // Button tint (for Chat with Arlo)
+    // Button tint (for Chat with Miya)
     static let buttonTint = Color.blue  // Real blue
     
     // Background colors (warmer, softer)

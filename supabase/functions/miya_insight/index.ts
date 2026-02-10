@@ -114,6 +114,35 @@ function pctChange(baseline: number | null, recent: number | null): number | nul
   return (recent - baseline) / baseline;
 }
 
+/**
+ * Calculate percentage change with gap detection and minimum data validation
+ * @param recent - Recent average value
+ * @param baseline - Baseline average value
+ * @param hasMinimumData - Whether user has at least 7 days of data
+ * @param isGapDetected - Whether a data gap was detected in recent period
+ * @returns Percentage change or null if insufficient data
+ */
+function pctChangeWithGapDetection(
+  recent: number | null,
+  baseline: number | null,
+  hasMinimumData: boolean,
+  isGapDetected: boolean
+): number | null {
+  // Don't show percentage if < 7 days of data
+  if (!hasMinimumData) {
+    return null;
+  }
+  
+  // If gap detected, still compute percentage but it will compare to baseline
+  // (which is what we want - comparing resumed data to baseline, not to zero)
+  if (isGapDetected) {
+    console.log(`Gap detected - comparing to baseline: recent=${recent} vs baseline=${baseline}`);
+  }
+  
+  // Use standard percentage calculation
+  return pctChange(baseline, recent);
+}
+
 function severityLabel(sev: string | null, level: number): "watch" | "attention" | "critical" {
   const s = (sev ?? "").toLowerCase();
   if (s === "watch" || s === "attention" || s === "critical") return s;

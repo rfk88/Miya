@@ -172,7 +172,6 @@ export async function recomputeRolling7dScoresForUser(
     const dailyWindow = windowKeys.map((k) => mergedByDay.get(k)!).filter(Boolean);
 
     const sleepMinutesUnfilled = avgIntRounded(dailyWindow.map((d) => d.sleep_minutes));
-    const sleepHoursUnfilled = sleepMinutesUnfilled == null ? null : sleepMinutesUnfilled / 60.0;
     const stepsUnfilled = avgIntRounded(dailyWindow.map((d) => d.steps));
     const caloriesActiveUnfilled = avg(dailyWindow.map((d) => d.calories_active));
     const hrvMsUnfilled = avg(dailyWindow.map((d) => d.hrv_ms));
@@ -188,12 +187,6 @@ export async function recomputeRolling7dScoresForUser(
     const awakeMinutesUnfilled = avgIntRounded(dailyWindow.map((d) => d.awake_minutes));
     const timeToFallAsleepUnfilled = avgIntRounded(dailyWindow.map((d) => d.time_to_fall_asleep_minutes));
 
-    const sleepDurationHours = backfillDoubleIfNeeded(
-      sleepHoursUnfilled,
-      lookbackKeysDesc,
-      mergedByDay,
-      (d) => (d.sleep_minutes == null ? null : d.sleep_minutes / 60.0),
-    );
     const sleepMinutesFinal = backfillIntIfNeeded(
       sleepMinutesUnfilled,
       lookbackKeysDesc,
@@ -214,17 +207,36 @@ export async function recomputeRolling7dScoresForUser(
     const lightSleepMinutesFinal = backfillIntIfNeeded(lightSleepMinutesUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.light_sleep_minutes);
     const awakeMinutesFinal = backfillIntIfNeeded(awakeMinutesUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.awake_minutes);
     const timeToFallAsleepMinutes = backfillIntIfNeeded(timeToFallAsleepUnfilled, lookbackKeysDesc, mergedByDay, (d) => d.time_to_fall_asleep_minutes);
+
+    // Sleep guardrails: if total sleep_minutes is missing, derive from stage breakdown (deep + rem + light).
+    const deep = deepSleepMinutesFinal ?? 0;
+    const rem = remSleepMinutesFinal ?? 0;
+    const light = lightSleepMinutesFinal ?? 0;
+    const stagesSum = deep + rem + light;
+    const derivedSleepMinutes =
+      Number.isFinite(stagesSum) && stagesSum > 0 ? Math.round(stagesSum) : null;
+    const effectiveSleepMinutes =
+      sleepMinutesFinal != null && sleepMinutesFinal > 0
+        ? sleepMinutesFinal
+        : derivedSleepMinutes;
+    const sleepDurationHours =
+      effectiveSleepMinutes != null && effectiveSleepMinutes > 0
+        ? effectiveSleepMinutes / 60.0
+        : null;
+
+    // Restorative %: (deep + rem) / effective total. Return null if deep and rem both missing (don't penalize).
     const restorativeSleepPercent = (() => {
-      if (sleepMinutesFinal == null || sleepMinutesFinal <= 0) return null;
-      const deep = deepSleepMinutesFinal ?? 0;
-      const rem = remSleepMinutesFinal ?? 0;
-      const total = deep + rem;
-      if (!Number.isFinite(total) || total <= 0) return null;
-      return Math.round((total / sleepMinutesFinal) * 100);
+      if (effectiveSleepMinutes == null || effectiveSleepMinutes <= 0) return null;
+      const restorative = deep + rem;
+      if (!Number.isFinite(restorative) || restorative <= 0) return null;
+      return Math.round((restorative / effectiveSleepMinutes) * 100);
     })();
+
+    // Awake %: awake / (effective sleep + awake). Use effective total when available.
     const awakePercent = (() => {
-      if (awakeMinutesFinal == null || sleepMinutesFinal == null) return null;
-      const denom = sleepMinutesFinal + awakeMinutesFinal;
+      const sleepForAwake = effectiveSleepMinutes ?? sleepMinutesFinal;
+      if (awakeMinutesFinal == null || sleepForAwake == null) return null;
+      const denom = sleepForAwake + awakeMinutesFinal;
       if (!Number.isFinite(denom) || denom <= 0) return null;
       return Math.round((awakeMinutesFinal / denom) * 100);
     })();

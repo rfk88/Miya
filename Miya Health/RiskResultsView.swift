@@ -35,6 +35,11 @@ struct RiskResultsView: View {
         onboardingManager.isInvitedUser && onboardingManager.guidedSetupStatus == .acceptedAwaitingData
     }
     
+    private var showBreakouts: Bool {
+        // Show educational breakouts only for self-onboarding (not guided setup)
+        onboardingManager.guidedSetupStatus == nil
+    }
+    
     // New engine state (testing)
     @State private var newEngineSnapshot: VitalitySnapshot?
     @State private var newEngineErrorMessage: String?
@@ -802,7 +807,12 @@ struct RiskResultsView: View {
                 
                 // Continue button
                 NavigationLink {
-                    if isGuidedInviteeAwaitingAdmin {
+                    if showBreakouts {
+                        // Show Breakout 3 for self-onboarding flow
+                        Breakout3View()
+                            .environmentObject(onboardingManager)
+                            .environmentObject(dataManager)
+                    } else if isGuidedInviteeAwaitingAdmin {
                         OnboardingCompleteView(membersCount: 0)
                             .environmentObject(onboardingManager)
                             .environmentObject(dataManager)

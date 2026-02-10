@@ -171,11 +171,20 @@ Deno.serve(async (req) => {
     const memberNameFull = clientContext?.member_name || "";
     let memberName = memberNameFull.split(" ")[0] || "the family member";
 
-    // Generate friendly reference based on relationship
+    // CRITICAL: Check if viewer is viewing their own data
+    const isViewingSelf = callerId === alert.user_id;
+
+    // Generate friendly reference based on identity
     let memberRef = memberName;
     let memberPossessive = `${memberName}'s`;
 
-    if (memberRelationship) {
+    if (isViewingSelf) {
+      // Viewer is looking at their own data - use "you"/"your"
+      memberRef = "you";
+      memberPossessive = "your";
+      console.log("miya_insight_chat: Viewer is viewing SELF - using 'you'/'your'");
+    } else if (memberRelationship) {
+      // Viewer is looking at someone else - use relationship
       const rel = memberRelationship.toLowerCase();
       switch(rel) {
         case 'partner':
@@ -210,6 +219,7 @@ Deno.serve(async (req) => {
           // Use name for "Other" or unknown relationships
           break;
       }
+      console.log(`miya_insight_chat: Viewer viewing OTHER - using relationship: ${memberRef}`);
     }
 
     const system = `
@@ -361,10 +371,28 @@ REMEMBER YOUR MISSION:
       
       const metricName = clientContext.metric_name || 'Unknown Metric';
       const metricUnit = clientContext.metric_unit || '';
+      const trendSummary = clientContext.trend_summary || null;
       
       // Determine if this is a score (0-100) or a measurement (actual units)
       const isScore = metricUnit === '/100' || metricName.toLowerCase().includes('score');
       const unitDisplay = metricUnit === '/100' ? '/100' : ` ${metricUnit}`;
+      
+      // Build trending view text
+      let trendingView = '';
+      if (trendSummary && trendSummary.direction) {
+        const arrow = trendSummary.direction === 'increasing' ? '↑' : 
+                      trendSummary.direction === 'decreasing' ? '↓' : '→';
+        const changeText = trendSummary.percent_change > 0 ? `+${trendSummary.percent_change}%` : `${trendSummary.percent_change}%`;
+        
+        trendingView = `
+TRENDING VIEW (${trendSummary.data_points} days):
+Overall: ${arrow} ${trendSummary.direction} (${changeText} from first to last)
+Range: ${trendSummary.min}-${trendSummary.max} ${metricUnit}
+Average: ${trendSummary.average} ${metricUnit}
+Latest: ${trendSummary.last_value} ${metricUnit}
+First: ${trendSummary.first_value} ${metricUnit}
+`;
+      }
       
       healthInsight = {
         member: { name: memberName },
@@ -379,6 +407,7 @@ REMEMBER YOUR MISSION:
         timeframe: `last ${clientContext.duration_days || 'several'} days`,
         alert: clientContext.alert_headline || cached.headline,
         severity: clientContext.severity || 'unknown',
+        trendSummary: trendingView,  // NEW: Easy-to-read trending view
         specificData: {
           currentAverage: avgRecent ? `${avgRecent}${unitDisplay}` : null,
           optimalRange: clientContext.optimal_range ? `${clientContext.optimal_range.min}-${clientContext.optimal_range.max}${unitDisplay}` : null,
@@ -392,8 +421,8 @@ REMEMBER YOUR MISSION:
           ...(clientContext.data_connections ? [clientContext.data_connections] : []),
         ].filter(Boolean),
         whatToReference: isScore
-          ? `CRITICAL: These values are ${metricName} on a 0-100 scale (higher = better). When showing daily values, say things like "score of 81/100" or "31/100". Current average: ${avgRecent}/100, optimal: ${clientContext.optimal_range?.min}-${clientContext.optimal_range?.max}/100. NEVER say "hours" or other measurement units for scores.`
-          : `CRITICAL: These values are ${metricName} measured in ${metricUnit}. Current average: ${avgRecent} ${metricUnit}, optimal: ${clientContext.optimal_range?.min}-${clientContext.optimal_range?.max} ${metricUnit}. ALWAYS include the metric name and unit.`
+          ? `CRITICAL: These values are ${metricName} on a 0-100 scale (higher = better). ${trendingView ? 'USE THE TRENDING VIEW to understand the pattern - it shows direction and change percentage.' : ''} When showing daily values, say things like "score of 81/100" or "31/100". Current average: ${avgRecent}/100, optimal: ${clientContext.optimal_range?.min}-${clientContext.optimal_range?.max}/100. NEVER say "hours" or other measurement units for scores.`
+          : `CRITICAL: These values are ${metricName} measured in ${metricUnit}. ${trendingView ? 'USE THE TRENDING VIEW to understand the pattern - it shows if values are increasing, decreasing, or stable.' : ''} Current average: ${avgRecent} ${metricUnit}, optimal: ${clientContext.optimal_range?.min}-${clientContext.optimal_range?.max} ${metricUnit}. ALWAYS include the metric name and unit.`
       };
     } else {
       // Fall back to fetching from cached evidence (old behavior)
