@@ -7,7 +7,8 @@ struct ProfileView: View {
     let vitalityScore: Int
     let vitalityTrendDelta: Int
     let vitalityLabel: String
-    
+    var avatarURL: String? = nil
+
     // MARK: - Derived
     
     private var trendText: String {
@@ -45,21 +46,20 @@ struct ProfileView: View {
                     
                     // AVATAR + NAME (outside the card)
                     HStack(spacing: 12) {
-                        // Avatar placeholder (circle + border)
-                        Circle()
-                            .fill(Color.white)
-                            .frame(width: 46, height: 46)
-                            .overlay(
-                                Circle()
-                                    .stroke(Color.miyaTextSecondary.opacity(0.25), lineWidth: 1)
-                            )
-                            .overlay(
-                                Text(initials(from: memberName))
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(.miyaTextPrimary)
-                            )
-                            .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
-                        
+                        ProfileAvatarView(
+                            imageURL: avatarURL,
+                            initials: initials(from: memberName),
+                            diameter: 46,
+                            backgroundColor: Color.white,
+                            foregroundColor: .miyaTextPrimary,
+                            font: .system(size: 16, weight: .semibold),
+                            showsBorder: true,
+                            borderColor: Color.miyaTextSecondary.opacity(0.25),
+                            borderWidth: 1
+                        )
+                        .frame(width: 46, height: 46)
+                        .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
+
                         VStack(alignment: .leading, spacing: 2) {
                             Text(memberName)
                                 .font(.system(size: 16, weight: .semibold))

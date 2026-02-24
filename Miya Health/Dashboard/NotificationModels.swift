@@ -49,6 +49,63 @@ struct FamilyNotificationItem: Identifiable {
         }
     }
     
+    /// Parsed duration (in days) that the underlying pattern/trend has been active,
+    /// derived from debugWhy or the title/body text. Returns nil if no duration
+    /// can be confidently parsed.
+    var patternDurationDays: Int? {
+        switch kind {
+        case .fallback:
+            return nil
+        case .trend(let insight):
+            // 1) Prefer parsing from debugWhy when available.
+            if let debug = insight.debugWhy {
+                // Server pattern: "level=7"
+                if let range = debug.range(of: #"level=(\d+)"#, options: .regularExpression) {
+                    let match = debug[range]
+                        .components(separatedBy: CharacterSet.decimalDigits.inverted)
+                        .compactMap { Int($0) }
+                        .first
+                    if let days = match {
+                        return days
+                    }
+                }
+                // Client trend: "consecutiveDays: 7" or "consecutiveDays=7"
+                if let range = debug.range(of: #"consecutiveDays[\":\s=]+(\d+)"#, options: .regularExpression) {
+                    let match = debug[range]
+                        .components(separatedBy: CharacterSet.decimalDigits.inverted)
+                        .compactMap { Int($0) }
+                        .first
+                    if let days = match {
+                        return days
+                    }
+                }
+            }
+            
+            // 2) Fallback: look for "last 7d" / "(last 7d)" patterns in title/body.
+            let textToSearch = title + " " + body
+            if let range = textToSearch.range(of: #"last (\d+)d"#, options: .regularExpression) {
+                let match = textToSearch[range]
+                    .components(separatedBy: CharacterSet.decimalDigits.inverted)
+                    .compactMap { Int($0) }
+                    .first
+                if let days = match {
+                    return days
+                }
+            }
+            
+            // 3) If we still can't parse, return nil so callers can omit the chip.
+            return nil
+        }
+    }
+    
+    /// Convenience token like "3d" derived from patternDurationDays.
+    var patternDurationToken: String? {
+        guard let days = patternDurationDays, days > 0 else {
+            return nil
+        }
+        return "\(days)d"
+    }
+    
     /// Single-line display for cards: "Pillar is X% below/above Name's baseline (3d)" when body has that pattern, else title.
     var displayLine: String {
         switch kind {
@@ -245,6 +302,59 @@ struct FamilyNotificationItem: Identifiable {
         let second = parts.dropFirst().first?.prefix(1) ?? ""
         let combined = String(first + second)
         return combined.isEmpty ? String(name.prefix(2)).uppercased() : combined.uppercased()
+    }
+}
+
+extension FamilyNotificationItem {
+    /// Enforces one notification per member + pillar + timeframe for UI display.
+    /// Keeps a deterministic representative item for each key.
+    static func dedupedByMemberPillarWindow(_ items: [FamilyNotificationItem]) -> [FamilyNotificationItem] {
+        guard !items.isEmpty else { return [] }
+
+        struct DedupeKey: Hashable {
+            let memberKey: String
+            let pillarKey: String
+            let windowKey: Int
+        }
+
+        func severityPriority(_ notification: FamilyNotificationItem) -> Int {
+            switch notification.kind {
+            case .trend(let insight):
+                switch insight.severity {
+                case .attention: return 3
+                case .watch: return 2
+                case .celebrate: return 1
+                }
+            case .fallback:
+                return 3
+            }
+        }
+
+        // Deterministic order: severity first, then id.
+        let ranked = items.sorted { lhs, rhs in
+            let l = severityPriority(lhs)
+            let r = severityPriority(rhs)
+            if l != r { return l > r }
+            return lhs.id < rhs.id
+        }
+
+        var seen: Set<DedupeKey> = []
+        var out: [FamilyNotificationItem] = []
+
+        for item in ranked {
+            let memberKey = (item.memberUserId ?? item.memberName).lowercased()
+            let key = DedupeKey(
+                memberKey: memberKey,
+                pillarKey: item.pillar.rawValue,
+                windowKey: item.triggerWindowDays ?? 0
+            )
+
+            if seen.insert(key).inserted {
+                out.append(item)
+            }
+        }
+
+        return out
     }
 }
 

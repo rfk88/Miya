@@ -125,6 +125,9 @@ struct FamilyNotificationDetailSheet: View {
     @State private var isSnoozingAlert = false
     @State private var snoozeError: String?
     
+    // Challenge CTA state
+    @State private var hasSentRecommendedChallenge: Bool = false
+    
     private var config: PillarConfig {
         PillarConfig.forPillar(item.pillar)
     }
@@ -250,6 +253,30 @@ struct FamilyNotificationDetailSheet: View {
         case .stress:
             return "Do a 5-min reset together"
         }
+    }
+    
+    private var memberFirstName: String {
+        let parts = item.memberName.split(separator: " ")
+        return parts.first.map(String.init) ?? item.memberName
+    }
+    
+    /// Effective pattern duration (in days) used for CTA logic (3d vs 7/14/21d).
+    /// Prefer the parsed pattern duration (e.g. "last 3d"/"level=3") so the CTA
+    /// reflects the actual drift length, not the fixed 21d analysis window.
+    private var ctaPatternDurationDays: Int {
+        if let days = item.patternDurationDays {
+            return days
+        }
+        // Fallback to the underlying windowDays if available, otherwise treat
+        // as a short 3-day check-in.
+        if let window = item.triggerWindowDays {
+            return window
+        }
+        return 3
+    }
+    
+    private var isShortCheckInWindow: Bool {
+        ctaPatternDurationDays <= 3
     }
     
     private var selectedShareText: String {
@@ -1474,39 +1501,19 @@ struct FamilyNotificationDetailSheet: View {
     private func getRelationshipReferences(currentUserId: String?) -> (memberRef: String, memberPossessive: String) {
         let firstName = item.memberName.split(separator: " ").first.map(String.init) ?? item.memberName
         
-        // CRITICAL: Check if viewing own data
-        if let currentUserId = currentUserId, item.memberUserId == currentUserId {
+        // If the viewer is looking at their OWN data, speak directly to them.
+        if
+            let currentUserId = currentUserId,
+            let memberId = item.memberUserId,
+            memberId.lowercased() == currentUserId.lowercased()
+        {
             print("✅ getRelationshipReferences: Viewing SELF - using 'you'/'your'")
             return ("you", "your")
         }
         
-        // Use relationship if available, otherwise fall back to name
-        guard let relationship = memberRelationship?.lowercased() else {
-            return (firstName, "\(firstName)'s")
-        }
-        
-        switch relationship {
-        case "partner", "wife", "husband":
-            // For partner/wife/husband, use "your wife" or "your husband" or "your partner"
-            if relationship == "wife" {
-                return ("your wife", "your wife's")
-            } else if relationship == "husband" {
-                return ("your husband", "your husband's")
-            } else {
-                return ("your partner", "your partner's")
-            }
-        case "parent":
-            return ("your parent", "your parent's")
-        case "child":
-            return ("your child", "your child's")
-        case "sibling":
-            return ("your sibling", "your sibling's")
-        case "grandparent":
-            return ("your grandparent", "your grandparent's")
-        default:
-            // For "Other" or unknown, use name
-            return (firstName, "\(firstName)'s")
-        }
+        // For all other cases, always refer to the family member by name.
+        // Avoid relationship phrases like "your sibling" or "your parent" to keep copy personal and clear.
+        return (firstName, "\(firstName)'s")
     }
     
     private func parseDuration(from debugWhy: String?) -> Int {
@@ -2552,6 +2559,10 @@ struct FamilyNotificationDetailSheet: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
+                    // Inline card to surface "Check in" vs "Send challenge" directly
+                    // above the conversation, based on pattern duration.
+                    checkInOrChallengeBanner
+                    
                     ForEach(chatMessages) { message in
                         WhoopStyleBubble(message: message, memberName: item.memberName)
                             .id(message.id)
@@ -2568,13 +2579,88 @@ struct FamilyNotificationDetailSheet: View {
                 .padding()
             }
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: chatMessages.count) { oldValue, newValue in
+            .onChange(of: chatMessages.count) { _, _ in
                 if let last = chatMessages.last {
                     withAnimation {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
             }
+        }
+    }
+    
+    @ViewBuilder
+    private var checkInOrChallengeBanner: some View {
+        let days = ctaPatternDurationDays
+        
+        if days > 0 {
+            VStack(alignment: .leading, spacing: 8) {
+                // Simple header showing how long the pattern has been active
+                HStack {
+                    Image(systemName: "waveform.path.ecg")
+                        .foregroundColor(.miyaPrimary)
+                    Text("Pattern active for \(days) days")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.miyaTextSecondary)
+                    Spacer()
+                }
+                
+                if isShortCheckInWindow {
+                    Text("Check in with \(memberFirstName)")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.miyaTextPrimary)
+                    
+                    Text("This is an early 3-day drift. A quick check-in message can help catch things before they grow.")
+                        .font(.system(size: 13))
+                        .foregroundColor(.miyaTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Send a 7-day challenge")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.miyaTextPrimary)
+                    
+                    Text("\(memberFirstName) has been below baseline for \(days) days. You can quietly start a 7-day challenge to help them get back to their usual pattern.")
+                        .font(.system(size: 13))
+                        .foregroundColor(.miyaTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    
+                    if hasSentRecommendedChallenge {
+                        Text("Challenge sent. Miya will track progress and keep you both updated.")
+                            .font(.system(size: 12))
+                            .foregroundColor(.miyaTextSecondary)
+                    } else {
+                        Button {
+                            onStartRecommendedChallenge()
+                            hasSentRecommendedChallenge = true
+                        } label: {
+                            Text(commitTogetherLabel)
+                                .font(.system(size: 14, weight: .semibold))
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: .infinity)
+                                .background(
+                                    LinearGradient(
+                                        colors: [Color.miyaPrimary, Color.miyaPrimary.opacity(0.85)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                                .foregroundColor(.white)
+                                .cornerRadius(12)
+                        }
+                        .padding(.top, 4)
+                    }
+                }
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(.systemBackground))
+                    .shadow(color: .black.opacity(0.05), radius: 4, x: 0, y: 2)
+            )
+            .padding(.horizontal, 4)
+            .padding(.bottom, 8)
+        } else {
+            EmptyView()
         }
     }
     
@@ -3071,28 +3157,53 @@ struct FamilyNotificationDetailSheet: View {
                             .padding(.horizontal, 20)
                             .padding(.top, -8)
                         
-                        // Commit Together (primary CTA)
-                        Button {
-                            dismiss()
-                            onStartRecommendedChallenge()
-                        } label: {
-                            Text(commitTogetherLabel)
-                                .font(.system(size: 17, weight: .semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 16)
-                                .background(
-                                    LinearGradient(
-                                        colors: [Color.miyaPrimary, Color.miyaPrimary.opacity(0.8)],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
+                        // Primary CTA: either \"Check in\" (3d window) or \"Send challenge\" (7/14/21d window).
+                        if isShortCheckInWindow {
+                            Button {
+                                // For short 3-day drifts, focus on a gentle check-in via chat.
+                                showAskMiyaChat = true
+                            } label: {
+                                Text("Check in with \(memberFirstName)")
+                                    .font(.system(size: 17, weight: .semibold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 16)
+                                    .background(
+                                        LinearGradient(
+                                            colors: [Color.miyaPrimary, Color.miyaPrimary.opacity(0.8)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
                                     )
-                                )
-                                .foregroundColor(.white)
-                                .cornerRadius(16)
-                                .shadow(color: Color.miyaPrimary.opacity(0.3), radius: 8, x: 0, y: 4)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(16)
+                                    .shadow(color: Color.miyaPrimary.opacity(0.3), radius: 8, x: 0, y: 4)
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.top, 8)
+                        } else {
+                            Button {
+                                // For longer 7/14/21d drifts, start a gentle 7-day challenge.
+                                dismiss()
+                                onStartRecommendedChallenge()
+                            } label: {
+                                Text(commitTogetherLabel)
+                                    .font(.system(size: 17, weight: .semibold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 16)
+                                    .background(
+                                        LinearGradient(
+                                            colors: [Color.miyaPrimary, Color.miyaPrimary.opacity(0.8)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .foregroundColor(.white)
+                                    .cornerRadius(16)
+                                    .shadow(color: Color.miyaPrimary.opacity(0.3), radius: 8, x: 0, y: 4)
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.top, 8)
                         }
-                        .padding(.horizontal, 20)
-                        .padding(.top, 8)
                     }
                     .padding(.vertical, 8)
                 }
@@ -3121,3 +3232,4 @@ struct FamilyNotificationDetailSheet: View {
         }
     }
 }
+

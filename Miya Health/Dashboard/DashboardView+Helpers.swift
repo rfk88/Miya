@@ -67,6 +67,12 @@ extension DashboardView {
             return isoFmt.date(from: s) ?? ISO8601DateFormatter().date(from: s)
         }
         
+        let snoozedUntil = loadMissingWearableSnoozedUntil()
+        func isSnoozed(notificationId: String) -> Bool {
+            guard let until = snoozedUntil[notificationId] else { return false }
+            return until > now
+        }
+        
         var notifications: [MissingWearableNotification] = []
         
         for member in familyMembers where !member.isMe && !member.isPending {
@@ -91,7 +97,7 @@ extension DashboardView {
                       let updatedAt = parseISODate(updatedAtStr) else {
                     if member.hasScore && member.isStale {
                         let notificationId = "missing_wearable_\(userId)_7"
-                        if !dismissedMissingWearableIds.contains(notificationId) {
+                        if !dismissedMissingWearableIds.contains(notificationId), !isSnoozed(notificationId: notificationId) {
                             notifications.append(MissingWearableNotification(
                                 id: notificationId,
                                 memberName: member.name,
@@ -111,7 +117,7 @@ extension DashboardView {
                     let notificationDays = daysStale >= 7 ? 7 : 3
                     let notificationId = "missing_wearable_\(userId)_\(notificationDays)"
                     
-                    if !dismissedMissingWearableIds.contains(notificationId) {
+                    if !dismissedMissingWearableIds.contains(notificationId), !isSnoozed(notificationId: notificationId) {
                         if daysStale >= 7 {
                             notifications = notifications.filter { $0.id != "missing_wearable_\(userId)_3" }
                             notifications.append(MissingWearableNotification(
@@ -145,6 +151,44 @@ extension DashboardView {
     }
     
     // MARK: - Missing Wearable Dismiss Persistence
+    
+    private static let missingWearableSnoozedUntilKey = "missingWearableSnoozedUntil"
+    
+    /// Returns notification ids that are currently snoozed (snoozed-until date > now).
+    /// Expired entries are removed from storage so the dict does not grow forever.
+    internal func loadMissingWearableSnoozedUntil() -> [String: Date] {
+        let raw = UserDefaults.standard.dictionary(forKey: Self.missingWearableSnoozedUntilKey) as? [String: String] ?? [:]
+        let isoFmt = ISO8601DateFormatter()
+        isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var result: [String: Date] = [:]
+        var toPersist: [String: String] = [:]
+        let now = Date()
+        for (id, dateStr) in raw {
+            guard let date = isoFmt.date(from: dateStr) ?? ISO8601DateFormatter().date(from: dateStr) else { continue }
+            if date > now {
+                result[id] = date
+                toPersist[id] = dateStr
+            }
+        }
+        if toPersist.count != raw.count {
+            UserDefaults.standard.set(toPersist, forKey: Self.missingWearableSnoozedUntilKey)
+        }
+        return result
+    }
+    
+    /// Snooze a missing-wearable notification for the given number of days.
+    /// Persists the snoozed-until date and removes the notification from the in-memory list.
+    internal func snoozeMissingWearableNotification(id: String, forDays days: Int) {
+        let now = Date()
+        guard let until = Calendar.current.date(byAdding: .day, value: days, to: now) else { return }
+        let isoFmt = ISO8601DateFormatter()
+        isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let raw = UserDefaults.standard.dictionary(forKey: Self.missingWearableSnoozedUntilKey) as? [String: String] ?? [:]
+        var updated = raw
+        updated[id] = isoFmt.string(from: until)
+        UserDefaults.standard.set(updated, forKey: Self.missingWearableSnoozedUntilKey)
+        missingWearableNotifications = missingWearableNotifications.filter { $0.id != id }
+    }
     
     internal func dismissedMissingWearableKey(for userId: String) -> String {
         "dismissedMissingWearable:\(userId)"

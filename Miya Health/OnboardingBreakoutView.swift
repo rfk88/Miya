@@ -252,6 +252,7 @@ struct Breakout1View: View {
                 .padding(.horizontal, 24)
                 .padding(.bottom, 32)
             }
+            .background(Color.miyaBackground)
             
             // Hidden NavigationLink
             NavigationLink(
@@ -495,6 +496,7 @@ struct Breakout2View: View {
                 .padding(.horizontal, 24)
                 .padding(.bottom, 32)
             }
+            .background(Color.miyaBackground)
             
             // Hidden NavigationLink
             NavigationLink(
@@ -694,6 +696,7 @@ struct Breakout3View: View {
                 .padding(.horizontal, 24)
                 .padding(.bottom, 32)
             }
+            .background(Color.miyaBackground)
             
             // Hidden NavigationLink
             NavigationLink(

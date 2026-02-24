@@ -29,17 +29,13 @@ enum SupabaseConfig {
     }()
     
     static let client: SupabaseClient = {
-        if let url = URL(string: supabaseURL) {
-            return SupabaseClient(
-                supabaseURL: url,
-                supabaseKey: supabaseAnonKey
-            )
-        }
-
-        let fallbackURL = URL(string: defaultSupabaseURL)!
+        let url = URL(string: supabaseURL) ?? URL(string: defaultSupabaseURL)!
         return SupabaseClient(
-            supabaseURL: fallbackURL,
-            supabaseKey: supabaseAnonKey
+            supabaseURL: url,
+            supabaseKey: supabaseAnonKey,
+            options: SupabaseClientOptions(
+                auth: .init(storageKey: "miya-auth-token")
+            )
         )
     }()
 }

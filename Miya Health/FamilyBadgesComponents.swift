@@ -195,7 +195,7 @@ struct FamilyBadgesCard: View {
                 
                 if isWeeklyExpanded {
                     VStack(spacing: 8) {
-                        ForEach(rest.prefix(3)) { w in
+                        ForEach(rest) { w in
                             ChampionRow(
                                 title: title(for: w.badgeType),
                                 winnerName: w.winnerName,
@@ -235,7 +235,7 @@ struct FamilyBadgesCard: View {
     
     // Helper functions for formatting values
     private func formatDailyValue(for badgeType: String, metadata: [String: Any]) -> String {
-        // Format as percentage increase from previous day with "score" suffix
+        // Format as percentage increase from personal baseline with "score" suffix
         if let percentIncrease = metadata["percentIncrease"] as? Double {
             let rounded = Int(percentIncrease.rounded())
             return "+\(rounded)% score"
@@ -295,13 +295,19 @@ struct FamilyBadgesCard: View {
     private func formatContextText(for badgeType: String) -> String {
         switch badgeType {
         case "weekly_vitality_mvp", "weekly_sleep_mvp", "weekly_movement_mvp", "weekly_stressfree_mvp":
-            return "(biggest improvement)"
+            return "(biggest meaningful improvement vs last week)"
         case "weekly_family_anchor":
-            return "(highest average)"
+            return "(highest sustained average this week)"
         case "weekly_consistency_mvp":
-            return "(most stable)"
+            return "(most stable this week)"
         case "weekly_balanced_week":
-            return "(best balance)"
+            return "(best cross-pillar balance this week)"
+        case "weekly_biggest_comeback_day":
+            return "(largest smoothed day-to-day rebound)"
+        case "weekly_sleep_streak_leader", "weekly_movement_streak_leader", "weekly_stress_streak_leader":
+            return "(longest strong-score streak)"
+        case "weekly_data_champion":
+            return "(most complete tracked days)"
         default:
             return ""
         }
@@ -580,11 +586,14 @@ struct BadgeDetailSheet: View {
     
     private func iconColor(for badgeType: String) -> Color {
         switch badgeType {
-        case "moon.fill": return Color.purple
-        case "figure.walk": return Color.green
-        case "heart.fill": return Color.orange
-        case "crown.fill", "shield.fill", "metronome", "circle.grid.cross.fill": return Color.blue
-        default: return Color.blue
+        case "daily_most_sleep", "weekly_sleep_mvp", "weekly_sleep_streak_leader":
+            return Color.purple
+        case "daily_most_movement", "weekly_movement_mvp", "weekly_movement_streak_leader":
+            return Color.green
+        case "daily_most_stressfree", "weekly_stressfree_mvp", "weekly_stress_streak_leader":
+            return Color.orange
+        default:
+            return Color.blue
         }
     }
     
@@ -595,92 +604,115 @@ struct BadgeDetailSheet: View {
         // Daily badges - show % improvement from yesterday
         case "daily_most_sleep":
             if let percentIncrease = meta["percentIncrease"] as? Double {
-                return "Your sleep improved +\(Int(percentIncrease.rounded()))% from yesterday - the biggest improvement in your family!"
+                let baselineDays = meta["historyDays"] as? Int ?? 0
+                let today = meta["todayValue"] as? Int ?? 0
+                let baseline = Int((meta["baselineAverage"] as? Double ?? 0).rounded())
+                return "Your sleep score is +\(Int(percentIncrease.rounded()))% above your recent \(baselineDays)-day baseline (\(today) vs \(baseline)). This was the strongest meaningful sleep lift today."
             }
-            return "Your sleep improved the most today compared to yesterday!"
+            return "Your sleep score had the strongest meaningful lift today versus your recent baseline."
             
         case "daily_most_movement":
             if let percentIncrease = meta["percentIncrease"] as? Double {
-                return "Your activity improved +\(Int(percentIncrease.rounded()))% from yesterday - the biggest improvement in your family!"
+                let baselineDays = meta["historyDays"] as? Int ?? 0
+                let today = meta["todayValue"] as? Int ?? 0
+                let baseline = Int((meta["baselineAverage"] as? Double ?? 0).rounded())
+                return "Your activity score is +\(Int(percentIncrease.rounded()))% above your recent \(baselineDays)-day baseline (\(today) vs \(baseline)). This was the strongest meaningful activity lift today."
             }
-            return "Your activity improved the most today compared to yesterday!"
+            return "Your activity score had the strongest meaningful lift today versus your recent baseline."
             
         case "daily_most_stressfree":
             if let percentIncrease = meta["percentIncrease"] as? Double {
-                return "Your recovery improved +\(Int(percentIncrease.rounded()))% from yesterday - the biggest improvement in your family!"
+                let baselineDays = meta["historyDays"] as? Int ?? 0
+                let today = meta["todayValue"] as? Int ?? 0
+                let baseline = Int((meta["baselineAverage"] as? Double ?? 0).rounded())
+                return "Your recovery score is +\(Int(percentIncrease.rounded()))% above your recent \(baselineDays)-day baseline (\(today) vs \(baseline)). This was the strongest meaningful recovery lift today."
             }
-            return "Your recovery improved the most today compared to yesterday!"
+            return "Your recovery score had the strongest meaningful lift today versus your recent baseline."
         
         // Weekly improvement badges - show % improvement from last week
         case "weekly_vitality_mvp":
             if let percentIncrease = meta["percentIncrease"] as? Double {
-                return "Your overall vitality improved +\(Int(percentIncrease.rounded()))% this week compared to last week - the biggest improvement in your family!"
+                let thisWeek = Int((meta["thisAvg"] as? Double ?? 0).rounded())
+                let prevWeek = Int((meta["prevAvg"] as? Double ?? 0).rounded())
+                let thisDays = meta["thisWeekDays"] as? Int ?? 0
+                let prevDays = meta["prevWeekDays"] as? Int ?? 0
+                return "Your overall vitality average is +\(Int(percentIncrease.rounded()))% versus last week (\(thisWeek) vs \(prevWeek)), with \(thisDays) tracked days this week and \(prevDays) last week."
             }
-            return "You had the biggest improvement in total vitality this week compared to last week!"
+            return "You had the strongest meaningful week-over-week vitality improvement."
             
         case "weekly_sleep_mvp":
             if let percentIncrease = meta["percentIncrease"] as? Double {
-                return "Your sleep improved +\(Int(percentIncrease.rounded()))% this week compared to last week - the biggest improvement in your family!"
+                let thisWeek = Int((meta["thisAvg"] as? Double ?? 0).rounded())
+                let prevWeek = Int((meta["prevAvg"] as? Double ?? 0).rounded())
+                return "Your sleep average improved +\(Int(percentIncrease.rounded()))% week-over-week (\(thisWeek) vs \(prevWeek)), the strongest meaningful lift in your family."
             }
-            return "You had the biggest improvement in sleep this week compared to last week!"
+            return "You had the strongest meaningful sleep improvement versus last week."
             
         case "weekly_movement_mvp":
             if let percentIncrease = meta["percentIncrease"] as? Double {
-                return "Your activity improved +\(Int(percentIncrease.rounded()))% this week compared to last week - the biggest improvement in your family!"
+                let thisWeek = Int((meta["thisAvg"] as? Double ?? 0).rounded())
+                let prevWeek = Int((meta["prevAvg"] as? Double ?? 0).rounded())
+                return "Your activity average improved +\(Int(percentIncrease.rounded()))% week-over-week (\(thisWeek) vs \(prevWeek)), the strongest meaningful lift in your family."
             }
-            return "You had the biggest improvement in activity this week compared to last week!"
+            return "You had the strongest meaningful activity improvement versus last week."
             
         case "weekly_stressfree_mvp":
             if let percentIncrease = meta["percentIncrease"] as? Double {
-                return "Your recovery improved +\(Int(percentIncrease.rounded()))% this week compared to last week - the biggest improvement in your family!"
+                let thisWeek = Int((meta["thisAvg"] as? Double ?? 0).rounded())
+                let prevWeek = Int((meta["prevAvg"] as? Double ?? 0).rounded())
+                return "Your recovery average improved +\(Int(percentIncrease.rounded()))% week-over-week (\(thisWeek) vs \(prevWeek)), the strongest meaningful lift in your family."
             }
-            return "You had the biggest improvement in recovery this week compared to last week!"
+            return "You had the strongest meaningful recovery improvement versus last week."
         
         // Family Anchor - highest average
         case "weekly_family_anchor":
-            return "You had the highest overall vitality this week, setting the bar for your family. You're the steady rock everyone can count on!"
+            let thisWeek = Int((meta["thisAvg"] as? Double ?? 0).rounded())
+            return "You had the highest sustained vitality average this week (\(thisWeek)/100), setting the benchmark for the family."
         
         // Consistency MVP - show stability
         case "weekly_consistency_mvp":
             if let stddev = meta["stddev"] as? Double {
-                return "Your scores stayed incredibly stable all week with only ±\(Int(stddev.rounded())) points of variation - consistency is the foundation of lasting health!"
+                return "Your scores were the most stable this week, with only ±\(Int(stddev.rounded())) points of variation across your tracked days."
             }
             return "Your vitality scores were the most stable this week with minimal ups and downs!"
         
         // Balanced Week - all pillars strong
         case "weekly_balanced_week":
-            return "You kept all three health pillars (Sleep, Activity, Recovery) consistently strong throughout the week. Your lowest pillar was still excellent, showing true balance across the board!"
+            let sleep = Int((meta["sleepAvg"] as? Double ?? 0).rounded())
+            let movement = Int((meta["movementAvg"] as? Double ?? 0).rounded())
+            let stress = Int((meta["stressAvg"] as? Double ?? 0).rounded())
+            return "You had the strongest all-round week: Sleep \(sleep), Activity \(movement), Recovery \(stress). Your lowest pillar score was the highest balanced floor in the family."
         
         // Biggest Comeback - single day improvement
         case "weekly_biggest_comeback_day":
             if let maxDelta = meta["maxDelta"] as? Int {
-                return "You made an incredible +\(maxDelta) point comeback - the biggest single-day jump in your family this week!"
+                return "You posted the biggest smoothed day-to-day rebound this week at +\(maxDelta) points, indicating a real comeback rather than one-day noise."
             }
-            return "You had the biggest single-day improvement in vitality score this week!"
+            return "You had the biggest smoothed day-to-day improvement this week."
         
         // Streak badges - days above threshold
         case "weekly_sleep_streak_leader":
             if let streakDays = meta["streakDays"] as? Int {
-                return "You maintained a \(streakDays)-day streak of strong sleep scores (75+ points) - building healthy habits one day at a time!"
+                return "You held the longest sleep streak this week: \(streakDays) consecutive day(s) at or above the strong-score threshold."
             }
             return "You had the longest streak of days with strong sleep scores!"
             
         case "weekly_movement_streak_leader":
             if let streakDays = meta["streakDays"] as? Int {
-                return "You maintained a \(streakDays)-day streak of strong activity scores (75+ points) - building healthy habits one day at a time!"
+                return "You held the longest activity streak this week: \(streakDays) consecutive day(s) at or above the strong-score threshold."
             }
             return "You had the longest streak of days with strong activity scores!"
             
         case "weekly_stress_streak_leader":
             if let streakDays = meta["streakDays"] as? Int {
-                return "You maintained a \(streakDays)-day streak of strong recovery scores (75+ points) - building healthy habits one day at a time!"
+                return "You held the longest recovery streak this week: \(streakDays) consecutive day(s) at or above the strong-score threshold."
             }
             return "You had the longest streak of days with strong recovery scores!"
         
         // Data Champion - most complete days
         case "weekly_data_champion":
             if let days = meta["daysWith2PlusPillars"] as? Int {
-                return "You logged complete health data for \(days) days this week - consistent tracking helps the whole family stay on track!"
+                return "You had the most complete tracking this week, with \(days) day(s) that included at least two pillars."
             }
             return "You had the most days with complete health data this week!"
         

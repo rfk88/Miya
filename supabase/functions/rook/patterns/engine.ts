@@ -405,7 +405,7 @@ export async function evaluatePatternsForUser(
     });
 
     if (enqueue && alertStateId) {
-      const recipients = await fetchFamilyAdminRecipients(supabase, userId);
+      const recipients = [userId];
       for (const recipientUserId of recipients) {
         const payload = {
           kind: "pattern_alert",

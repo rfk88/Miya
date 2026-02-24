@@ -65,6 +65,8 @@ final class EditProfileViewModel: ObservableObject {
     @Published var quietHoursNotificationLevel: String = "none" // "all", "critical_only", "none"
     @Published var timezone: String = TimeZone.current.identifier
 
+    @Published var avatarURL: String? = nil
+
     // MARK: - Auth fields (Supabase Auth)
     @Published var currentEmail: String = ""
     @Published var newEmail: String = ""
@@ -244,14 +246,15 @@ struct EditProfileView: View {
     private var headerCard: some View {
         Card {
             HStack(spacing: 12) {
-                Circle()
-                    .fill(Color.miyaEmerald.opacity(0.12))
-                    .frame(width: 52, height: 52)
-                    .overlay(
-                        Text(initials(from: "\(vm.firstName) \(vm.lastName)".trimmingCharacters(in: .whitespacesAndNewlines)))
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundColor(.miyaEmerald)
-                    )
+                ProfileAvatarView(
+                    imageURL: vm.avatarURL,
+                    initials: initials(from: "\(vm.firstName) \(vm.lastName)".trimmingCharacters(in: .whitespacesAndNewlines)),
+                    diameter: 52,
+                    backgroundColor: Color.miyaEmerald.opacity(0.12),
+                    foregroundColor: .miyaEmerald,
+                    font: .system(size: 18, weight: .bold)
+                )
+                .frame(width: 52, height: 52)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(displayName)
@@ -606,6 +609,8 @@ struct EditProfileView: View {
             // Profile row
             let profile = try await dataManager.loadUserProfile()
             if let p = profile {
+                vm.avatarURL = p.avatar_url
+                onboardingManager.avatarURL = p.avatar_url
                 vm.firstName = p.first_name ?? onboardingManager.firstName
                 vm.lastName = p.last_name ?? onboardingManager.lastName
                 vm.gender = p.gender ?? onboardingManager.gender

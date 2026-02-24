@@ -32,6 +32,120 @@ struct ArloChatView: View {
     
     // ✅ NEW: Control pill visibility
     @State private var showPills: Bool = false
+    
+    private enum OpenerBucket: String {
+        case up
+        case steady
+        case down
+        case lowData
+    }
+    
+    private struct OpenerTemplate {
+        let id: String
+        let text: String
+    }
+    
+    private static let openerHistoryLimit = 2
+    private static let openerTemplates: [OpenerBucket: [OpenerTemplate]] = [
+        .up: [
+            OpenerTemplate(
+                id: "up_1",
+                text: """
+                Hey {{firstName}} — great momentum this week.
+                
+                Your family vitality is {{trendSummary}}, led by {{mainDriver}}.
+                Want me to help you lock this in for next week?
+                """
+            ),
+            OpenerTemplate(
+                id: "up_2",
+                text: """
+                Hi {{firstName}} — quick check-in.
+                
+                Your family is {{trendSummary}}, and {{mainDriver}} is the biggest reason.
+                I can show you the easiest next win from here.
+                """
+            ),
+            OpenerTemplate(
+                id: "up_3",
+                text: """
+                Hey {{firstName}} — nice to see progress.
+                
+                Right now things are {{trendSummary}}, mostly because {{mainDriver}}.
+                Want a quick “keep doing this” plan?
+                """
+            )
+        ],
+        .steady: [
+            OpenerTemplate(
+                id: "steady_1",
+                text: """
+                Hey {{firstName}} — your family looks {{trendSummary}}.
+                
+                The main signal is {{mainDriver}}.
+                I can help turn this steady week into an even better one.
+                """
+            ),
+            OpenerTemplate(
+                id: "steady_2",
+                text: """
+                Hi {{firstName}} — your family is {{trendSummary}} this week.
+                
+                Biggest driver right now: {{mainDriver}}.
+                Want me to point out where one small change could make the biggest difference?
+                """
+            ),
+            OpenerTemplate(
+                id: "steady_3",
+                text: """
+                Hey {{firstName}} — quick update.
+                
+                Overall things are {{trendSummary}}, with {{mainDriver}} standing out.
+                I can break this into what’s working and what to improve first.
+                """
+            )
+        ],
+        .down: [
+            OpenerTemplate(
+                id: "down_1",
+                text: """
+                Hi {{firstName}} — quick check-in.
+                
+                Your family vitality is {{trendSummary}}, and {{mainDriver}} is the main reason.
+                No stress — I can help with a simple reset plan.
+                """
+            ),
+            OpenerTemplate(
+                id: "down_2",
+                text: """
+                Hey {{firstName}} — this week has been a bit tougher.
+                
+                Right now your trend is {{trendSummary}}, mainly linked to {{mainDriver}}.
+                Want the easiest first step to turn this around?
+                """
+            )
+        ],
+        .lowData: [
+            OpenerTemplate(
+                id: "low_data_1",
+                text: """
+                Hey {{firstName}} — I’m still building your full family picture.
+                
+                So far, {{positiveHighlight}}.
+                I can still help you with simple next steps while more data comes in.
+                """
+            ),
+            OpenerTemplate(
+                id: "low_data_2",
+                text: """
+                Hi {{firstName}} — we have partial data right now.
+                
+                Early signal: {{positiveHighlight}}.
+                Want me to guide you with a low-risk plan for this week?
+                """
+            )
+        ]
+    ]
 
     var body: some View {
         ZStack {
@@ -177,14 +291,7 @@ struct ArloChatView: View {
                 facts = loaded
                 isLoadingFacts = false
 
-                // ✅ Deterministic opener from facts
-                let opener = """
-                \(loaded.openerHeadline)
-
-                \(loaded.openerWhy)
-
-                \(loaded.openerHook)
-                """
+                let opener = buildRotatingOpener(from: loaded)
                 messages = [.init(role: .assistant, text: opener)]
                 showPills = true  // Show pills after opening message
             }
@@ -196,6 +303,102 @@ struct ArloChatView: View {
                 seedFallbackOpening()
             }
         }
+    }
+    
+    // MARK: - Rotating opener selection (local device memory)
+    
+    private func buildRotatingOpener(from facts: ArloChatAPI.Facts) -> String {
+        let bucket = openerBucket(from: facts)
+        let templates = Self.openerTemplates[bucket] ?? []
+        guard !templates.isEmpty else {
+            return [facts.openerHeadline, facts.openerWhy, facts.openerHook]
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .joined(separator: "\n\n")
+        }
+        
+        let recentIds = Set(loadRecentTemplateIDs(for: bucket))
+        let eligible = templates.filter { !recentIds.contains($0.id) }
+        let chosen = (eligible.isEmpty ? templates : eligible).randomElement() ?? templates[0]
+        saveRecentTemplateID(chosen.id, for: bucket)
+        
+        let filled = chosen.text
+            .replacingOccurrences(of: "{{firstName}}", with: resolvedGreetingName())
+            .replacingOccurrences(of: "{{trendSummary}}", with: trendSummary(from: facts))
+            .replacingOccurrences(of: "{{mainDriver}}", with: mainDriverSummary(from: facts))
+            .replacingOccurrences(of: "{{positiveHighlight}}", with: positiveHighlight(from: facts))
+        
+        return filled.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    private func openerBucket(from facts: ArloChatAPI.Facts) -> OpenerBucket {
+        if facts.membersWithData == 0 || facts.dataCoverageDays < 3 {
+            return .lowData
+        }
+        let delta = facts.familyVitalityDelta ?? 0
+        if delta >= 2 { return .up }
+        if delta <= -2 { return .down }
+        return .steady
+    }
+    
+    private func trendSummary(from facts: ArloChatAPI.Facts) -> String {
+        let delta = facts.familyVitalityDelta ?? 0
+        if delta >= 2 { return "up this week" }
+        if delta <= -2 { return "down this week" }
+        return "fairly steady this week"
+    }
+    
+    private func mainDriverSummary(from facts: ArloChatAPI.Facts) -> String {
+        let candidates: [(name: String, value: Int)] = [
+            ("recovery", facts.recoveryContribution),
+            ("activity", facts.movementContribution),
+            ("sleep", facts.sleepContribution)
+        ]
+        guard let top = candidates.max(by: { abs($0.value) < abs($1.value) }) else {
+            return "mixed signals across sleep, activity, and recovery"
+        }
+        if top.value > 0 {
+            return "\(top.name) improving"
+        }
+        if top.value < 0 {
+            return "\(top.name) drifting"
+        }
+        return "\(top.name) staying stable"
+    }
+    
+    private func positiveHighlight(from facts: ArloChatAPI.Facts) -> String {
+        if let improved = facts.memberHighlights.mostImprovedMemberName, !improved.isEmpty {
+            return "\(improved) showed the strongest improvement"
+        }
+        if let sleepLeader = facts.memberHighlights.bestSleepMemberName, !sleepLeader.isEmpty {
+            return "\(sleepLeader) led sleep this week"
+        }
+        if let recoveryLeader = facts.memberHighlights.bestRecoveryMemberName, !recoveryLeader.isEmpty {
+            return "\(recoveryLeader) led recovery this week"
+        }
+        return "there are positive signs we can build on"
+    }
+    
+    private func resolvedGreetingName() -> String {
+        let trimmed = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "there" : trimmed
+    }
+    
+    private func openerHistoryKey(for bucket: OpenerBucket) -> String {
+        "arlo.opener.history.\(familyId.uuidString.lowercased()).\(bucket.rawValue)"
+    }
+    
+    private func loadRecentTemplateIDs(for bucket: OpenerBucket) -> [String] {
+        UserDefaults.standard.stringArray(forKey: openerHistoryKey(for: bucket)) ?? []
+    }
+    
+    private func saveRecentTemplateID(_ id: String, for bucket: OpenerBucket) {
+        var history = loadRecentTemplateIDs(for: bucket)
+        history.removeAll { $0 == id }
+        history.insert(id, at: 0)
+        if history.count > Self.openerHistoryLimit {
+            history = Array(history.prefix(Self.openerHistoryLimit))
+        }
+        UserDefaults.standard.set(history, forKey: openerHistoryKey(for: bucket))
     }
 
     // MARK: - Header

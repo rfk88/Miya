@@ -35,6 +35,7 @@ class DataManager: ObservableObject {
     // Definitive product fix is to apply `PATCH_user_profiles.sql` to the connected Supabase project.
     // App-side fix here: never hard-fail the guided member on confirm; retry with only base columns.
     private var userProfilesSchemaHasWHORiskColumnsCache: Bool? = nil
+    private var avatarURLCache: [String: String?] = [:]
     
     private func errorLooksLikeMissingColumn(_ error: Error) -> Bool {
         let desc = String(describing: error).lowercased()
@@ -340,6 +341,31 @@ class DataManager: ObservableObject {
         } catch {
             print("❌ DataManager: Failed to load user profile: \(error.localizedDescription)")
             throw DataError.databaseError("Failed to load user profile")
+        }
+    }
+
+    /// Fetch avatar_url for an arbitrary user_id, with a small in-memory cache.
+    func fetchAvatarURL(forUserId userId: String) async throws -> String? {
+        if let cached = avatarURLCache[userId] {
+            return cached
+        }
+
+        do {
+            let rows: [UserProfileData] = try await supabase
+                .from("user_profiles")
+                .select("avatar_url")
+                .eq("user_id", value: userId)
+                .limit(1)
+                .execute()
+                .value
+
+            let url = rows.first?.avatar_url
+            avatarURLCache[userId] = url
+            return url
+        } catch {
+            let userMessage = mapDataError(error)
+            print("❌ DataManager: Failed to fetch avatar_url for user_id=\(userId): \(error.localizedDescription)")
+            throw DataError.databaseError(userMessage)
         }
     }
     
@@ -1784,6 +1810,73 @@ class DataManager: ObservableObject {
         } catch {
             let userMessage = mapDataError(error)
             print("❌ DataManager: Update user profile error: \(error.localizedDescription)")
+            throw DataError.databaseError(userMessage)
+        }
+    }
+
+    /// Update the current user's avatar_url in user_profiles and keep the local cache in sync.
+    func updateAvatarURL(_ url: String?) async throws {
+        var payload: [String: AnyJSON] = [:]
+
+        if let url, !url.isEmpty {
+            payload["avatar_url"] = .string(url)
+        } else {
+            payload["avatar_url"] = .null
+        }
+
+        try await updateUserProfile(payload)
+
+        if let userId = await currentUserId {
+            avatarURLCache[userId] = url
+        }
+    }
+
+    /// Upload avatar image data to the Supabase Storage `avatars` bucket and return a public URL string.
+    /// - Parameters:
+    ///   - data: Image data (already encoded as JPEG/PNG).
+    ///   - mimeType: MIME type for the data, e.g. "image/jpeg" or "image/png".
+    /// - Returns: Public URL string for the uploaded avatar image.
+    func uploadAvatarImage(data: Data, mimeType: String) async throws -> String {
+        guard let userId = await currentUserId else {
+            throw DataError.notAuthenticated
+        }
+
+        // Use a stable per-user folder with a timestamped file name.
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let fileId = UUID().uuidString.lowercased()
+        let fileExtension: String
+        if mimeType.lowercased().contains("png") {
+            fileExtension = "png"
+        } else {
+            fileExtension = "jpg"
+        }
+
+        let path = "user/\(userId)/avatar-\(timestamp)-\(fileId).\(fileExtension)"
+
+        do {
+            try await supabase
+                .storage
+                .from("avatars")
+                .upload(
+                    path: path,
+                    file: data,
+                    options: FileOptions(
+                        cacheControl: "3600",
+                        contentType: mimeType,
+                        upsert: true
+                    )
+                )
+
+            // For a public bucket, get a stable public URL.
+            let publicURL = try supabase
+                .storage
+                .from("avatars")
+                .getPublicURL(path: path)
+
+            return publicURL.absoluteString
+        } catch {
+            let userMessage = mapDataError(error)
+            print("❌ DataManager: Failed to upload avatar image: \(error.localizedDescription)")
             throw DataError.databaseError(userMessage)
         }
     }
@@ -3250,6 +3343,9 @@ struct UserProfileData: Codable {
     let quiet_hours_apply_critical: Bool?
     let quiet_hours_notification_level: String?
     let timezone: String?
+
+    // Profile image
+    let avatar_url: String?
 }
 
 // MARK: - Guided Setup Data Models
@@ -3392,6 +3488,219 @@ struct GuidedHealthData {
                 "family_type2_diabetes": .bool(medicalHistory.familyType2Diabetes)
             ])
         ]
+    }
+}
+
+// MARK: - Bell Notifications
+
+/// Raw row returned by `get_bell_notifications` RPC.
+struct BellNotificationRow: Decodable, Identifiable {
+    let id: String
+    let createdAt: Date
+    let recipientUserId: String
+    let memberUserId: String?
+    let alertStateId: String?
+    let payload: [String: AnyJSON]
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case createdAt = "created_at"
+        case recipientUserId = "recipient_user_id"
+        case memberUserId = "member_user_id"
+        case alertStateId = "alert_state_id"
+        case payload
+    }
+}
+
+/// App-facing bell notification model used by the top-right bell UI.
+struct BellNotification: Identifiable {
+    enum Kind {
+        case personalTrend(pillar: VitalityPillar, durationDays: Int?, severity: TrendSeverity)
+        case patternAlert(pillar: VitalityPillar, durationDays: Int?, severity: TrendSeverity, alertStateId: String?)
+        case challengeInvite(isForSelf: Bool, pillar: VitalityPillar)
+        case challengeDaily(isForSelf: Bool, status: String, daysSucceeded: Int, daysEvaluated: Int, remainingDays: Int, successesNeeded: Int?)
+        case challengeCompleted(isForSelf: Bool, status: String, daysSucceeded: Int, daysEvaluated: Int)
+    }
+    
+    let id: String
+    let createdAt: Date
+    let title: String
+    let subtitle: String
+    let kind: Kind
+    let memberUserId: String?
+}
+
+extension BellNotification {
+    init?(row: BellNotificationRow, currentUserId: String?) {
+        // Helper accessors for AnyJSON payload values.
+        func string(_ key: String) -> String? {
+            switch row.payload[key] {
+            case .string(let value):
+                return value
+            default:
+                return nil
+            }
+        }
+        
+        func int(_ key: String) -> Int? {
+            switch row.payload[key] {
+            case .integer(let value):
+                return value
+            case .double(let value):
+                return Int(value)
+            default:
+                return nil
+            }
+        }
+        
+        let payloadKind = string("kind") ?? ""
+        let memberId = row.memberUserId
+        let isForSelf = {
+            guard
+                let memberId,
+                let currentUserId
+            else { return false }
+            return memberId.lowercased() == currentUserId.lowercased()
+        }()
+        
+        switch payloadKind {
+        case "personal_trend":
+            guard let pillarRaw = string("pillar") else { return nil }
+            let pillar = VitalityPillar(rawValue: pillarRaw) ?? .sleep
+            let duration = int("duration_days")
+            let severityRaw = string("severity") ?? "watch"
+            let severity = TrendSeverity(rawValue: severityRaw) ?? .watch
+            
+            self.id = row.id
+            self.createdAt = row.createdAt
+            self.memberUserId = memberId
+            self.kind = .personalTrend(pillar: pillar, durationDays: duration, severity: severity)
+            self.title = string("title") ?? "Your \(pillar.displayName.lowercased()) has been drifting"
+            if let days = duration, days > 0 {
+                self.subtitle = "For \(days) day\(days == 1 ? "" : "s")"
+            } else {
+                self.subtitle = "Tap to see your recent pattern"
+            }
+            
+        case "pattern_alert":
+            let metricType = string("metric_type") ?? ""
+            let pillar: VitalityPillar
+            switch metricType.lowercased() {
+            case "steps", "movement_minutes":
+                pillar = .movement
+            case "sleep_minutes", "sleep_efficiency_pct", "deep_sleep_minutes":
+                pillar = .sleep
+            case "hrv_ms", "resting_hr":
+                pillar = .stress
+            default:
+                pillar = .sleep
+            }
+            let level = int("level") ?? 7
+            let severity: TrendSeverity = (level >= 14) ? .attention : .watch
+            let alertStateId = row.alertStateId
+            
+            self.id = row.id
+            self.createdAt = row.createdAt
+            self.memberUserId = memberId
+            self.kind = .patternAlert(pillar: pillar, durationDays: level, severity: severity, alertStateId: alertStateId)
+            if isForSelf {
+                self.title = "Your \(pillar.displayName.lowercased()) has been drifting"
+            } else {
+                self.title = "\(pillar.displayName) drifting"
+            }
+            self.subtitle = "For \(level) day\(level == 1 ? "" : "s")"
+            
+        case "challenge_invite":
+            let pillarRaw = string("pillar") ?? "sleep"
+            let pillar = VitalityPillar(rawValue: pillarRaw) ?? .sleep
+            
+            self.id = row.id
+            self.createdAt = row.createdAt
+            self.memberUserId = memberId
+            self.kind = .challengeInvite(isForSelf: isForSelf, pillar: pillar)
+            if isForSelf {
+                self.title = "New challenge from your family"
+                self.subtitle = "Focus: \(pillar.displayName) over 7 days"
+            } else {
+                self.title = "You started a challenge"
+                self.subtitle = "Focus: \(pillar.displayName) over 7 days"
+            }
+            
+        case "challenge_daily_member", "challenge_daily_admin":
+            let status = string("status") ?? "active"
+            let daysSucceeded = int("days_succeeded") ?? 0
+            let daysEvaluated = int("days_evaluated") ?? 0
+            let remainingDays = int("remaining_days") ?? 0
+            let successesNeeded = int("successes_needed")
+            let isMember = (payloadKind == "challenge_daily_member")
+            
+            self.id = row.id
+            self.createdAt = row.createdAt
+            self.memberUserId = memberId
+            self.kind = .challengeDaily(
+                isForSelf: isMember,
+                status: status,
+                daysSucceeded: daysSucceeded,
+                daysEvaluated: daysEvaluated,
+                remainingDays: remainingDays,
+                successesNeeded: successesNeeded
+            )
+            
+            if isMember {
+                self.title = "Your challenge progress"
+                self.subtitle = "\(daysSucceeded) of \(daysEvaluated) days hit • \(remainingDays) days left"
+            } else {
+                self.title = "Family challenge update"
+                self.subtitle = "They've hit \(daysSucceeded) of \(daysEvaluated) days so far"
+            }
+            
+        case "challenge_completed_member", "challenge_completed_admin":
+            let status = string("status") ?? "completed_failed"
+            let daysSucceeded = int("days_succeeded") ?? 0
+            let daysEvaluated = int("days_evaluated") ?? 0
+            let isMember = (payloadKind == "challenge_completed_member")
+            
+            self.id = row.id
+            self.createdAt = row.createdAt
+            self.memberUserId = memberId
+            self.kind = .challengeCompleted(
+                isForSelf: isMember,
+                status: status,
+                daysSucceeded: daysSucceeded,
+                daysEvaluated: daysEvaluated
+            )
+            
+            if isMember {
+                self.title = (status == "completed_success")
+                    ? "You completed your challenge"
+                    : "Your challenge has finished"
+                self.subtitle = (status == "completed_success")
+                    ? "You hit \(daysSucceeded) of \(daysEvaluated) days"
+                    : "You hit \(daysSucceeded) of \(daysEvaluated) days this round"
+            } else {
+                self.title = (status == "completed_success")
+                    ? "They completed the challenge"
+                    : "Their challenge has finished"
+                self.subtitle = "\(daysSucceeded) of \(daysEvaluated) days hit"
+            }
+            
+        default:
+            return nil
+        }
+    }
+}
+
+extension DataManager {
+    /// Fetch notifications for the top-right bell, mapped from `notification_queue`
+    /// via the `get_bell_notifications` RPC.
+    func fetchBellNotifications(limit: Int = 25) async throws -> [BellNotification] {
+        let rows: [BellNotificationRow] = try await supabase
+            .rpc("get_bell_notifications", params: ["p_limit": AnyJSON.integer(limit)])
+            .execute()
+            .value
+        
+        let currentUserId = await currentUserId
+        return rows.compactMap { BellNotification(row: $0, currentUserId: currentUserId) }
     }
 }
 

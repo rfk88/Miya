@@ -5,6 +5,7 @@ import SwiftUI
 struct FamilyMembersStrip: View {
     let members: [FamilyMemberScore]
     let familyId: String?
+    var currentUserAvatarURL: String? = nil
 
     private func label(for score: Int) -> String {
         switch score {
@@ -22,7 +23,8 @@ struct FamilyMembersStrip: View {
                     MemberProfileLink(
                         member: member,
                         vitalityLabel: label(for: member.currentScore),
-                        familyId: familyId
+                        familyId: familyId,
+                        currentUserAvatarURL: currentUserAvatarURL
                     )
                 }
             }
@@ -34,7 +36,8 @@ struct FamilyMembersStrip: View {
         let member: FamilyMemberScore
         let vitalityLabel: String
         let familyId: String?
-        
+        var currentUserAvatarURL: String? = nil
+
         private var progress: CGFloat {
             CGFloat(member.ringProgress)
         }
@@ -49,87 +52,102 @@ struct FamilyMembersStrip: View {
                         isCurrentUser: member.isMe
                     )
                 } else {
-                ProfileView(
-                    memberName: member.name,
-                    vitalityScore: member.currentScore,
-                    vitalityTrendDelta: 0,
-                    vitalityLabel: vitalityLabel
-                )
+                    ProfileView(
+                        memberName: member.name,
+                        vitalityScore: member.currentScore,
+                        vitalityTrendDelta: 0,
+                        vitalityLabel: vitalityLabel,
+                        avatarURL: member.isMe ? currentUserAvatarURL : nil
+                    )
                 }
             } label: {
-                        VStack(spacing: 10) {
-                            ZStack {
-                                // Background circle (premium styling)
-                                Circle()
-                                    .fill(Color(.systemBackground))
-                                    .frame(width: 68, height: 68)
-                                    .shadow(
-                                        color: DashboardDesign.cardShadowLight.color,
-                                        radius: DashboardDesign.cardShadowLight.radius,
-                                        x: DashboardDesign.cardShadowLight.x,
-                                        y: DashboardDesign.cardShadowLight.y
-                                    )
+                VStack(spacing: 8) {
+                    ZStack {
+                        // Background circle (premium styling)
+                        Circle()
+                            .fill(Color(.systemBackground))
+                            .frame(width: 68, height: 68)
+                            .shadow(
+                                color: DashboardDesign.cardShadowLight.color,
+                                radius: DashboardDesign.cardShadowLight.radius,
+                                x: DashboardDesign.cardShadowLight.x,
+                                y: DashboardDesign.cardShadowLight.y
+                            )
+                        
+                        // Inner avatar (refined sizing)
+                        Circle()
+                            .fill(DashboardDesign.groupedBackground)
+                            .frame(width: 52, height: 52)
 
-                                // Vitality ring (dim if pending; greyed if stale)
-                                Circle()
-                                    .trim(from: 0, to: progress)
-                                    .stroke(
-                                        member.isStale
-                                            ? AngularGradient(
-                                                gradient: Gradient(colors: [
-                                                    Color.gray.opacity(0.55),
-                                                    Color.gray.opacity(0.55),
-                                                    Color.gray.opacity(0.55)
-                                                ]),
-                                                center: .center
-                                            )
-                                            : AngularGradient(
-                                            gradient: Gradient(colors: [
-                                                Color(red: 0.2, green: 0.8, blue: 0.75),
-                                                Color(red: 0.15, green: 0.55, blue: 1.0),
-                                                Color(red: 0.5, green: 0.3, blue: 1.0)
-                                            ]),
-                                            center: .center
-                                        ),
-                                        style: StrokeStyle(lineWidth: 6, lineCap: .round)
-                                    )
-                                    .rotationEffect(.degrees(-90))
-                                    .frame(width: 68, height: 68)
-                                    .opacity(member.isPending ? 0.35 : (member.isStale ? 0.75 : 1.0))
-
-                                // Inner avatar (refined sizing)
-                                Circle()
-                                    .fill(DashboardDesign.groupedBackground)
-                                    .frame(width: 52, height: 52)
-
-                                Text(member.initials)
-                                    .font(.system(size: 19, weight: .semibold, design: .default))
-                                    .foregroundColor(DashboardDesign.primaryTextColor)
-
-                                // Pending badge
-                                if member.isPending {
-                                    VStack {
-                                        HStack {
-                                            Spacer()
-                                            Image(systemName: "clock.badge")
-                                                .font(.system(size: 14, weight: .semibold))
-                                                .foregroundColor(.orange)
-                                                .padding(4)
-                                        }
-                                        Spacer()
-                                    }
+                        if member.isMe {
+                            ProfileAvatarView(
+                                imageURL: currentUserAvatarURL,
+                                initials: member.initials,
+                                diameter: 52,
+                                backgroundColor: DashboardDesign.groupedBackground,
+                                foregroundColor: DashboardDesign.primaryTextColor,
+                                font: .system(size: 19, weight: .semibold, design: .default)
+                            )
+                            .frame(width: 52, height: 52)
+                        } else {
+                            Text(member.initials)
+                                .font(.system(size: 19, weight: .semibold, design: .default))
+                                .foregroundColor(DashboardDesign.primaryTextColor)
+                        }
+                        
+                        // Pending badge
+                        if member.isPending {
+                            VStack {
+                                HStack {
+                                    Spacer()
+                                    Image(systemName: "clock.badge")
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundColor(.orange)
+                                        .padding(4)
                                 }
+                                Spacer()
                             }
-
-                            // Name under avatar (refined typography)
-                            Text(member.isMe ? "Me" : member.name)
-                                .font(.system(size: 12, weight: .medium, design: .default))
-                                .foregroundColor(member.isPending ? .miyaTextSecondary : .miyaTextPrimary)
                         }
                     }
-                    .buttonStyle(.plain)
+                    
+                    vitalityBar
+                    
+                    // Name under avatar (refined typography)
+                    Text(member.isMe ? "Me" : member.name)
+                        .font(.system(size: 12, weight: .medium, design: .default))
+                        .foregroundColor(member.isPending ? .miyaTextSecondary : .miyaTextPrimary)
+                }
             }
+            .buttonStyle(.plain)
         }
+        
+        // MARK: - Horizontal Vitality Bar
+        
+        private var vitalityBar: some View {
+            let totalWidth: CGFloat = 68
+            let height: CGFloat = 6
+            let clamped = max(0, min(progress, 1))
+            let rawFillWidth = totalWidth * clamped
+            let fillWidth = (clamped == 0) ? 0 : max(rawFillWidth, height)
+            
+            let baseColor: Color = member.isStale ? Color.gray.opacity(0.8) : DashboardDesign.miyaTealSoft
+            let barOpacity: Double = member.isPending ? 0.4 : 1.0
+            
+            return ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: height / 2)
+                    .fill(DashboardDesign.tertiaryBackgroundColor)
+                
+                if fillWidth > 0 {
+                    RoundedRectangle(cornerRadius: height / 2)
+                        .fill(baseColor)
+                        .frame(width: fillWidth)
+                        .opacity(barOpacity)
+                        .animation(.easeInOut(duration: 0.2), value: fillWidth)
+                }
+            }
+            .frame(width: totalWidth, height: height, alignment: .leading)
+        }
+    }
 }
 
 // MARK: - Guided Setup Status (Admin)
@@ -282,3 +300,4 @@ struct GuidedSetupMemberRow: View {
         }
     }
 }
+

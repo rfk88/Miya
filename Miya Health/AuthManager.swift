@@ -87,7 +87,8 @@ class AuthManager: ObservableObject {
         }
     }
     
-    /// Restore user session on app launch
+    /// Restore user session on app launch.
+    /// Uses a single retry on failure to avoid logging out due to transient network or refresh errors.
     func restoreSession() async {
         // If user explicitly logged out, do not restore a session automatically.
         if UserDefaults.standard.bool(forKey: explicitLogoutKey) {
@@ -100,6 +101,19 @@ class AuthManager: ObservableObject {
             isAuthenticated = true
             print("✅ AuthManager: Session restored for user: \(session.user.id.uuidString)")
         } catch {
+            // One retry: transient network or refresh failures should not log the user out.
+            let hasStoredSession = supabase.auth.currentSession != nil
+            if hasStoredSession {
+                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                do {
+                    let session = try await supabase.auth.refreshSession()
+                    isAuthenticated = true
+                    print("✅ AuthManager: Session restored after retry for user: \(session.user.id.uuidString)")
+                    return
+                } catch {
+                    print("⚠️ AuthManager: Retry refresh failed: \(error.localizedDescription)")
+                }
+            }
             isAuthenticated = false
             print("⚠️ AuthManager: No active session found")
         }
@@ -125,13 +139,9 @@ class AuthManager: ObservableObject {
         }
     }
     
-    /// Get the current authenticated user's ID
-    /// - Returns: The user's UUID string, or nil if not authenticated
+    /// Get the current authenticated user's ID.
+    /// - Returns: The user's UUID string, or nil if no active session is available.
     func getCurrentUserId() async -> String? {
-        guard isAuthenticated else {
-            return nil
-        }
-        
         do {
             let session = try await supabase.auth.session
             return session.user.id.uuidString

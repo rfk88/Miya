@@ -210,7 +210,9 @@ extension DashboardView {
                     },
                     onSaveProfile: { newName in
                         try await dataManager.updateMyMemberName(firstName: newName)
-                        onboardingManager.firstName = newName
+                        await MainActor.run {
+                            onboardingManager.firstName = newName
+                        }
                     },
                     onSaveFamilyName: { newName in
                         guard let familyId = dataManager.currentFamilyId else {
@@ -222,6 +224,10 @@ extension DashboardView {
                         }
                         try await dataManager.updateFamilyName(familyId: familyId, name: newName)
                         onUpdateResolvedFamilyName(newName)
+                    },
+                    avatarURL: onboardingManager.avatarURL,
+                    onAvatarURLUpdated: { url in
+                        onboardingManager.avatarURL = url
                     }
                 )
                 
@@ -273,15 +279,16 @@ extension DashboardView {
                         .foregroundColor(.white.opacity(0.7))
                     
                     HStack(spacing: 10) {
-                        Circle()
-                            .fill(Color.white.opacity(0.15))
-                            .frame(width: 32, height: 32)
-                            .overlay(
-                                Text(sidebarInitials(from: displayName))
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundColor(.white)
-                            )
-                        
+                        ProfileAvatarView(
+                            imageURL: onboardingManager.avatarURL,
+                            initials: sidebarInitials(from: displayName),
+                            diameter: 32,
+                            backgroundColor: Color.white.opacity(0.15),
+                            foregroundColor: .white,
+                            font: .system(size: 13, weight: .semibold)
+                        )
+                        .frame(width: 32, height: 32)
+
                         VStack(alignment: .leading, spacing: 2) {
                             Text(displayName)
                                 .font(.system(size: 15, weight: .semibold))

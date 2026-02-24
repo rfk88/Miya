@@ -98,6 +98,9 @@ struct DashboardView: View {
     // Family badges (Daily computed; Weekly persisted)
     @State internal var dailyBadgeWinners: [BadgeEngine.Winner] = []
     @State internal var weeklyBadgeWinners: [BadgeEngine.Winner] = []
+
+    // Bell (personal + challenge) notifications
+    @State internal var bellNotifications: [BellNotification] = []
     @State internal var weeklyBadgeWeekStart: String? = nil
     @State internal var weeklyBadgeWeekEnd: String? = nil
     @State internal var selectedBadge: BadgeEngine.Winner? = nil
@@ -111,12 +114,15 @@ struct DashboardView: View {
     @State internal var isShowingDebugAddRecord: Bool = false
     
     internal var displayedNotifications: [FamilyNotificationItem] {
+        // Only show notifications when we have a valid snapshot and are not in the middle of
+        // recomputing trend insights.
         guard let snapshot = familySnapshot,
               familyVitalityScore != nil,
               !isComputingTrendInsights else {
             return []
         }
         
+        // 1) Build base family notifications (trend + fallback), filtering out celebrate-only items.
         let trendNotifications = FamilyNotificationItem.build(
             snapshot: snapshot,
             trendInsights: trendInsights,
@@ -130,7 +136,22 @@ struct DashboardView: View {
             return true
         }
         
-        return serverPatternAlerts.isEmpty ? trendNotifications : serverPatternAlerts
+        let baseList = serverPatternAlerts.isEmpty ? trendNotifications : serverPatternAlerts
+        
+        // 2) Exclude notifications about the logged-in user from the *family* notifications feed.
+        //    Personal drifts are surfaced via the bell / personal notification channels instead.
+        guard let currentUserId = currentUserIdString?.lowercased(), !currentUserId.isEmpty else {
+            return baseList
+        }
+        
+        return baseList.filter { item in
+            if let memberId = item.memberUserId?.lowercased() {
+                return memberId != currentUserId
+            }
+            // If we don't know who the notification is about, keep it rather than risking
+            // filtering out legitimate family alerts.
+            return true
+        }
     }
     
     var body: some View {
@@ -280,7 +301,10 @@ struct DashboardView: View {
         FamilyNotificationDetailSheet(
             item: item,
             onStartRecommendedChallenge: {
-                // Challenge feature removed
+                // Kick off a 7-day \"get back to baseline\" challenge for this member/pillar.
+                Task { [self] in
+                    await startRecommendedChallenge(for: item)
+                }
             },
             dataManager: dataManager
         )
@@ -299,6 +323,8 @@ struct DashboardView: View {
                 } else {
                     openMessages(with: message)
                 }
+                snoozeMissingWearableNotification(id: notification.id, forDays: 3)
+                selectedMissingWearableNotification = nil
             }
         )
     }
@@ -419,7 +445,7 @@ struct DashboardView: View {
         }
         
         internal var dashboardTopBar: some View {
-            DashboardTopBar(
+                DashboardTopBar(
                 familyName: resolvedFamilyName.isEmpty ? familyName : resolvedFamilyName,
                 onShareTapped: {
                     // 1) Build the share text
@@ -436,6 +462,12 @@ struct DashboardView: View {
                 onNotificationsTapped: {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
                         showNotifications.toggle()
+                    }
+                    
+                    if showNotifications {
+                        Task {
+                            await loadBellNotifications()
+                        }
                     }
                 }
             )
@@ -473,17 +505,82 @@ struct DashboardView: View {
                     }
                 
                 // Notification panel
-                NotificationPanel(onClose: {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
-                        showNotifications = false
+                NotificationPanel(
+                    notifications: bellNotifications,
+                    onClose: {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                            showNotifications = false
+                        }
+                    },
+                    onTap: { notification in
+                        handleBellNotificationTap(notification)
+                    },
+                    onDismissNotification: { notification in
+                        dismissBellNotification(notification)
                     }
-                })
+                )
                 .transition(
                     SwiftUI.AnyTransition
                         .move(edge: SwiftUI.Edge.top)
                         .combined(with: SwiftUI.AnyTransition.opacity)
                 )
                 .zIndex(2)
+            }
+        }
+
+        // MARK: - Bell Notifications Helpers
+        
+        internal func loadBellNotifications() async {
+            do {
+                let items = try await dataManager.fetchBellNotifications(limit: 25)
+                await MainActor.run {
+                    bellNotifications = items
+                }
+            } catch {
+                print("❌ DashboardView: Failed to load bell notifications: \(error.localizedDescription)")
+            }
+        }
+        
+        internal func handleBellNotificationTap(_ notification: BellNotification) {
+            switch notification.kind {
+            case .personalTrend(let pillar, _, _):
+                // Reuse existing navigation to focus the selected pillar for the logged-in user.
+                selectedFactor = vitalityFactors.first(where: { factor in
+                    switch pillar {
+                    case .sleep:
+                        return factor.name.lowercased() == "sleep"
+                    case .movement:
+                        return factor.name.lowercased() == "activity"
+                    case .stress:
+                        return factor.name.lowercased() == "recovery"
+                    }
+                })
+                // For now we simply close the bell; the user can explore their own dashboard details.
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                    showNotifications = false
+                }
+                
+            case .patternAlert(_, _, _, let alertStateId):
+                if let id = alertStateId,
+                   let item = serverPatternAlerts.first(where: { $0.id == id }) {
+                    selectedFamilyNotification = item
+                }
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                    showNotifications = false
+                }
+                
+            case .challengeInvite, .challengeDaily, .challengeCompleted:
+                // Awareness-only: close the bell panel and keep the user on the dashboard.
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                    showNotifications = false
+                }
+            }
+        }
+        
+        internal func dismissBellNotification(_ notification: BellNotification) {
+            // Local-only dismiss for now; backend \"read\" tracking can be added later.
+            withAnimation(.easeInOut(duration: 0.15)) {
+                bellNotifications.removeAll { $0.id == notification.id }
             }
         }
         
@@ -726,7 +823,6 @@ struct DashboardView: View {
                     debugButtonsRow
                     familyMembersSection
                     guidedSetupSection
-                    notificationsSection
                     missingWearableSection
                     familyVitalitySection
                     ChatWithArloCard(onTap: {
@@ -824,7 +920,7 @@ struct DashboardView: View {
                 if isLoadingFamilyMembers {
                     DashboardInlineLoaderCard(title: "Family members")
                 } else {
-                    FamilyMembersStrip(members: familyMembers, familyId: dataManager.currentFamilyId)
+                    FamilyMembersStrip(members: familyMembers, familyId: dataManager.currentFamilyId, currentUserAvatarURL: onboardingManager.avatarURL)
                         .id(familyMembersRefreshID)
                 }
             }
@@ -960,7 +1056,20 @@ struct DashboardView: View {
                         }
                         return nil
                     }(),
-                    progressScore: familyVitalityProgressScore
+                    progressScore: familyVitalityProgressScore,
+                    notifications: displayedNotifications,
+                    onNotificationTap: { item in
+                        selectedFamilyNotification = item
+                    },
+                    onNotificationSeeAll: {
+                        showAllNotifications = true
+                    },
+                    onNotificationSnooze: { item, days in
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            serverPatternAlerts.removeAll { $0.id == item.id }
+                        }
+                        Task { await snoozeNotification(item, days: days) }
+                    }
                 ) { tappedFactor in
                     selectedFactor = tappedFactor
                 }
@@ -1014,7 +1123,7 @@ struct DashboardView: View {
         @ViewBuilder
         internal var personalVitalitySection: some View {
             if let me = familyMembers.first(where: { $0.isMe }) {
-                PersonalVitalityCard(currentUser: me, factors: vitalityFactors)
+                PersonalVitalityCard(currentUser: me, factors: vitalityFactors, avatarURL: onboardingManager.avatarURL)
             }
         }
     }

@@ -8,7 +8,37 @@ struct FamilyVitalityCard: View {
     let factors: [VitalityFactor]
     let includedMembersText: String?
     let progressScore: Int?
+    let notifications: [FamilyNotificationItem]
+    let onNotificationTap: ((FamilyNotificationItem) -> Void)?
+    let onNotificationSeeAll: (() -> Void)?
+    let onNotificationSnooze: ((FamilyNotificationItem, Int?) -> Void)?
     let onFactorTapped: (VitalityFactor) -> Void
+    
+    @State private var itemToSnooze: FamilyNotificationItem? = nil
+    
+    init(
+        score: Int,
+        label: String,
+        factors: [VitalityFactor],
+        includedMembersText: String?,
+        progressScore: Int?,
+        notifications: [FamilyNotificationItem] = [],
+        onNotificationTap: ((FamilyNotificationItem) -> Void)? = nil,
+        onNotificationSeeAll: (() -> Void)? = nil,
+        onNotificationSnooze: ((FamilyNotificationItem, Int?) -> Void)? = nil,
+        onFactorTapped: @escaping (VitalityFactor) -> Void
+    ) {
+        self.score = score
+        self.label = label
+        self.factors = factors
+        self.includedMembersText = includedMembersText
+        self.progressScore = progressScore
+        self.notifications = notifications
+        self.onNotificationTap = onNotificationTap
+        self.onNotificationSeeAll = onNotificationSeeAll
+        self.onNotificationSnooze = onNotificationSnooze
+        self.onFactorTapped = onFactorTapped
+    }
 
     private var progressFraction: Double {
         // Do NOT change logic: use progressScore if present, otherwise fall back to score/100.
@@ -79,7 +109,7 @@ struct FamilyVitalityCard: View {
                     
             // Tiles row (3 compact tiles) built from the SAME `factors` data
             // NOTE: We intentionally do NOT render "What's affecting vitality?" UI.
-                            HStack(spacing: 10) {
+            HStack(spacing: 10) {
                 ForEach(tilesToShow, id: \.id) { factor in
                     PillarTile(
                         factor: factor,
@@ -91,6 +121,10 @@ struct FamilyVitalityCard: View {
                         onFactorTapped(factor)
                     }
                 }
+            }
+            
+            if !notifications.isEmpty {
+                embeddedNotificationsSection
             }
         }
         .padding(.horizontal, DashboardDesign.cardPadding)
@@ -136,6 +170,276 @@ struct FamilyVitalityCard: View {
         }
     }
 
+    // MARK: - Embedded Family Notifications (inside Family Vitality card)
+    
+    private var dedupedNotifications: [FamilyNotificationItem] {
+        FamilyNotificationItem.dedupedByMemberPillarWindow(notifications)
+    }
+
+    private var sortedNotifications: [FamilyNotificationItem] {
+        dedupedNotifications.sorted { n1, n2 in
+            let s1 = notificationSeverity(n1)
+            let s2 = notificationSeverity(n2)
+            
+            let priority1 = s1 == .attention ? 3 : (s1 == .watch ? 2 : 1)
+            let priority2 = s2 == .attention ? 3 : (s2 == .watch ? 2 : 1)
+            
+            return priority1 > priority2
+        }
+    }
+    
+    private func notificationSeverity(_ notification: FamilyNotificationItem) -> TrendSeverity {
+        switch notification.kind {
+        case .trend(let insight):
+            return insight.severity
+        case .fallback:
+            return .attention
+        }
+    }
+    
+    private func notificationSeverityColor(_ notification: FamilyNotificationItem) -> Color {
+        let severity = notificationSeverity(notification)
+        switch severity {
+        case .celebrate:
+            return Color.green
+        case .watch:
+            return Color.orange
+        case .attention:
+            return Color.red
+        }
+    }
+    
+    private func notificationPillarIcon(_ pillar: VitalityPillar) -> String {
+        switch pillar {
+        case .sleep: return "moon.stars.fill"
+        case .movement: return "figure.run"
+        case .stress: return "heart.fill"
+        }
+    }
+    
+    @ViewBuilder
+    private var embeddedNotificationsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Family notifications")
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundColor(DashboardDesign.secondaryTextColor)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                
+                Spacer()
+                
+                if dedupedNotifications.count > 3, let onNotificationSeeAll {
+                    Button {
+                        onNotificationSeeAll()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("See all (\(dedupedNotifications.count))")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundColor(.miyaPrimary)
+                    }
+                }
+            }
+            
+            VStack(spacing: 10) {
+                ForEach(sortedNotifications.prefix(3)) { item in
+                    embeddedNotificationRow(item)
+                }
+            }
+        }
+        .padding(.top, 8)
+    }
+    
+    @ViewBuilder
+    private func embeddedNotificationRow(_ item: FamilyNotificationItem) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Button {
+                onNotificationTap?(item)
+            } label: {
+                embeddedNotificationCard(item)
+            }
+            .buttonStyle(.plain)
+            
+            if onNotificationSnooze != nil {
+                Button {
+                    itemToSnooze = item
+                } label: {
+                    Image(systemName: "bell.slash")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(DashboardDesign.secondaryTextColor)
+                        .padding(8)
+                        .background(
+                            Circle()
+                                .fill(Color.white)
+                                .shadow(color: Color.black.opacity(0.08), radius: 6, x: 0, y: 2)
+                        )
+                }
+                .buttonStyle(.plain)
+                .padding(8)
+            }
+        }
+        .alert(
+            "Are you sure you want to snooze this?",
+            isPresented: Binding(
+                get: { itemToSnooze != nil },
+                set: { if !$0 { itemToSnooze = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) {
+                itemToSnooze = nil
+            }
+            Button("Snooze") {
+                if let item = itemToSnooze {
+                    onNotificationSnooze?(item, defaultSnoozeDays(for: item))
+                }
+                itemToSnooze = nil
+            }
+        }
+    }
+    
+    private func embeddedNotificationCard(_ item: FamilyNotificationItem) -> some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                // LEFT: member initials + pillar icon
+                HStack(spacing: 8) {
+                    ZStack {
+                        Circle()
+                            .fill(DashboardDesign.tertiaryBackgroundColor)
+                            .frame(width: 32, height: 32)
+                        Text(item.memberInitials)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(DashboardDesign.primaryTextColor)
+                    }
+                    
+                    Image(systemName: notificationPillarIcon(item.pillar))
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(notificationSeverityColor(item))
+                }
+                
+                // MIDDLE + RIGHT: compact summary with days/CTA just left of snooze
+                HStack(spacing: 8) {
+                    Text(embeddedSummaryLabel(for: item))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(DashboardDesign.secondaryTextColor)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    
+                    Spacer(minLength: 0)
+                    
+                    VStack(alignment: .trailing, spacing: 2) {
+                        if let windowText = embeddedWindowLabel(for: item) {
+                            Text(windowText)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(DashboardDesign.secondaryTextColor)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(
+                                    Capsule()
+                                        .fill(DashboardDesign.tertiaryBackgroundColor)
+                                )
+                        }
+                        
+                        Text("See why")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.miyaPrimary)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .padding(.trailing, 44)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white)
+                .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+                .shadow(color: Color.black.opacity(0.02), radius: 2, x: 0, y: 1)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            notificationSeverityColor(item).opacity(0.2),
+                            notificationSeverityColor(item).opacity(0.1)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1.5
+                )
+        )
+    }
+    
+    private func defaultSnoozeDays(for notification: FamilyNotificationItem) -> Int {
+        guard let current = notification.triggerWindowDays else {
+            return 3
+        }
+        
+        let next: Int? = {
+            switch current {
+            case 3: return 7
+            case 7: return 14
+            case 14: return 21
+            default: return nil
+            }
+        }()
+        
+        if let next, next > current {
+            return next - current
+        } else {
+            return 7
+        }
+    }
+    
+    @ViewBuilder
+    private func embeddedSeverityBadge(_ notification: FamilyNotificationItem) -> some View {
+        let severity = notificationSeverity(notification)
+        
+        if severity == .attention || severity == .celebrate {
+            ZStack {
+                Circle()
+                    .fill(notificationSeverityColor(notification))
+                    .frame(width: 20, height: 20)
+                
+                Image(systemName: severity == .attention ? "exclamationmark" : "checkmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.white)
+            }
+        }
+    }
+    
+    // MARK: - Embedded notification helpers
+    
+    private func embeddedWindowLabel(for item: FamilyNotificationItem) -> String? {
+        return item.patternDurationToken
+    }
+    
+    private func embeddedSummaryLabel(for item: FamilyNotificationItem) -> String {
+        let pillarName: String
+        switch item.pillar {
+        case .sleep:
+            pillarName = "Sleep"
+        case .movement:
+            pillarName = "Activity"
+        case .stress:
+            pillarName = "Recovery"
+        }
+        
+        let severity = notificationSeverity(item)
+        let status: String
+        switch severity {
+        case .celebrate:
+            status = "up"
+        case .watch:
+            status = "drifting"
+        case .attention:
+            status = "low"
+        }
+        
+        return "\(pillarName) \(status)"
+    }
+    
     private struct PillarTile: View {
         let factor: VitalityFactor
         let tint: Color
@@ -148,24 +452,14 @@ struct FamilyVitalityCard: View {
                     .font(.system(size: 24))
                     .foregroundColor(iconColor)
 
-                // Name (smaller font)
+                // Pillar name
                 Text(factor.name)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(DashboardDesign.primaryTextColor)
 
-                // Value + Unit on same line (like screenshot: "50 hrs")
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text("\(factor.percent)")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundColor(DashboardDesign.primaryTextColor)
-                    Text(unitShortText(for: factor.name))
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundColor(DashboardDesign.secondaryTextColor)
-                }
-
-                // Full unit text below (no truncation)
-                Text(unitText(for: factor.name))
-                    .font(.system(size: 11, weight: .regular))
+                // Status label derived from pillar percent (Excellent / Good / Stable / Drifting / Urgent)
+                Text(statusLabel)
+                    .font(.system(size: 13, weight: .regular))
                     .foregroundColor(DashboardDesign.secondaryTextColor)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -183,24 +477,26 @@ struct FamilyVitalityCard: View {
             )
         }
 
-        private func unitShortText(for name: String) -> String {
-            switch name.lowercased() {
-            case "sleep": return "%"
-            case "activity": return "%"
-            case "stress": return "%"
-            case "recovery": return "%"
-            default: return ""
+        // MARK: - Status mapping helper
+        
+        private static func statusLabel(for percent: Int) -> String {
+            let clamped = max(0, min(percent, 100))
+            switch clamped {
+            case 80...100:
+                return "Excellent"
+            case 65..<80:
+                return "Good"
+            case 50..<65:
+                return "Stable"
+            case 35..<50:
+                return "Drifting"
+            default:
+                return "Urgent"
             }
         }
         
-        private func unitText(for name: String) -> String {
-            switch name.lowercased() {
-            case "sleep": return "sleep score"
-            case "activity": return "activity score"
-            case "stress": return "recovery score"
-            case "recovery": return "recovery score"
-            default: return "score"
-            }
+        private var statusLabel: String {
+            Self.statusLabel(for: factor.percent)
         }
     }
 }
@@ -246,6 +542,7 @@ struct FamilyVitalityPlaceholderCard: View {
 struct PersonalVitalityCard: View {
     let currentUser: FamilyMemberScore
     let factors: [VitalityFactor]
+    var avatarURL: String? = nil
     @State private var isExpanded: Bool = false
     
     private func label(for score: Int) -> String {
@@ -265,15 +562,16 @@ struct PersonalVitalityCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DashboardDesign.internalSpacing) {
             HStack(spacing: DashboardDesign.internalSpacing) {
-                ZStack {
-                    Circle()
-                        .fill(DashboardDesign.miyaTealSoft.opacity(0.15))
-                        .frame(width: 44, height: 44)
-                    Text(currentUser.initials)
-                        .font(DashboardDesign.bodyFont)
-                        .foregroundColor(DashboardDesign.miyaTealSoft.opacity(0.9))
-                }
-                
+                ProfileAvatarView(
+                    imageURL: avatarURL,
+                    initials: currentUser.initials,
+                    diameter: 44,
+                    backgroundColor: DashboardDesign.miyaTealSoft.opacity(0.15),
+                    foregroundColor: DashboardDesign.miyaTealSoft.opacity(0.9),
+                    font: DashboardDesign.bodyFont
+                )
+                .frame(width: 44, height: 44)
+
                 VStack(alignment: .leading, spacing: DashboardDesign.tinySpacing) {
                     Text("My Vitality")
                         .font(DashboardDesign.bodySemiboldFont)

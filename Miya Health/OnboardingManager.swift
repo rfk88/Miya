@@ -63,14 +63,22 @@ class OnboardingManager: ObservableObject {
             invitedMemberId = rec.id.uuidString
             invitedFamilyId = rec.familyId?.uuidString
             guidedSetupStatus = parseGuidedSetupStatus(rec.guidedSetupStatus)
-            // Prefer canonical name from user_profiles if available; otherwise fall back to family_members.
-            if let profile = (try? await dataManager.loadUserProfile()) ?? nil,
-               let fn = profile.first_name?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !fn.isEmpty {
-                firstName = fn
-                if let ln = profile.last_name?.trimmingCharacters(in: .whitespacesAndNewlines), !ln.isEmpty {
-                    lastName = ln
+
+            // Prefer canonical profile data from user_profiles if available; otherwise fall back to family_members.
+            if let profile = (try? await dataManager.loadUserProfile()) ?? nil {
+                if let fn = profile.first_name?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !fn.isEmpty {
+                    firstName = fn
+                    if let ln = profile.last_name?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !ln.isEmpty {
+                        lastName = ln
+                    }
+                } else {
+                    firstName = rec.firstName
                 }
+
+                // Cache avatar URL for use in dashboard/profile UI
+                avatarURL = profile.avatar_url
             } else {
                 firstName = rec.firstName
             }
@@ -100,6 +108,9 @@ class OnboardingManager: ObservableObject {
     @Published var email: String = ""
     @Published var password: String = ""
     @Published var currentUserId: String?
+
+    // Profile avatar (optional URL from user_profiles.avatar_url)
+    @Published var avatarURL: String? = nil
     
     // MARK: - Step 2: Family Setup
     
@@ -217,7 +228,8 @@ class OnboardingManager: ObservableObject {
         email = ""
         password = ""
         currentUserId = nil
-        
+        avatarURL = nil
+
         // Step 2: Family
         familyName = ""
         familySize = ""

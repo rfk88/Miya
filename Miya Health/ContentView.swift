@@ -1569,6 +1569,10 @@ struct WearableSelectionView: View {
     @State private var authorizationDataSource: String? = nil
     @State private var authorizationDataSourceName: String? = nil
     
+    /// Shown when waiting for wearable connection to be verified (onboarding only). Never advance until connection is confirmed.
+    @State private var isWaitingForConnection: Bool = false
+    @State private var connectingWearableName: String? = nil
+    
     private let totalSteps: Int = 7
     private let currentStep: Int = 2
     
@@ -1586,6 +1590,10 @@ struct WearableSelectionView: View {
         ZStack {
             Color.miyaBackground.ignoresSafeArea()
             
+            if isWaitingForConnection {
+                // Full-screen animated loading until connection is verified; keeps user engaged
+                ConnectingWearableView(wearableName: connectingWearableName ?? "wearable")
+            } else {
             VStack(spacing: 24) {
                 
                 // Progress bar: Step 3 of 8 (only show in onboarding mode)
@@ -1742,6 +1750,7 @@ struct WearableSelectionView: View {
                     }
                 }
             }
+            }
         }
         .alert("Error", isPresented: $showError) {
             Button("OK", role: .cancel) { }
@@ -1769,10 +1778,17 @@ struct WearableSelectionView: View {
                 }
                 .onDisappear {
                     print("🟡 WearableSelectionView: Authorization view dismissed")
-                    // Fallback: Check connection status after manual dismissal
-                    // (Primary path is OAuth completion auto-dismiss, but this handles manual close)
-                    Task {
-                        await checkAPIWearableConnectionStatus()
+                    // When returning from OAuth: show loader and poll until connection is verified (onboarding only)
+                    if !isReconnectMode, authorizationDataSource != nil {
+                        isWaitingForConnection = true
+                        connectingWearableName = authorizationDataSourceName
+                        Task {
+                            await pollUntilAPIConnectionVerified()
+                        }
+                    } else {
+                        Task {
+                            await checkAPIWearableConnectionStatus()
+                        }
                     }
                 }
             } else {
@@ -1891,6 +1907,16 @@ struct WearableSelectionView: View {
         }
     }
     
+    /// Advance to next onboarding step only after wearable is verified connected. Call only from verified-connected code paths.
+    private func advanceOnboardingAfterWearableConnection() {
+        if isReconnectMode { return }
+        if isGuidedSetupInvite {
+            onboardingManager.completeOnboarding()
+        } else {
+            onboardingManager.setCurrentStep(3)
+        }
+    }
+    
     /// Check connection status for all API-based wearables
     private func checkAPIWearableConnectionStatus() async {
         guard let userId = await authManager.getCurrentUserId() else {
@@ -1918,12 +1944,18 @@ struct WearableSelectionView: View {
                         // Save to database if not already saved
                         if !onboardingManager.connectedWearables.contains(wearable.rawValue) {
                             onboardingManager.connectedWearables.append(wearable.rawValue)
-                            Task {
-                                try? await dataManager.saveWearable(wearableType: wearable.rawValue)
-                            }
                         }
                     } else {
                         connectedWearables.remove(wearable)
+                    }
+                }
+                
+                // Await save so we only advance after connection is verified and persisted
+                if isConnected && !wasAlreadyConnected {
+                    do {
+                        try await dataManager.saveWearable(wearableType: wearable.rawValue)
+                    } catch {
+                        print("⚠️ WearableSelectionView: Failed to save \(wearable.displayName): \(error.localizedDescription)")
                     }
                 }
                 
@@ -1941,9 +1973,35 @@ struct WearableSelectionView: View {
                             "userId": userId
                         ]
                     )
+                    // Onboarding: only advance when we have verified this wearable and we were waiting for it
+                    if !isReconnectMode, isWaitingForConnection, wearable.rookDataSourceId == authorizationDataSource {
+                        await MainActor.run {
+                            isWaitingForConnection = false
+                            advanceOnboardingAfterWearableConnection()
+                        }
+                    }
                 }
             } catch {
                 print("⚠️ WearableSelectionView: Error checking status for \(wearable.displayName): \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    /// Poll API connection status until the wearable we're waiting for is verified, or timeout (~60s).
+    private func pollUntilAPIConnectionVerified() async {
+        let maxAttempts = 20
+        let delaySeconds: UInt64 = 3_000_000_000 // 3 seconds
+        for _ in 0..<maxAttempts {
+            await checkAPIWearableConnectionStatus()
+            let stillWaiting = await MainActor.run { isWaitingForConnection }
+            if !stillWaiting { return }
+            try? await Task.sleep(nanoseconds: delaySeconds)
+        }
+        await MainActor.run {
+            if isWaitingForConnection {
+                isWaitingForConnection = false
+                errorMessage = "Connection didn’t complete. Please try again."
+                showError = true
             }
         }
     }
@@ -1982,6 +2040,11 @@ struct WearableSelectionView: View {
                 DispatchQueue.main.async {
                     let permissionsManager = RookConnectPermissionsManager()
                     print("🟢 RookConnect: Requesting Apple Health permissions (sandbox)")
+                    // Onboarding: show loader so when user returns from permission sheet we show "Connecting..." until save completes
+                    if !self.isReconnectMode {
+                        self.isWaitingForConnection = true
+                        self.connectingWearableName = "Apple Health"
+                    }
                     
                     permissionsManager.requestAllPermissions { _ in
                         DispatchQueue.main.async {
@@ -2018,8 +2081,14 @@ struct WearableSelectionView: View {
                                         )
                                         print("✅ RookConnect: Posted apiWearableConnected notification for Apple Health")
                                     }
+                                    // Onboarding: only advance after verified save; hide loader
+                                    isWaitingForConnection = false
+                                    advanceOnboardingAfterWearableConnection()
                                 } catch {
                                     print("⚠️ RookConnect: Failed to save Apple Health to database: \(error.localizedDescription)")
+                                    isWaitingForConnection = false
+                                    errorMessage = error.localizedDescription
+                                    showError = true
                                 }
                             }
 
@@ -2052,6 +2121,44 @@ struct WearableSelectionView: View {
                 }
             }
         }
+    }
+}
+
+/// Full-screen animated view shown while waiting for wearable connection to be verified during onboarding.
+private struct ConnectingWearableView: View {
+    let wearableName: String
+    @State private var isAnimating = false
+    
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            ZStack {
+                // Pulsing ring
+                Circle()
+                    .stroke(Color.miyaPrimary.opacity(0.2), lineWidth: 4)
+                    .frame(width: 80, height: 80)
+                Circle()
+                    .trim(from: 0, to: 0.7)
+                    .stroke(Color.miyaPrimary, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                    .frame(width: 80, height: 80)
+                    .rotationEffect(.degrees(isAnimating ? 360 : 0))
+                    .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: isAnimating)
+            }
+            .frame(height: 100)
+            VStack(spacing: 8) {
+                Text("Connecting your \(wearableName)")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(.miyaTextPrimary)
+                    .multilineTextAlignment(.center)
+                Text("This usually takes a few seconds.")
+                    .font(.system(size: 15))
+                    .foregroundColor(.miyaTextSecondary)
+            }
+            .padding(.horizontal, 32)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { isAnimating = true }
     }
 }
 
@@ -2570,6 +2677,7 @@ struct AboutYouView: View {
                     }
                     .padding(.vertical, 4)
                 }
+                .background(Color.miyaBackground)
                 
                 // Error message
                 if showError {
@@ -2775,9 +2883,9 @@ struct HeartHealthView: View {
     private let totalSteps: Int = 7
     private let currentStep: Int = 4
     
-    // WHO Risk fields
-    @State private var bloodPressureStatus: BloodPressureStatus = .unknown
-    @State private var diabetesStatus: DiabetesStatus = .none
+    // WHO Risk fields (nil = no selection; user must explicitly choose)
+    @State private var bloodPressureStatus: BloodPressureStatus? = nil
+    @State private var diabetesStatus: DiabetesStatus? = nil
     @State private var hasPriorHeartAttack: Bool = false
     @State private var hasPriorStroke: Bool = false
     @State private var noPriorEvents: Bool = false  // "None of the above"
@@ -3009,6 +3117,7 @@ struct HeartHealthView: View {
                     }
                     .padding(.vertical, 4)
                 }
+                .background(Color.miyaBackground)
                 
                 // Error message
                 if showError {
@@ -3089,9 +3198,18 @@ struct HeartHealthView: View {
         showError = false
         errorMessage = ""
         
+        // Require both blood pressure and diabetes to be selected before saving
+        guard let bp = bloodPressureStatus, let diab = diabetesStatus else {
+            await MainActor.run {
+                errorMessage = "Please select your blood pressure status and diabetes status."
+                showError = true
+            }
+            return
+        }
+        
         // Save to OnboardingManager
-        onboardingManager.bloodPressureStatus = bloodPressureStatus.rawValue
-        onboardingManager.diabetesStatus = diabetesStatus.rawValue
+        onboardingManager.bloodPressureStatus = bp.rawValue
+        onboardingManager.diabetesStatus = diab.rawValue
         onboardingManager.hasPriorHeartAttack = hasPriorHeartAttack
         onboardingManager.hasPriorStroke = hasPriorStroke
         onboardingManager.hasChronicKidneyDisease = hasChronicKidneyDisease
@@ -3103,7 +3221,7 @@ struct HeartHealthView: View {
             var conditions: [String: Bool] = [:]
             
             // Blood Pressure - save exact status
-            switch bloodPressureStatus {
+            switch bp {
             case .normal:
                 conditions["bp_normal"] = true
             case .elevatedUntreated:
@@ -3115,7 +3233,7 @@ struct HeartHealthView: View {
             }
             
             // Diabetes - save exact type
-            switch diabetesStatus {
+            switch diab {
             case .none:
                 conditions["diabetes_none"] = true
             case .preDiabetic:
@@ -3299,6 +3417,7 @@ struct MedicalHistoryView: View {
                     }
                     .padding(.vertical, 4)
                 }
+                .background(Color.miyaBackground)
                 
                 // Error message
                 if showError {
@@ -3633,6 +3752,7 @@ struct AlertsChampionView: View {
                     }
                     .padding(.vertical, 4)
                 }
+                .background(Color.miyaBackground)
                 
                 Spacer()
                 
@@ -3952,6 +4072,7 @@ struct WellbeingPrivacyView: View {
                     }
                     .padding(.vertical, 4)
                 }
+                .background(Color.miyaBackground)
                 
                 // Error message
                 if showError {
@@ -5230,6 +5351,7 @@ struct GuidedSetupReviewView: View {
                     }
                     .padding(.horizontal, 24)
                 }
+                .background(Color.miyaBackground)
             } else {
                 VStack {
                     Image(systemName: "exclamationmark.triangle")

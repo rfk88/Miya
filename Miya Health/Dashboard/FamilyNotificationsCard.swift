@@ -11,12 +11,77 @@ struct FamilyNotificationsCard: View {
     
     @State private var itemToSnooze: FamilyNotificationItem?
     
-    private var displayedItems: [FamilyNotificationItem] {
-        sortedBySeverity(items).prefix(3).map { $0 }
+    // MARK: - Grouped view model (one line per member + window)
+    
+    private struct GroupedNotification: Identifiable {
+        let id: String
+        let memberInitials: String
+        let memberName: String
+        var pillars: [VitalityPillar]
+        let overallSeverity: TrendSeverity
+        let windowDays: Int?
+        let durationToken: String?
+        /// Representative underlying item used for tap/snooze/detail.
+        let representativeItem: FamilyNotificationItem
+    }
+    
+    private var groupedItems: [GroupedNotification] {
+        // Sort raw items by severity first, then fold into groups so the
+        // highest severity item becomes the representative for each group.
+        let sorted = sortedBySeverity(FamilyNotificationItem.dedupedByMemberPillarWindow(items))
+        
+        var groups: [String: GroupedNotification] = [:]
+        var order: [String] = []
+        
+        for item in sorted {
+            let memberKey = (item.memberUserId ?? item.memberName).lowercased()
+            let pillarKey = item.pillar.rawValue
+            let windowKey = item.triggerWindowDays ?? 0
+            let key = "\(memberKey)-\(pillarKey)-\(windowKey)"
+            let severity = getSeverity(item)
+            
+            if var existing = groups[key] {
+                if !existing.pillars.contains(item.pillar) {
+                    existing.pillars.append(item.pillar)
+                }
+                if severityPriority(for: severity) > severityPriority(for: existing.overallSeverity) {
+                    existing = GroupedNotification(
+                        id: existing.id,
+                        memberInitials: existing.memberInitials,
+                        memberName: existing.memberName,
+                        pillars: existing.pillars,
+                        overallSeverity: severity,
+                        windowDays: existing.windowDays ?? item.triggerWindowDays,
+                        durationToken: item.patternDurationToken ?? existing.durationToken,
+                        representativeItem: item
+                    )
+                }
+                groups[key] = existing
+            } else {
+                let group = GroupedNotification(
+                    id: key,
+                    memberInitials: item.memberInitials,
+                    memberName: item.memberName,
+                    pillars: [item.pillar],
+                    overallSeverity: severity,
+                    windowDays: item.triggerWindowDays,
+                    durationToken: item.patternDurationToken,
+                    representativeItem: item
+                )
+                groups[key] = group
+                order.append(key)
+            }
+        }
+        
+        return order.compactMap { groups[$0] }
+    }
+    
+    private var displayedGroups: [GroupedNotification] {
+        Array(groupedItems.prefix(3))
     }
     
     private var hasMore: Bool {
-        items.count > 3
+        groupedItems.count > 3
     }
     
     private func pillarIcon(_ pillar: VitalityPillar) -> String {
@@ -36,8 +101,15 @@ struct FamilyNotificationsCard: View {
         }
     }
     
-    private func severityColor(_ notification: FamilyNotificationItem) -> Color {
-        let severity = getSeverity(notification)
+    private func severityPriority(for severity: TrendSeverity) -> Int {
+        switch severity {
+        case .attention: return 3
+        case .watch: return 2
+        case .celebrate: return 1
+        }
+    }
+    
+    private func severityColor(for severity: TrendSeverity) -> Color {
         switch severity {
         case .celebrate:
             return Color.green
@@ -48,13 +120,17 @@ struct FamilyNotificationsCard: View {
         }
     }
     
+    private func severityColor(_ notification: FamilyNotificationItem) -> Color {
+        severityColor(for: getSeverity(notification))
+    }
+    
     private func sortedBySeverity(_ notifications: [FamilyNotificationItem]) -> [FamilyNotificationItem] {
         notifications.sorted { n1, n2 in
             let s1 = getSeverity(n1)
             let s2 = getSeverity(n2)
             
-            let priority1 = s1 == .attention ? 3 : (s1 == .watch ? 2 : 1)
-            let priority2 = s2 == .attention ? 3 : (s2 == .watch ? 2 : 1)
+            let priority1 = severityPriority(for: s1)
+            let priority2 = severityPriority(for: s2)
             
             return priority1 > priority2
         }
@@ -76,7 +152,7 @@ struct FamilyNotificationsCard: View {
                         onSeeAll()
                     } label: {
                         HStack(spacing: 4) {
-                            Text("See all (\(items.count))")
+                            Text("See all (\(groupedItems.count))")
                                 .font(.system(size: 13, weight: .semibold))
                         }
                     .foregroundColor(.miyaPrimary)
@@ -85,8 +161,8 @@ struct FamilyNotificationsCard: View {
             }
             
             VStack(spacing: 10) {
-                ForEach(displayedItems) { item in
-                    notificationRow(item)
+                ForEach(displayedGroups) { group in
+                    notificationRow(group)
                 }
             }
         }
@@ -100,17 +176,17 @@ struct FamilyNotificationsCard: View {
     }
     
     @ViewBuilder
-    private func notificationRow(_ item: FamilyNotificationItem) -> some View {
+    private func notificationRow(_ group: GroupedNotification) -> some View {
         ZStack(alignment: .topTrailing) {
             Button {
-                onTap(item)
+                onTap(group.representativeItem)
             } label: {
-                notificationCard(item)
+                notificationCard(group)
             }
             .buttonStyle(.plain)
 
             Button {
-                itemToSnooze = item
+                itemToSnooze = group.representativeItem
             } label: {
                 Image(systemName: "bell.slash")
                     .font(.system(size: 12, weight: .semibold))
@@ -144,49 +220,62 @@ struct FamilyNotificationsCard: View {
         }
     }
 
-    private func notificationCard(_ item: FamilyNotificationItem) -> some View {
-        HStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                severityColor(item).opacity(0.25),
-                                severityColor(item).opacity(0.15)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 40, height: 40)
-
-                // Icon
-                Image(systemName: pillarIcon(item.pillar))
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [
-                                severityColor(item),
-                                severityColor(item).opacity(0.8)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-
-                severityBadge(item)
-                    .offset(x: 14, y: -14)
+    private func notificationCard(_ group: GroupedNotification) -> some View {
+        HStack(spacing: 12) {
+            // LEFT: member initials + pillar icons
+            HStack(spacing: 8) {
+                // LEFT: member initials + pillar icons
+                HStack(spacing: 8) {
+                    ZStack {
+                        Circle()
+                            .fill(DashboardDesign.tertiaryBackgroundColor)
+                            .frame(width: 32, height: 32)
+                        Text(group.memberInitials)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(DashboardDesign.primaryTextColor)
+                    }
+                    
+                    HStack(spacing: 4) {
+                        ForEach(group.pillars, id: \.self) { pillar in
+                            Image(systemName: pillarIcon(pillar))
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(severityColor(for: group.overallSeverity))
+                        }
+                    }
+                }
+                
+                // MIDDLE + RIGHT: summary with days/CTA just left of snooze
+                HStack(spacing: 8) {
+                    Text(summaryLabel(for: group))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(DashboardDesign.secondaryTextColor)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    
+                    Spacer(minLength: 0)
+                    
+                    VStack(alignment: .trailing, spacing: 2) {
+                        if let windowText = windowLabel(for: group) {
+                            Text(windowText)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(DashboardDesign.secondaryTextColor)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(
+                                    Capsule()
+                                        .fill(DashboardDesign.tertiaryBackgroundColor)
+                                )
+                        }
+                        
+                        Text("See why")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.miyaPrimary)
+                    }
+                }
             }
-
-            Text(item.displayLine)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(DashboardDesign.secondaryTextColor)
-                .lineLimit(2)
-                .truncationMode(.tail)
-
-            Spacer(minLength: 8)
         }
         .padding(12)
+        .padding(.trailing, 44)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color.white)
@@ -198,8 +287,8 @@ struct FamilyNotificationsCard: View {
                 .stroke(
                     LinearGradient(
                         colors: [
-                            severityColor(item).opacity(0.2),
-                            severityColor(item).opacity(0.1)
+                            severityColor(for: group.overallSeverity).opacity(0.2),
+                            severityColor(for: group.overallSeverity).opacity(0.1)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
@@ -246,6 +335,36 @@ struct FamilyNotificationsCard: View {
                     .foregroundColor(.white)
             }
         }
+    }
+    
+    // MARK: - Grouped row helpers
+    
+    private func windowLabel(for group: GroupedNotification) -> String? {
+        return group.durationToken
+    }
+    
+    private func summaryLabel(for group: GroupedNotification) -> String {
+        let names = group.pillars.map { pillar -> String in
+            switch pillar {
+            case .sleep: return "Sleep"
+            case .movement: return "Activity"
+            case .stress: return "Recovery"
+            }
+        }
+        
+        let joined: String
+        if names.isEmpty {
+            joined = "Check in"
+        } else if names.count == 1 {
+            joined = names[0]
+        } else if names.count == 2 {
+            joined = "\(names[0]) & \(names[1])"
+        } else {
+            joined = "Multiple pillars"
+        }
+        
+        // Keep copy tight and action-oriented
+        return "\(joined) low"
     }
 }
 

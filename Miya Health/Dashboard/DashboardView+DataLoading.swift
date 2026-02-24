@@ -116,7 +116,12 @@ extension DashboardView {
         let todayRows = validMapped.filter { $0.dayKey == todayKey }
         let yesterdayKey = utcDayKey(for: dateByAddingDays(-1, to: today))
         let yesterdayRows = validMapped.filter { $0.dayKey == yesterdayKey }
-        dailyBadgeWinners = BadgeEngine.computeDailyBadges(members: members, todayRows: todayRows, yesterdayRows: yesterdayRows)
+        dailyBadgeWinners = BadgeEngine.computeDailyBadges(
+            members: members,
+            todayRows: todayRows,
+            yesterdayRows: yesterdayRows,
+            recentRows: validMapped
+        )
         
         // Weekly badges: try read persisted for this week first.
         // If the table doesn't exist yet, skip persistence gracefully and just compute on read.
@@ -169,11 +174,6 @@ extension DashboardView {
             }
         }
         
-        if persisted.count >= BadgeEngine.WeeklyBadgeType.allCases.count {
-            weeklyBadgeWinners = winnersFromPersisted(persisted)
-            return
-        }
-        
         // Compute weekly winners (this week + prev week + last 14 days ending weekEndKey)
         // Use validMapped (filtered to exclude future dates)
         let thisWeekRows = validMapped.filter { $0.dayKey >= weekStartKey && $0.dayKey <= weekEndKey }
@@ -202,7 +202,13 @@ extension DashboardView {
         print("🏆 BadgeEngine: Computed \(computedWinners.count) weekly winners")
         #endif
         
-        weeklyBadgeWinners = computedWinners
+        // Always prefer latest computed winners for current-week freshness.
+        // If no winners can be computed yet, fall back to persisted rows (if any).
+        if !computedWinners.isEmpty {
+            weeklyBadgeWinners = computedWinners
+        } else {
+            weeklyBadgeWinners = winnersFromPersisted(persisted)
+        }
         
         // Persist if caller is admin/superadmin AND we have something to persist.
         if let uid = currentUserIdString,
@@ -1008,6 +1014,62 @@ extension DashboardView {
             await loadServerPatternAlerts()
         } catch {
             print("❌ Failed to snooze/dismiss notification: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Start a recommended 7-day challenge for a family member based on a notification.
+    /// This calls the `create_challenge` RPC, which enforces that only admins can start
+    /// challenges and that at most one active/pending challenge exists per member.
+    internal func startRecommendedChallenge(for notification: FamilyNotificationItem) async {
+        guard let memberUserId = notification.memberUserId,
+              UUID(uuidString: memberUserId) != nil else {
+            print("❌ startRecommendedChallenge: Missing or invalid memberUserId")
+            return
+        }
+        
+        // The notification ID corresponds to the underlying pattern_alert_state ID.
+        guard UUID(uuidString: notification.id) != nil else {
+            print("❌ startRecommendedChallenge: Invalid alert ID \(notification.id)")
+            return
+        }
+        
+        let pillarKey: String
+        switch notification.pillar {
+        case .sleep:
+            pillarKey = "sleep"
+        case .movement:
+            pillarKey = "movement"
+        case .stress:
+            pillarKey = "stress"
+        }
+        
+        struct CreateChallengeResult: Decodable {
+            let success: Bool
+            let challenge_id: String?
+            let error: String?
+        }
+        
+        do {
+            let supabase = SupabaseConfig.client
+            
+            let result: CreateChallengeResult = try await supabase
+                .rpc("create_challenge", params: [
+                    "member_user_id": AnyJSON.string(memberUserId),
+                    "pillar": AnyJSON.string(pillarKey),
+                    "source_alert_state_id": AnyJSON.string(notification.id)
+                ])
+                .execute()
+                .value
+            
+            if result.success {
+                #if DEBUG
+                print("✅ Created challenge \(result.challenge_id ?? "") for member \(memberUserId) pillar \(pillarKey)")
+                #endif
+            } else {
+                print("❌ Failed to create challenge: \(result.error ?? "unknown_error")")
+            }
+        } catch {
+            print("❌ startRecommendedChallenge RPC failed: \(error.localizedDescription)")
         }
     }
 

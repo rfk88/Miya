@@ -1,7 +1,14 @@
 import SwiftUI
+import PhotosUI
 
 // MARK: - Sidebar and Settings Components
 // Extracted from DashboardView.swift - Phase 10 of refactoring
+
+// Wrapper so we can present the crop sheet with .sheet(item:) and always have the image.
+private struct ImageForCrop: Identifiable {
+    let id = UUID()
+    let image: UIImage
+}
 
 // MARK: - Account Sidebar View
 
@@ -18,7 +25,11 @@ struct AccountSidebarView: View {
     let onSaveFamilyName: ((String) async throws -> Void)?
     let isSyncingWearables: Bool
     let onConnectWearables: () -> Void
-    
+    var avatarURL: String? = nil
+    var onAvatarURLUpdated: ((String?) -> Void)? = nil
+
+    @EnvironmentObject private var dataManager: DataManager
+
     // TEMP: mocked devices – later wire real data
     private let connectedDevices: [ConnectedDevice] = [
         ConnectedDevice(name: "Apple Health", lastSyncDescription: "2 hours ago")
@@ -59,10 +70,29 @@ struct AccountSidebarView: View {
     @State private var isShowingSupport: Bool = false
     
     @State private var isPresentingChallengeSheet: Bool = false
-    
+
+    // Profile picture flow
+    @State private var showAvatarOptions: Bool = false
+    @State private var selectedPhotoItem: PhotosPickerItem? = nil
+    @State private var imageForCrop: ImageForCrop? = nil
+    @State private var isPhotoPickerPresented: Bool = false
+    @State private var isUploadingAvatar: Bool = false
+    @State private var avatarErrorMessage: String? = nil
+
     @State private var localUserName: String
     @State private var localFamilyName: String
     
+    private enum ProfileSaveError: LocalizedError {
+        case timeout
+        
+        var errorDescription: String? {
+            switch self {
+            case .timeout:
+                return "Saving took too long. Please check your connection and try again."
+            }
+        }
+    }
+
     private var userInitials: String {
         initials(from: localUserName)
     }
@@ -78,7 +108,9 @@ struct AccountSidebarView: View {
          onConnectWearables: @escaping () -> Void,
          onManageMembers: @escaping () -> Void,
          onSaveProfile: @escaping (String) async throws -> Void,
-         onSaveFamilyName: ((String) async throws -> Void)? = nil) {
+         onSaveFamilyName: ((String) async throws -> Void)? = nil,
+         avatarURL: String? = nil,
+         onAvatarURLUpdated: ((String?) -> Void)? = nil) {
         self.userName = userName
         self.userEmail = userEmail
         self.familyName = familyName
@@ -91,6 +123,8 @@ struct AccountSidebarView: View {
         self.onManageMembers = onManageMembers
         self.onSaveProfile = onSaveProfile
         self.onSaveFamilyName = onSaveFamilyName
+        self.avatarURL = avatarURL
+        self.onAvatarURLUpdated = onAvatarURLUpdated
         _localUserName = State(initialValue: userName)
         _localFamilyName = State(initialValue: familyName)
     }
@@ -126,15 +160,30 @@ struct AccountSidebarView: View {
                         // ABOUT YOU
                         AccountSection("About you") {
                             HStack(spacing: 12) {
-                                Circle()
-                                    .fill(Color.white.opacity(0.18))
+                                Button {
+                                    showAvatarOptions = true
+                                } label: {
+                                    ZStack {
+                                        ProfileAvatarView(
+                                            imageURL: avatarURL,
+                                            initials: userInitials,
+                                            diameter: 48,
+                                            backgroundColor: Color.white.opacity(0.18),
+                                            foregroundColor: .white
+                                        )
+                                        if isUploadingAvatar {
+                                            Circle()
+                                                .fill(Color.black.opacity(0.4))
+                                                .frame(width: 48, height: 48)
+                                            ProgressView()
+                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        }
+                                    }
                                     .frame(width: 48, height: 48)
-                                    .overlay(
-                                        Text(userInitials)
-                                            .font(.system(size: 20, weight: .bold))
-                                            .foregroundColor(.white)
-                                    )
-                                
+                                    .disabled(isUploadingAvatar)
+                                }
+                                .buttonStyle(.plain)
+
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(localUserName)
                                         .font(.system(size: 15, weight: .semibold))
@@ -147,7 +196,11 @@ struct AccountSidebarView: View {
                                 
                                 Spacer()
                             }
-                            
+                            if let avatarErrorMessage {
+                                Text(avatarErrorMessage)
+                                    .font(.footnote)
+                                    .foregroundColor(.red.opacity(0.9))
+                            }
                             Button {
                                 draftName = localUserName
                                 draftEmail = userEmail
@@ -232,7 +285,7 @@ struct AccountSidebarView: View {
                                                 }
                                                 
                                                 do {
-                                                    try await onSaveProfile(trimmed)
+                                                    try await saveProfileWithTimeout(trimmed)
                                                     await MainActor.run {
                                                         localUserName = trimmed
                                                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -650,8 +703,101 @@ struct AccountSidebarView: View {
         .sheet(item: $activeDevice) { device in
             deviceDetailSheet(for: device)
         }
+        .confirmationDialog("Profile picture", isPresented: $showAvatarOptions, titleVisibility: .visible) {
+            Button("Change profile picture") {
+                selectedPhotoItem = nil
+                isPhotoPickerPresented = true
+            }
+            if avatarURL != nil {
+                Button("Remove photo", role: .destructive) {
+                    Task { await removeAvatar() }
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Choose an option for your profile picture.")
+        }
+        .photosPicker(isPresented: $isPhotoPickerPresented, selection: $selectedPhotoItem, matching: .images, photoLibrary: .shared())
+        .sheet(item: $imageForCrop) { item in
+            AvatarCropView(image: item.image, onCancel: {
+                imageForCrop = nil
+            }, onSave: { data in
+                imageForCrop = nil
+                Task { await uploadAndSaveAvatar(data: data) }
+            })
+        }
+        .onChange(of: selectedPhotoItem) { _, newItem in
+            Task {
+                guard let item = newItem else { return }
+                do {
+                    if let data = try await item.loadTransferable(type: Data.self), let img = UIImage(data: data) {
+                        await MainActor.run {
+                            isPhotoPickerPresented = false
+                            imageForCrop = ImageForCrop(image: img)
+                        }
+                    }
+                } catch {
+                    await MainActor.run {
+                        avatarErrorMessage = "We couldn't use that photo. Please try a different one."
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func removeAvatar() async {
+        isUploadingAvatar = true
+        avatarErrorMessage = nil
+        defer { isUploadingAvatar = false }
+        do {
+            try await dataManager.updateAvatarURL(nil)
+            await MainActor.run {
+                onAvatarURLUpdated?(nil)
+            }
+        } catch {
+            await MainActor.run {
+                avatarErrorMessage = "Couldn't remove your picture. Please try again."
+            }
+        }
+    }
+
+    @MainActor
+    private func uploadAndSaveAvatar(data: Data) async {
+        isUploadingAvatar = true
+        avatarErrorMessage = nil
+        defer { isUploadingAvatar = false }
+        do {
+            let urlString = try await dataManager.uploadAvatarImage(data: data, mimeType: "image/jpeg")
+            try await dataManager.updateAvatarURL(urlString)
+            await MainActor.run {
+                onAvatarURLUpdated?(urlString)
+            }
+        } catch {
+            await MainActor.run {
+                avatarErrorMessage = "Couldn't upload your picture. Check your connection and try again."
+            }
+        }
     }
     
+    private func saveProfileWithTimeout(_ name: String) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await onSaveProfile(name)
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: 10_000_000_000)
+                throw ProfileSaveError.timeout
+            }
+            
+            guard let firstResult = try await group.next() else {
+                throw ProfileSaveError.timeout
+            }
+            group.cancelAll()
+            return firstResult
+        }
+    }
+
     private func deviceDetailSheet(for device: ConnectedDevice) -> some View {
         NavigationStack {
             VStack(spacing: 16) {
@@ -788,7 +934,10 @@ struct ConnectedDevice: Identifiable {
 // MARK: - Notifications UI
 
 struct NotificationPanel: View {
-    var onClose: () -> Void
+    let notifications: [BellNotification]
+    let onClose: () -> Void
+    let onTap: (BellNotification) -> Void
+    let onDismissNotification: (BellNotification) -> Void
     
     var body: some View {
         VStack(spacing: 0) {
@@ -811,24 +960,24 @@ struct NotificationPanel: View {
             
             ScrollView {
                 VStack(spacing: 0) {
-                    NotificationRow(
-                        title: "Mom's Apple Watch needs charging (10% battery)",
-                        subtitle: "30 min ago"
-                    )
-                    
-                    Divider()
-                    
-                    NotificationRow(
-                        title: "New lab results available",
-                        subtitle: "Tap to review"
-                    )
-                    
-                    Divider()
-                    
-                    NotificationRow(
-                        title: "Medication reminder",
-                        subtitle: "8:00 PM daily"
-                    )
+                    if notifications.isEmpty {
+                        Text("No personal notifications yet.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                            .padding(.vertical, 8)
+                    } else {
+                        ForEach(notifications) { notification in
+                            BellNotificationRowView(
+                                notification: notification,
+                                onTap: { onTap(notification) },
+                                onDismiss: { onDismissNotification(notification) }
+                            )
+                            
+                            if notification.id != notifications.last?.id {
+                                Divider()
+                            }
+                        }
+                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -846,35 +995,60 @@ struct NotificationPanel: View {
     }
 }
 
-struct NotificationRow: View {
-    let title: String
-    let subtitle: String
+private struct BellNotificationRowView: View {
+    let notification: BellNotification
+    let onTap: () -> Void
+    let onDismiss: () -> Void
+    
+    private var iconName: String {
+        switch notification.kind {
+        case .personalTrend(let pillar, _, _), .patternAlert(let pillar, _, _, _):
+            switch pillar {
+            case .sleep: return "moon.stars.fill"
+            case .movement: return "figure.walk"
+            case .stress: return "heart.text.square"
+            }
+        case .challengeInvite:
+            return "flag.checkered"
+        case .challengeDaily:
+            return "chart.bar.xaxis"
+        case .challengeCompleted:
+            return "checkmark.seal.fill"
+        }
+    }
     
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "bell.badge.fill")
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, .orange)
+            Image(systemName: iconName)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundColor(.orange)
                 .padding(6)
-                .background(Circle().fill(Color.orange.opacity(0.85)))
+                .background(Circle().fill(Color.orange.opacity(0.12)))
             
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                Text(notification.title)
                     .font(.subheadline)
                     .fontWeight(.semibold)
-                Text(subtitle)
+                    .foregroundColor(.primary)
+                Text(notification.subtitle)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
+            
             Spacer()
-            Image(systemName: "chevron.right")
-                .font(.footnote)
-                .foregroundStyle(.tertiary)
+            
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(.secondary)
+                    .padding(6)
+            }
+            .buttonStyle(.plain)
         }
         .padding(.vertical, 10)
         .contentShape(Rectangle())
         .onTapGesture {
-            // Handle notification tap
+            onTap()
         }
     }
 }

@@ -64,7 +64,10 @@ struct FamilyMemberProfileView: View {
     
     // Animation
     @State private var animateProgress: Bool = false
-    
+
+    // Member avatar (loaded from user_profiles.avatar_url)
+    @State private var memberAvatarURL: String? = nil
+
     var body: some View {
         ZStack {
             Color.miyaCreamBg.ignoresSafeArea()
@@ -100,6 +103,14 @@ struct FamilyMemberProfileView: View {
                 .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
             }
         }
+        .task {
+            if memberAvatarURL == nil, !previewMock {
+                do {
+                    let url = try await dataManager.fetchAvatarURL(forUserId: memberUserId)
+                    await MainActor.run { memberAvatarURL = url }
+                } catch { }
+            }
+        }
         .navigationTitle("\(memberName)’s Health")
         .navigationBarTitleDisplayMode(.inline)
         .task {
@@ -112,20 +123,6 @@ struct FamilyMemberProfileView: View {
                     vitalityScore = 80
                     vitalityLabel = "Thriving"
                     vitalityTrendDelta = 3
-
-                    alerts = [
-                        PatternAlert(
-                            id: "preview-alert-1",
-                            metricType: "sleep_minutes",
-                            patternType: "drop_vs_baseline",
-                            currentLevel: 3,
-                            severity: "watch",
-                            summary: "Sleep changed -15% (current 360 vs baseline 420)",
-                            baselineValue: 420,
-                            recentValue: 360,
-                            deviationPercent: -0.15
-                        )
-                    ]
 
                     sleepData = ProfilePillarData(
                         value: "7.2 hours",
@@ -157,89 +154,6 @@ struct FamilyMemberProfileView: View {
 
             await self.fetchMemberData()
         }
-        .sheet(isPresented: $showAlertsSheet) {
-            // Alerts drawer: list first, then detail when one is selected
-            NavigationStack {
-                if let alert = selectedAlert {
-                    AlertInsightDetailView(
-                        alert: alert,
-                        memberName: memberName,
-                        aiInsightHeadline: aiInsightHeadline,
-                        aiInsightClinicalInterpretation: aiInsightClinicalInterpretation,
-                        aiInsightPossibleCauses: aiInsightPossibleCauses,
-                        aiInsightActionSteps: aiInsightActionSteps,
-                        isLoadingAIInsight: isLoadingAIInsight,
-                        aiInsightError: aiInsightError,
-                        whyThisIsAnAlertText: whyThisIsAnAlert(alert: alert, memberName: memberName)
-                    )
-                    .padding()
-                    .navigationTitle("Health Alert")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button("Back") {
-                                selectedAlert = nil
-                            }
-                        }
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("Close") {
-                                selectedAlert = nil
-                                showAlertsSheet = false
-                            }
-                        }
-                    }
-                    .task(id: alert.id) {
-                        await self.fetchAIInsight(alertStateId: alert.id)
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Health alerts")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-
-                        if alerts.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("No active health alerts")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(.miyaSageDark)
-
-                                Text("All metrics within normal range")
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.miyaTextSecondary)
-                            }
-                            .padding(16)
-                            .background(Color.miyaCardWhite)
-                            .cornerRadius(12)
-                            .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
-                        } else {
-                            ScrollView {
-                                VStack(spacing: 12) {
-                                    ForEach(alerts) { alert in
-                                        AlertCardView(alert: alert) {
-                                            selectedAlert = alert
-                                        }
-                                    }
-                                }
-                                .padding(.vertical, 4)
-                            }
-                        }
-
-                        Spacer(minLength: 0)
-                    }
-                    .padding(16)
-                    .navigationTitle("Alerts")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("Close") {
-                                showAlertsSheet = false
-                            }
-                        }
-                    }
-                }
-            }
-            .presentationDetents([.medium, .large])
-        }
         .sheet(item: $selectedPillarForDive) { pillar in
             PillarDiveDeeperSheet(
                 memberUserId: memberUserId,
@@ -260,19 +174,19 @@ private extension FamilyMemberProfileView {
 
     var headerSection: some View {
         HStack(spacing: 12) {
-            Circle()
-                .fill(Color.miyaCardWhite)
-                .frame(width: 58, height: 58)
-                .overlay(
-                    Circle()
-                        .stroke(Color.miyaSageLight, lineWidth: 2)
-                )
-                .overlay(
-                    Text(self.initials(from: memberName))
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundColor(.miyaTextPrimary)
-                )
-                .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
+            ProfileAvatarView(
+                imageURL: memberAvatarURL,
+                initials: self.initials(from: memberName),
+                diameter: 58,
+                backgroundColor: Color.miyaCardWhite,
+                foregroundColor: .miyaTextPrimary,
+                font: .system(size: 20, weight: .semibold),
+                showsBorder: true,
+                borderColor: Color.miyaSageLight,
+                borderWidth: 2
+            )
+            .frame(width: 58, height: 58)
+            .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(memberName)
@@ -284,32 +198,6 @@ private extension FamilyMemberProfileView {
             }
 
             Spacer()
-
-            if !alerts.isEmpty {
-                Button {
-                    selectedAlert = nil
-                    showAlertsSheet = true
-                } label: {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(.yellow)
-
-                        Text("\(min(alerts.count, 9))")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.yellow)
-                            .clipShape(Capsule())
-                            .offset(x: 8, y: -8)
-                    }
-                    .padding(6)
-                    .background(Circle().fill(Color.miyaCardWhite))
-                    .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
-                }
-                .buttonStyle(.plain)
-            }
         }
     }
 
@@ -452,12 +340,10 @@ private extension FamilyMemberProfileView {
         }
         
         async let vitalityTask = fetchVitality()
-        async let alertsTask = fetchAlerts()
         async let metricsTask = fetchDailyMetrics()
         async let lastMetricTask = fetchLastMetricDate()
         
         let vitality = await vitalityTask
-        let alertsResult = await alertsTask
         let metrics = await metricsTask
         let lastDate = await lastMetricTask
         
@@ -466,7 +352,6 @@ private extension FamilyMemberProfileView {
             vitalityLabel = vitality.label
             vitalityTrendDelta = vitality.trendDelta
             vitalityHasMinimumData = vitality.hasMinimumData
-            alerts = alertsResult
             sleepData = metrics.sleep
             movementData = metrics.movement
             stressData = metrics.stress
@@ -585,17 +470,36 @@ private extension FamilyMemberProfileView {
                 .value
             
             let sorted = rows.compactMap { $0 }.prefix(21)
-            let recent = Array(sorted.prefix(7))
-            let baseline = Array(sorted.dropFirst(7))
+            // Merge by day (max per metric per day) to align with Rook pattern engine behavior
+            var byDay: [String: (steps: Int?, sleep_minutes: Int?, hrv_ms: Double?)] = [:]
+            for row in sorted {
+                guard let date = row.metric_date else { continue }
+                let existing = byDay[date]
+                func maxInt(_ a: Int?, _ b: Int?) -> Int? {
+                    guard let a = a else { return b }; guard let b = b else { return a }; return max(a, b)
+                }
+                func maxDouble(_ a: Double?, _ b: Double?) -> Double? {
+                    guard let a = a else { return b }; guard let b = b else { return a }; return max(a, b)
+                }
+                byDay[date] = (
+                    steps: maxInt(existing?.steps, row.steps),
+                    sleep_minutes: maxInt(existing?.sleep_minutes, row.sleep_minutes),
+                    hrv_ms: maxDouble(existing?.hrv_ms, row.hrv_ms)
+                )
+            }
+            let mergedRows = byDay.keys.sorted(by: >).compactMap { date -> (metric_date: String, steps: Int?, sleep_minutes: Int?, hrv_ms: Double?)? in
+                guard let t = byDay[date] else { return nil }
+                return (metric_date: date, steps: t.steps, sleep_minutes: t.sleep_minutes, hrv_ms: t.hrv_ms)
+            }
+            let recent = Array(mergedRows.prefix(7))
+            let baseline = Array(mergedRows.dropFirst(7).prefix(14))
             
             // Distinct days with any metrics in the last 7 entries
-            let recentDaysWithMetrics = Set(
-                recent.compactMap { $0.metric_date }
-            ).count
+            let recentDaysWithMetrics = Set(recent.map(\.metric_date)).count
             
             let sleep = computePillar(
-                recentValues: recent.compactMap { $0.sleep_minutes }.map(Double.init),
-                baselineValues: baseline.compactMap { $0.sleep_minutes }.map(Double.init),
+                recentValues: recent.compactMap(\.sleep_minutes).map(Double.init),
+                baselineValues: baseline.compactMap(\.sleep_minutes).map(Double.init),
                 valueFormatter: { minutes in
                     let hours = minutes / 60.0
                     return String(format: "%.1f hours", hours)
@@ -604,15 +508,15 @@ private extension FamilyMemberProfileView {
             )
             
             let movement = computePillar(
-                recentValues: recent.compactMap { $0.steps }.map(Double.init),
-                baselineValues: baseline.compactMap { $0.steps }.map(Double.init),
+                recentValues: recent.compactMap(\.steps).map(Double.init),
+                baselineValues: baseline.compactMap(\.steps).map(Double.init),
                 valueFormatter: { steps in "\(Int(steps)) steps" },
                 contextLabel: "Movement"
             )
             
             let stress = computePillar(
-                recentValues: recent.compactMap { $0.hrv_ms },
-                baselineValues: baseline.compactMap { $0.hrv_ms },
+                recentValues: recent.compactMap(\.hrv_ms),
+                baselineValues: baseline.compactMap(\.hrv_ms),
                 valueFormatter: { hrv in "\(Int(hrv.rounded())) ms HRV" },
                 contextLabel: "Recovery"
             )
@@ -743,6 +647,13 @@ private func displayNameForMetricType(_ metricType: String) -> String {
 }
 
 private extension FamilyMemberProfileView {
+    // MARK: - Profile pillar thresholds (keep in sync with supabase/functions/rook/patterns/thresholds.v1.json)
+    private static let movementDropThresholdPercent = 0.25   // steps: percent_drop_at_least 0.25
+    private static let sleepDropThresholdPercent = 0.10      // sleep_minutes: percent_drop_at_least 0.1
+    private static let sleepDropThresholdMinutes = 45.0      // sleep_minutes: absolute_drop_at_least 45
+    private static let recoveryDropThresholdPercent = 0.15  // hrv_ms: percent_drop_at_least 0.15
+    private static let aboveBaselineImprovementPercent = 5   // Above baseline when improvement >= 5%
+
     func labelForScore(_ score: Int) -> String {
         switch score {
         case 80...100: return "Thriving"
@@ -782,14 +693,22 @@ private extension FamilyMemberProfileView {
         } else {
             changePercent = 0
         }
-        
+
+        // Label from notification thresholds (see ProfilePillarThresholds above)
+        let dropRatio = baselineAvg.flatMap { base in base > 0 ? (base - recentAvg) / base : nil } ?? 0
         let status: PillarStatus
-        if changePercent > 5 {
-            status = .above
-        } else if changePercent < -5 {
-            status = .below
-        } else {
-            status = .stable
+        switch contextLabel {
+        case "Movement":
+            status = dropRatio >= Self.movementDropThresholdPercent ? .below : (changePercent >= Self.aboveBaselineImprovementPercent ? .above : .stable)
+        case "Sleep":
+            let absoluteDropMinutes = baselineAvg.map { $0 - recentAvg } ?? 0
+            let belowByPercent = dropRatio >= Self.sleepDropThresholdPercent
+            let belowByAbsolute = absoluteDropMinutes >= Self.sleepDropThresholdMinutes
+            status = (belowByPercent || belowByAbsolute) ? .below : (changePercent >= Self.aboveBaselineImprovementPercent ? .above : .stable)
+        case "Recovery":
+            status = dropRatio >= Self.recoveryDropThresholdPercent ? .below : (changePercent >= Self.aboveBaselineImprovementPercent ? .above : .stable)
+        default:
+            status = changePercent >= Self.aboveBaselineImprovementPercent ? .above : (changePercent <= -Self.aboveBaselineImprovementPercent ? .below : .stable)
         }
         
         let arrow = changePercent > 0 ? "↑" : (changePercent < 0 ? "↓" : "→")
