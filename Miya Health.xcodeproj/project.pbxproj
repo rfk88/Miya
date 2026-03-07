@@ -21,6 +21,7 @@
 
 /* Begin PBXFileReference section */
 		366E9A332ED07BE4001C6CA1 /* Miya Health.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Miya Health.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		366E9A412ED07BE5001C6CA2 /* Miya Health/Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Miya Health/Secrets.xcconfig"; sourceTree = SOURCE_ROOT; };
 		A1B2C3D4E5F60123456789A1 /* Rook Samples/ROOKConnect-Apple Health-dataset-v2.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "Rook Samples/ROOKConnect-Apple Health-dataset-v2.json"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60123456789A3 /* Rook Samples/ROOKConnect-Whoop-dataset-v2.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "Rook Samples/ROOKConnect-Whoop-dataset-v2.json"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -74,6 +75,7 @@
 			children = (
 				A1B2C3D4E5F60123456789A1 /* Rook Samples/ROOKConnect-Apple Health-dataset-v2.json */,
 				A1B2C3D4E5F60123456789A3 /* Rook Samples/ROOKConnect-Whoop-dataset-v2.json */,
+				366E9A412ED07BE5001C6CA2 /* Miya Health/Secrets.xcconfig */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -297,6 +299,7 @@
 		};
 		366E9A3F2ED07BE5001C6CA1 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 366E9A412ED07BE5001C6CA2 /* Miya Health/Secrets.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -304,15 +307,14 @@
 				CODE_SIGN_ENTITLEMENTS = "Miya Health/Miya Health.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = DG8R472FC7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Miya Health";
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Miya uses your Apple Health data (sleep, steps, heart rate and related metrics) to calculate your personal and family vitality scores, and to give you tailored guidance.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Miya may write certain health data (for example, workouts or mindfulness sessions you complete in the app) so your Apple Health history stays in one place.";
-				INFOPLIST_KEY_SupabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhtZmdkZXlycHpwcXB0Y2ttY2JyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxNjA4NjMsImV4cCI6MjA3OTczNjg2M30.zL4PS7grZF3BJUcdgGmJMa_2KTsl-1fCMbaCyhUqSIA";
-				INFOPLIST_KEY_SupabaseURL = "https://xmfgdeyrpzpqptckmcbr.supabase.co";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -323,7 +325,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 27;
+				MARKETING_VERSION = 37;
 				PRODUCT_BUNDLE_IDENTIFIER = "Miya-Health.com.Miya-Health";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -343,6 +345,7 @@
 		};
 		366E9A402ED07BE5001C6CA1 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 366E9A412ED07BE5001C6CA2 /* Miya Health/Secrets.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -350,17 +353,16 @@
 				CODE_SIGN_ENTITLEMENTS = "Miya Health/Miya Health.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = DG8R472FC7;
 				ENABLE_BITCODE = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Miya Health";
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Miya uses your Apple Health data (sleep, steps, heart rate and related metrics) to calculate your personal and family vitality scores, and to give you tailored guidance.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Miya may write certain health data (for example, workouts or mindfulness sessions you complete in the app) so your Apple Health history stays in one place.";
-				INFOPLIST_KEY_SupabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhtZmdkZXlycHpwcXB0Y2ttY2JyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxNjA4NjMsImV4cCI6MjA3OTczNjg2M30.zL4PS7grZF3BJUcdgGmJMa_2KTsl-1fCMbaCyhUqSIA";
-				INFOPLIST_KEY_SupabaseURL = "https://xmfgdeyrpzpqptckmcbr.supabase.co";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -371,7 +373,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 27;
+				MARKETING_VERSION = 37;
 				PRODUCT_BUNDLE_IDENTIFIER = "Miya-Health.com.Miya-Health";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";

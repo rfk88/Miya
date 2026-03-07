@@ -13,14 +13,10 @@ final class RookService {
     }
 
     private func configure() {
-        // TODO: move creds to secure config before production
-        let clientUUID = "64ab5fac-5196-4b33-bddf-d8ec50f9a63d"
-        let secretKey  = "u5k0G2ZDBde69rBqAsSmvsLHrUZOUGvUjXxf"
-
         RookConnectConfigurationManager.shared.setEnvironment(.sandbox)
         RookConnectConfigurationManager.shared.setConfiguration(
-            clientUUID: clientUUID,
-            secretKey: secretKey,
+            clientUUID: RookConfig.clientUUID,
+            secretKey: RookConfig.secretKey,
             enableBackgroundSync: true,
             enableEventsBackgroundSync: true
         )
@@ -132,22 +128,26 @@ final class RookService {
             
             let dayStartTime = Date()
             
-            // Wait for this day to complete before starting next
-            await withCheckedContinuation { continuation in
+            // Wait for this day to complete before starting next (BUG-017: pass result out, update counters on task executor only)
+            let dayResult = await withCheckedContinuation { continuation in
                 summaryManager.sync(date, summaryType: summaryTypes) { result in
                     let dayDuration = Date().timeIntervalSince(dayStartTime)
                     switch result {
                     case .success(let ok):
-                        successCount += 1
                         print("✅ RookService: Day \(offsetDaysAgo) (\(dateString)) synced successfully (ok=\(ok), duration=\(String(format: "%.2f", dayDuration))s)")
                     case .failure(let error):
-                        failureCount += 1
                         print("❌ RookService: Day \(offsetDaysAgo) (\(dateString)) failed: \(error.localizedDescription) (duration=\(String(format: "%.2f", dayDuration))s)")
                     }
-                    continuation.resume()
+                    continuation.resume(returning: result)
                 }
             }
-            
+            switch dayResult {
+            case .success:
+                successCount += 1
+            case .failure:
+                failureCount += 1
+            }
+
             // Small delay between days to avoid hammering HealthKit
             // 500ms = 0.5 seconds, so 29 days takes ~14.5 seconds total
             try? await Task.sleep(nanoseconds: 500_000_000)

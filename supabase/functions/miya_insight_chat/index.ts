@@ -149,14 +149,54 @@ Deno.serve(async (req) => {
     await supabaseAdmin.from("pattern_alert_ai_messages").insert({ thread_id: threadId, role: "user", content: message });
 
     // Load cached insight evidence (best grounding)
-    const { data: cached, error: cachedErr } = await supabaseAdmin
+    let { data: cached, error: cachedErr } = await supabaseAdmin
       .from("pattern_alert_ai_insights")
       .select("headline,summary,clinical_interpretation,data_connections,evidence")
       .eq("alert_state_id", alertStateId)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (cachedErr || !cached) return jsonResponse({ ok: false, error: "Insight not generated yet" }, 409);
+
+    // On cache miss: trigger insight generation then re-query (BUG-016: reduce 409s)
+    if (cachedErr || !cached) {
+      console.log("miya_insight_chat: cache miss, triggering insight generation", { alertStateId });
+      const insightUrl = `${supabaseUrl}/functions/v1/miya_insight`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 28_000); // 28s timeout
+      try {
+        const insightRes = await fetch(insightUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${serviceKey}`,
+            "x-miya-internal": "prewarm",
+          },
+          body: JSON.stringify({ alert_state_id: alertStateId }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (insightRes.ok) {
+          await new Promise((r) => setTimeout(r, 500)); // allow cache write to be visible
+          const { data: reCached, error: reErr } = await supabaseAdmin
+            .from("pattern_alert_ai_insights")
+            .select("headline,summary,clinical_interpretation,data_connections,evidence")
+            .eq("alert_state_id", alertStateId)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (!reErr && reCached) {
+            cached = reCached;
+            cachedErr = null;
+          }
+        }
+      } catch (e) {
+        clearTimeout(timeoutId);
+        console.warn("miya_insight_chat: insight generation on cache miss failed", { error: String(e) });
+      }
+      if (cachedErr || !cached) {
+        return jsonResponse({ ok: false, error: "Insight not generated yet" }, 409);
+      }
+    }
 
     // Load conversation history
     const { data: msgs } = await supabaseAdmin
@@ -528,15 +568,8 @@ ${JSON.stringify(healthInsight, null, 2)}${healthProfileText}
 
 Only reference data from above. If asked about something not listed, say you don't have that data.`;
 
-    // Use client-provided history if available (includes full conversation state)
-    // Otherwise fall back to database messages
-    const chatMessages: Array<{ role: "user" | "assistant"; content: string }> = 
-      clientHistory.length > 0 
-        ? clientHistory.map((m: any) => ({ 
-            role: m.role === "assistant" ? "assistant" : "user", 
-            content: m.text 
-          }))
-        : (msgs ?? []).map((m: any) => ({ role: m.role, content: m.content }));
+    // BUG-021: Use only DB-loaded messages for GPT context; never trust client-provided history (prevents injection of fake prior messages).
+    const chatMessages: Array<{ role: "user" | "assistant"; content: string }> = (msgs ?? []).map((m: any) => ({ role: m.role, content: m.content }));
 
     const openaiKey = requireEnv("OPENAI_API_KEY");
     const model = Deno.env.get("OPENAI_MODEL_CHAT") ?? "gpt-4o"; // Use best conversational model

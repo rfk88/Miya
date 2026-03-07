@@ -1,10 +1,11 @@
 import SwiftUI
 
-// AUDIT REPORT (legacy mock invite entry)
-// - Compile audit: Cannot run `xcodebuild` in this environment (no Xcode). Verified compile-safety via lints/type checks in Cursor.
-// - State integrity: This view is NOT the production invite flow (production uses `EnterCodeView` in `ContentView.swift`).
-//   Updated to avoid inferring guided state from booleans; it now routes based on `InviteInfo.guidedSetupStatus` when present.
-// - Known limitations: Uses mock `InviteInfo.mockFrom(code:)` (no DB), so status is only as accurate as the mock.
+// AUDIT REPORT (legacy mock invite entry — NOT production)
+// - This view is NOT the production invite flow. Production uses `EnterCodeView` in `ContentView.swift`.
+//   Do not present InviteCodeEntryView as the main way to enter an invite code; users would get mock
+//   data and empty accept/fill-myself callbacks, so no real guided_setup_status transitions would occur.
+// - State: Routes by `InviteInfo.guidedSetupStatus` when present; uses mock `InviteInfo.mockFrom(code:)` (no DB).
+// - Full guided flow (production): docs/ONBOARDING_GUIDED_SETUP_FLOW.md.
 
 // Simple stage enum for this screen
 private enum InviteFlowStage {

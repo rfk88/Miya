@@ -98,12 +98,15 @@ struct DashboardView: View {
     // Family badges (Daily computed; Weekly persisted)
     @State internal var dailyBadgeWinners: [BadgeEngine.Winner] = []
     @State internal var weeklyBadgeWinners: [BadgeEngine.Winner] = []
+    @State internal var isComputingBadges: Bool = false
 
     // Bell (personal + challenge) notifications
     @State internal var bellNotifications: [BellNotification] = []
     @State internal var weeklyBadgeWeekStart: String? = nil
     @State internal var weeklyBadgeWeekEnd: String? = nil
     @State internal var selectedBadge: BadgeEngine.Winner? = nil
+    /// When non-nil, weekly Champions save failed; show banner with message and Try again (BUG-024).
+    @State internal var badgeSaveError: String? = nil
     
     // Superadmin-only: present Invite Member flow from sidebar reliably (single source of truth at Dashboard root)
     @State internal var isInviteMemberSheetPresented: Bool = false
@@ -829,6 +832,7 @@ struct DashboardView: View {
                         Task { await presentArloChat() }
                     })
                     dataGuidanceBannerSection
+                    badgeSaveErrorBanner
                     badgesSection
                     personalVitalitySection
                     Spacer(minLength: DashboardDesign.sectionSpacing)
@@ -859,6 +863,39 @@ struct DashboardView: View {
                     Button("Dismiss") {
                         withAnimation {
                             dataBackfillStatus = nil
+                        }
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.blue)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(Color.yellow.opacity(0.15))
+                .cornerRadius(8)
+                .padding(.horizontal, DashboardDesign.cardPadding)
+                .padding(.top, 8)
+            }
+        }
+        
+        @ViewBuilder
+        internal var badgeSaveErrorBanner: some View {
+            if let message = badgeSaveError {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                        .font(.system(size: 14))
+                    Text("Champions couldn't be saved. \(message)")
+                        .font(.system(size: 13))
+                        .foregroundColor(.miyaTextPrimary)
+                    Spacer()
+                    Button("Try again") {
+                        Task { await computeFamilyBadgesIfNeeded() }
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.blue)
+                    Button("Dismiss") {
+                        withAnimation {
+                            badgeSaveError = nil
                         }
                     }
                     .font(.system(size: 12, weight: .medium))

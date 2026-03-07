@@ -1,7 +1,7 @@
 # WhatsApp & SMS Deep Link Integration
 
 ## Overview
-Implemented direct deep links to open WhatsApp and Messages apps with pre-filled text, eliminating the need for users to manually copy/paste messages.
+Implemented direct deep links to open WhatsApp and Messages apps with pre-filled text, eliminating the need for users to manually copy/paste messages. The Reach Out UI offers three channels: WhatsApp, iMessage, and SMS (all use the same deep-link behaviour; SMS and iMessage both open the Messages app via `sms:&body=`).
 
 ## What Changed
 

@@ -162,8 +162,9 @@ class VitalityCalculator {
         
         let total = min(sleep + movement + stress, 100)
         
+        guard let lastDay = last7.last else { return nil }
         return VitalityScore(
-            date: last7.last!.date,
+            date: lastDay.date,
             totalScore: total,
             sleepPoints: sleep,
             movementPoints: movement,
@@ -211,9 +212,11 @@ class VitalityCalculator {
         return results
     }
     
-    /// Compute rolling vitality scores (default 7-day window) for all dates
-    /// Returns one score per day once the window is available (sorted by date ascending)
+    /// Compute rolling vitality scores (default 7-day window) for all dates.
+    /// Returns one score per day once the window is available (sorted by date ascending).
+    /// Requires `window >= 1`; otherwise returns an empty array.
     static func computeRollingScores(from data: [VitalityData], window: Int = 7) -> [VitalityScore] {
+        guard window >= 1 else { return [] }
         guard data.count >= window else { return [] }
         
         let sorted = data.sorted { $0.date < $1.date }
@@ -250,8 +253,9 @@ class VitalityCalculator {
             
             let total = min(sleep + movement + stress, 100)
             
+            guard let lastDay = slice.last else { continue }
             let score = VitalityScore(
-                date: slice.last!.date,
+                date: lastDay.date,
                 totalScore: total,
                 sleepPoints: sleep,
                 movementPoints: movement,

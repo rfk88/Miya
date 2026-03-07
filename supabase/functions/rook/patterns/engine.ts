@@ -1,3 +1,4 @@
+import { mergeRowsByDay } from "../shared/merge.ts";
 import type { AlertLevel, MetricType, PatternType, ThresholdConfig } from "./types.ts";
 import { evaluateMetricOnDate } from "./evaluate.ts";
 import { levelForConsecutiveTrueDays, severityForLevel, shouldEnqueueNotification } from "./episode.ts";
@@ -13,6 +14,15 @@ type DailyRow = {
   movement_minutes: number | null;          // NEW
   deep_sleep_minutes: number | null;        // NEW
 };
+
+/** Metrics that can be affected by exercise; alerts for these are suppressed on workout days. Add any new stress/recovery metrics (e.g. breathing rate) here. */
+const RECOVERY_METRICS_ON_WORKOUT_DAY: ReadonlySet<MetricType> = new Set([
+  "hrv_ms",
+  "resting_hr",
+  "sleep_efficiency_pct",
+  "deep_sleep_minutes",
+  "sleep_minutes",
+]);
 
 function parseISODateYYYYMMDDToUTCDate(dayKey: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return null;
@@ -34,15 +44,6 @@ function addDaysUTC(dayKey: string, deltaDays: number): string | null {
 function clampEndDateToToday(dayKey: string): string {
   const today = toYYYYMMDD(new Date());
   return dayKey > today ? today : dayKey;
-}
-
-function mergeMax(a: number | null | undefined, b: number | null | undefined): number | null {
-  const aa = a == null ? null : Number(a);
-  const bb = b == null ? null : Number(b);
-  if (aa == null && bb == null) return null;
-  if (aa == null) return bb;
-  if (bb == null) return aa;
-  return Math.max(aa, bb);
 }
 
 function loadThresholds(): ThresholdConfig {
@@ -68,6 +69,7 @@ async function prewarmInsightCache(supabase: any, alertStateId: string): Promise
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${serviceKey}`,
+        "x-miya-internal": "prewarm",
       },
       body: JSON.stringify({ alert_state_id: alertStateId }),
     });
@@ -113,6 +115,12 @@ function buildMetricSeries(metric: MetricType, mergedByDay: Map<string, DailyRow
   return out;
 }
 
+// Merge by day with mergeMax; do not use raw rows per day for pattern alerts.
+const PATTERNS_NUMERIC_FIELDS = [
+  "steps", "sleep_minutes", "hrv_ms", "resting_hr", "sleep_efficiency_pct",
+  "movement_minutes", "deep_sleep_minutes",
+] as const;
+
 async function fetchMergedDailyMetrics(supabase: any, userId: string, startDate: string, endDate: string): Promise<Map<string, DailyRow>> {
   const { data: rows, error } = await supabase
     .from("wearable_daily_metrics")
@@ -124,22 +132,7 @@ async function fetchMergedDailyMetrics(supabase: any, userId: string, startDate:
 
   if (error) throw new Error(`wearable_daily_metrics fetch failed: ${error.message}`);
 
-  const mergedByDay = new Map<string, DailyRow>();
-  for (const r0 of (rows ?? []) as any[]) {
-    const dayKey = String(r0.metric_date);
-    const prev = mergedByDay.get(dayKey);
-    mergedByDay.set(dayKey, {
-      metric_date: dayKey,
-      steps: mergeMax(prev?.steps, r0.steps),
-      sleep_minutes: mergeMax(prev?.sleep_minutes, r0.sleep_minutes),
-      hrv_ms: mergeMax(prev?.hrv_ms, r0.hrv_ms),
-      resting_hr: mergeMax(prev?.resting_hr, r0.resting_hr),
-      sleep_efficiency_pct: mergeMax(prev?.sleep_efficiency_pct, r0.sleep_efficiency_pct),  // NEW
-      movement_minutes: mergeMax(prev?.movement_minutes, r0.movement_minutes),              // NEW
-      deep_sleep_minutes: mergeMax(prev?.deep_sleep_minutes, r0.deep_sleep_minutes),        // NEW
-    });
-  }
-  return mergedByDay;
+  return mergeRowsByDay<DailyRow>((rows ?? []) as any[], [...PATTERNS_NUMERIC_FIELDS], "metric_date");
 }
 
 /**
@@ -346,18 +339,17 @@ export async function evaluatePatternsForUser(
 
     const { baseline, result } = evaluateMetricOnDate(metric, thresholds, series, endDate);
 
-    // EXERCISE CONTEXT: Skip recovery-related alerts on workout days
-    // Heart rate and HRV naturally change during exercise, which is healthy
-    // Do not flag "poor recovery" on days with workouts
-    const isRecoveryMetric = metric === "hrv_ms" || metric === "resting_hr";
+    // EXERCISE CONTEXT: Skip recovery-related alerts on workout days (BUG-022)
+    // HRV, resting HR, sleep quality, deep sleep, and sleep duration can be affected by exercise
+    const isRecoveryMetric = RECOVERY_METRICS_ON_WORKOUT_DAY.has(metric);
     const hasWorkoutOnEndDate = exerciseDates.has(endDate);
-    
+
     if (isRecoveryMetric && hasWorkoutOnEndDate && result.isTrue) {
-      console.log("🏃 MIYA_RECOVERY_ALERT_SKIPPED_WORKOUT_DAY", { 
-        userId, 
-        metric, 
-        endDate, 
-        message: "Recovery alert suppressed due to workout activity" 
+      console.log("🏃 MIYA_RECOVERY_ALERT_SKIPPED_WORKOUT_DAY", {
+        userId,
+        metric,
+        endDate,
+        message: "Recovery/stress alert suppressed due to workout activity",
       });
       // Still resolve any active episode that might be ending
       await resolveIfInactive({ supabase, userId, metric, patternType, endDate, thresholds, series });

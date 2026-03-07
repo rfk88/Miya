@@ -59,16 +59,18 @@ FACTS_JSON: \(factsJSON)
         }
 
         // 4) Payload (match edge function contract)
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "mode": "member_overview",
             "member_id": memberUserId,
             "member_name": memberName,
-            "intent": intent ?? NSNull(),
             "facts": factsObject,
             "messages": messages.map { ["role": $0.role, "content": $0.content] },
             // Optional, but useful for debugging / future parsing on server
             "openingLine": openingLine
         ]
+        if let i = intent {
+            payload["intent"] = i
+        }
 
         // 5) Get the CURRENT signed-in session from the shared client
         let client = SupabaseConfig.client

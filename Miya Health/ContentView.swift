@@ -6434,12 +6434,16 @@ struct LoginView: View {
                     }
                     
                     // About You data
-                    if let dobString = profile.date_of_birth {
+                    if let dobString = profile.date_of_birth, !dobString.isEmpty {
                         let formatter = DateFormatter()
                         formatter.dateFormat = "yyyy-MM-dd"
                         if let dob = formatter.date(from: dobString) {
                             onboardingManager.dateOfBirth = dob
+                        } else {
+                            onboardingManager.dateOfBirth = nil
                         }
+                    } else {
+                        onboardingManager.dateOfBirth = nil
                     }
                     if let gender = profile.gender {
                         onboardingManager.gender = gender

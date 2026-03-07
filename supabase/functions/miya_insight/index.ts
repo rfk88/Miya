@@ -13,6 +13,7 @@
 // - MIYA_AI_LOG_PAYLOADS (default: false)
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { mergeRowsByDay } from "../rook/shared/merge.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -43,6 +44,103 @@ function requireEnv(name: string): string {
   const v = Deno.env.get(name);
   if (!v) throw new Error(`Missing env var: ${name}`);
   return v;
+}
+
+/** UUID v4 format (8-4-4-4-12 hex). Used to validate alert_state_id before DB queries (BUG-027). */
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// BUG-038: Cache key derived from prompt + schema so changes auto-invalidate cache.
+const PROMPT_TEMPLATE_STATIC = [
+  "You are a family health advisor with clinical expertise analyzing wearable health data.",
+  "",
+  "PERSON: <<PERSON>>",
+  "PRIMARY ALERT: <<METRIC>> showing <<PATTERN>>",
+  "ALERT SEVERITY: Level <<LEVEL>> (<<DAYS>> consecutive days)",
+  "",
+  "Generate a health insight following this exact structure:",
+  "",
+  "## CLINICAL INTERPRETATION (2-3 sentences)",
+  "Use this template: \"<<CLINICAL_TEMPLATE>>\"",
+  "Adapt the numbers and wording based on the actual evidence data provided.",
+  "",
+  "## WHAT THE DATA SHOWS (2-3 sentences)",
+  "Analyze ALL supporting metrics in supporting_metrics array. Prioritize rich metrics that provide deeper context:",
+  "",
+  "For SLEEP alerts:",
+  "- Use deep_sleep_minutes, rem_sleep_minutes, light_sleep_minutes, sleep_efficiency_pct to understand sleep quality",
+  "- Example: 'Sleep duration decreased, but deep sleep increased from 1.2 to 1.5 hours, suggesting better sleep quality despite less total time.'",
+  "",
+  "For MOVEMENT/ACTIVITY alerts:",
+  "- Use movement_minutes (active time) and calories_active alongside steps to understand activity patterns",
+  "- Example: 'Steps decreased, but movement_minutes increased from 45 to 60 minutes, indicating longer but less frequent activity sessions.'",
+  "",
+  "For RECOVERY/STRESS alerts:",
+  "- Use hrv_rmssd_ms, resting_hr, breaths_avg_per_min, spo2_avg_pct to understand recovery signals",
+  "- Example: 'HRV decreased from 50ms to 42ms, while resting HR increased from 58 to 65 bpm, indicating elevated stress and reduced recovery.'",
+  "",
+  "General guidelines:",
+  "- Do supporting metrics support or contradict the primary alert?",
+  "- What pattern emerges across all metrics?",
+  "- ALWAYS use absolute values with units, NOT just percentages",
+  "- Convert sleep_minutes, deep_sleep_minutes, rem_sleep_minutes to hours (divide by 60)",
+  "- Reference specific supporting metrics by name when they provide meaningful context",
+  "",
+  "## POSSIBLE CAUSES (3-5 bullet points)",
+  "Based on primary metric <<METRIC>>, include these realistic explanations:",
+  "<<POSSIBLE_CAUSES>>",
+  "",
+  "## RECOMMENDED ACTIONS (4 numbered steps)",
+  "Urgency level: <<URGENCY>>",
+  "<<ACTION_STEPS>>",
+  "",
+  "## TONE GUIDELINES:",
+  "- Be concerned and caring but not alarmist",
+  "- Use 'may indicate' or 'often suggests' rather than 'definitely means'",
+  "- Speak family-to-family, not doctor-to-patient",
+  "- Match urgency to the alert level",
+  "- Empower action without creating anxiety",
+  "- Avoid medical jargon unless necessary",
+  "",
+  "You MUST ground all claims in the provided evidence JSON. Return valid JSON matching the provided schema only.",
+].join("\n");
+
+const INSIGHT_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    headline: { type: "string" },
+    clinical_interpretation: { type: "string" },
+    data_connections: { type: "string" },
+    possible_causes: { type: "array", items: { type: "string" } },
+    action_steps: { type: "array", items: { type: "string" } },
+    message_suggestions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: { label: { type: "string" }, text: { type: "string" } },
+        required: ["label", "text"],
+      },
+    },
+    confidence: { type: "string", enum: ["low", "medium", "high"] },
+    confidence_reason: { type: "string" },
+  },
+  required: ["headline", "clinical_interpretation", "data_connections", "possible_causes", "action_steps", "message_suggestions", "confidence", "confidence_reason"],
+} as const;
+
+const CACHE_CONTENT = PROMPT_TEMPLATE_STATIC + "\n" + JSON.stringify(INSIGHT_JSON_SCHEMA);
+
+let _promptVersionCache: string | null = null;
+
+async function getPromptVersion(): Promise<string> {
+  if (_promptVersionCache != null) return _promptVersionCache;
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(CACHE_CONTENT));
+  const hex = Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 8);
+  _promptVersionCache = "v-" + hex;
+  return _promptVersionCache;
 }
 
 function toYYYYMMDD(d: Date): string {
@@ -187,30 +285,6 @@ async function callOpenAI(args: {
   evidence: Record<string, unknown>;
 }): Promise<Omit<InsightResponse, "evidence">> {
   const { apiKey, model, evidence } = args;
-
-  const jsonSchema = {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      headline: { type: "string" },
-      clinical_interpretation: { type: "string" },
-      data_connections: { type: "string" },
-      possible_causes: { type: "array", items: { type: "string" } },
-      action_steps: { type: "array", items: { type: "string" } },
-      message_suggestions: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: { label: { type: "string" }, text: { type: "string" } },
-          required: ["label", "text"],
-        },
-      },
-      confidence: { type: "string", enum: ["low", "medium", "high"] },
-      confidence_reason: { type: "string" },
-    },
-    required: ["headline", "clinical_interpretation", "data_connections", "possible_causes", "action_steps", "message_suggestions", "confidence", "confidence_reason"],
-  } as const;
 
   // Extract data from new evidence structure
   const alert = (evidence.alert as any) || {};
@@ -551,7 +625,7 @@ async function callOpenAI(args: {
         type: "json_schema",
         json_schema: {
           name: "miya_pattern_insight",
-          schema: jsonSchema,
+          schema: INSIGHT_JSON_SCHEMA,
           strict: true,
         },
       },
@@ -598,35 +672,112 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: false, error: "Missing bearer token" }, 401);
     }
 
-    const supabaseUserClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    });
-    const supabaseAdmin = createClient(supabaseUrl, serviceKey);
-
-    const { data: userData, error: userErr } = await supabaseUserClient.auth.getUser();
-    if (userErr || !userData?.user) {
-      console.error("❌ MIYA_INSIGHT: Auth failed", { error: userErr });
-      return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
-    }
-    const callerId = userData.user.id;
-    console.log("✅ MIYA_INSIGHT: Authenticated", { callerId });
-
     const body = await req.json().catch(() => null) as { alert_state_id?: string } | null;
-    const alertStateId = body?.alert_state_id;
+    let alertStateId: string | undefined = body?.alert_state_id;
     console.log("📦 MIYA_INSIGHT: Request body", { body, alertStateId });
-    
     if (!alertStateId) {
       console.error("❌ MIYA_INSIGHT: Missing alert_state_id");
       return jsonResponse({ ok: false, error: "Missing alert_state_id" }, 400);
     }
+    if (typeof alertStateId !== "string") {
+      console.error("❌ MIYA_INSIGHT: alert_state_id must be a string");
+      return jsonResponse({ ok: false, error: "alert_state_id must be a string" }, 400);
+    }
+    alertStateId = alertStateId.trim();
+    if (!UUID_REGEX.test(alertStateId)) {
+      console.error("❌ MIYA_INSIGHT: Invalid alert_state_id format", { alertStateId: alertStateId.slice(0, 50) });
+      return jsonResponse({ ok: false, error: "Invalid alert_state_id format" }, 400);
+    }
 
-    // Fetch alert row
-    const { data: alert, error: alertErr } = await supabaseAdmin
-      .from("pattern_alert_state")
-      .select("id,user_id,metric_type,pattern_type,episode_status,active_since,last_evaluated_date,current_level,severity,baseline_value,recent_value,deviation_percent")
-      .eq("id", alertStateId)
-      .maybeSingle();
-    if (alertErr || !alert) return jsonResponse({ ok: false, error: "Alert not found" }, 404);
+    const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+    const isServerPrewarm = token === serviceKey;
+    if (isServerPrewarm) {
+      const internalHeader = req.headers.get("x-miya-internal");
+      if (internalHeader !== "prewarm") {
+        console.error("❌ MIYA_INSIGHT: Server prewarm requires x-miya-internal: prewarm header");
+        return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
+      }
+    }
+
+    let alert: {
+      id: string;
+      user_id: string;
+      metric_type: string;
+      pattern_type: string | null;
+      episode_status: string | null;
+      active_since: string | null;
+      last_evaluated_date: string | null;
+      current_level: number | null;
+      severity: string | null;
+      baseline_value: number | null;
+      recent_value: number | null;
+      deviation_percent: number | null;
+    };
+    let memberFirst: string;
+
+    if (isServerPrewarm) {
+      console.log("🔥 MIYA_INSIGHT: Server prewarm path", { alertStateId });
+      const { data: alertRow, error: alertErr } = await supabaseAdmin
+        .from("pattern_alert_state")
+        .select("id,user_id,metric_type,pattern_type,episode_status,active_since,last_evaluated_date,current_level,severity,baseline_value,recent_value,deviation_percent")
+        .eq("id", alertStateId)
+        .maybeSingle();
+      if (alertErr || !alertRow) {
+        console.error("❌ MIYA_INSIGHT: Server prewarm – alert not found", { alertStateId });
+        return jsonResponse({ ok: false, error: "Alert not found" }, 404);
+      }
+      alert = alertRow;
+      const memberId = alert.user_id;
+      const { data: memberRow } = await supabaseAdmin
+        .from("family_members")
+        .select("first_name")
+        .eq("user_id", memberId)
+        .limit(1)
+        .maybeSingle();
+      const memberName = (memberRow as { first_name?: string } | null)?.first_name ?? "Member";
+      memberFirst = firstName(memberName);
+    } else {
+      const supabaseUserClient = createClient(supabaseUrl, anonKey, {
+        global: { headers: { Authorization: `Bearer ${token}` } },
+      });
+      const { data: userData, error: userErr } = await supabaseUserClient.auth.getUser();
+      if (userErr || !userData?.user) {
+        console.error("❌ MIYA_INSIGHT: Auth failed", { error: userErr });
+        return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
+      }
+      const callerId = userData.user.id;
+      console.log("✅ MIYA_INSIGHT: Client request", { callerId, alertStateId });
+
+      const { data: alertRow, error: alertErr } = await supabaseAdmin
+        .from("pattern_alert_state")
+        .select("id,user_id,metric_type,pattern_type,episode_status,active_since,last_evaluated_date,current_level,severity,baseline_value,recent_value,deviation_percent")
+        .eq("id", alertStateId)
+        .maybeSingle();
+      if (alertErr || !alertRow) return jsonResponse({ ok: false, error: "Alert not found" }, 404);
+      alert = alertRow;
+
+      const memberId: string = alert.user_id;
+      // AuthZ: caller + member must share a family.
+      const { data: callerFamilies, error: famErr } = await supabaseAdmin
+        .from("family_members")
+        .select("family_id")
+        .eq("user_id", callerId);
+      if (famErr) return jsonResponse({ ok: false, error: "Auth check failed" }, 403);
+      const familyIds = (callerFamilies ?? []).map((r: any) => r.family_id).filter(Boolean);
+      if (!familyIds.length) return jsonResponse({ ok: false, error: "Not in a family" }, 403);
+
+      const { data: memberLink, error: memberErr } = await supabaseAdmin
+        .from("family_members")
+        .select("family_id,first_name")
+        .eq("user_id", memberId)
+        .in("family_id", familyIds)
+        .limit(1)
+        .maybeSingle();
+      if (memberErr || !memberLink) return jsonResponse({ ok: false, error: "Not authorized" }, 403);
+
+      const memberName = memberLink.first_name ?? "Member";
+      memberFirst = firstName(memberName);
+    }
 
     const memberId: string = alert.user_id;
     const metricType: string = alert.metric_type;
@@ -634,32 +785,12 @@ Deno.serve(async (req) => {
     const level: number = alert.current_level ?? 3;
     const sev = severityLabel(alert.severity ?? null, level);
 
-    // AuthZ: caller + member must share a family.
-    const { data: callerFamilies, error: famErr } = await supabaseAdmin
-      .from("family_members")
-      .select("family_id")
-      .eq("user_id", callerId);
-    if (famErr) return jsonResponse({ ok: false, error: "Auth check failed" }, 403);
-    const familyIds = (callerFamilies ?? []).map((r: any) => r.family_id).filter(Boolean);
-    if (!familyIds.length) return jsonResponse({ ok: false, error: "Not in a family" }, 403);
-
-    const { data: memberLink, error: memberErr } = await supabaseAdmin
-      .from("family_members")
-      .select("family_id,first_name")
-      .eq("user_id", memberId)
-      .in("family_id", familyIds)
-      .limit(1)
-      .maybeSingle();
-    if (memberErr || !memberLink) return jsonResponse({ ok: false, error: "Not authorized" }, 403);
-
-    const memberName = memberLink.first_name ?? "Member";
-    const memberFirst = firstName(memberName);
-
     const evaluatedEnd = clampEndDateToToday(alert.last_evaluated_date ?? toYYYYMMDD(new Date()));
-    const start = addDaysUTC(evaluatedEnd, -20);
+    // BUG-023: Fetch 24 days so we have 21 baseline + 3 recent (same window as pattern engine)
+    const start = addDaysUTC(evaluatedEnd, -23);
 
-    // Cache lookup (bump version when prompt/evidence changes)
-    const promptVersion = "v4"; // v4 = metric-specific + severity-aware with all 4 metrics (primary + 3 supporting)
+    // Cache lookup (version from prompt + schema content hash — BUG-038)
+    const promptVersion = await getPromptVersion();
     const { data: cached, error: cacheErr } = await supabaseAdmin
       .from("pattern_alert_ai_insights")
       .select("headline,clinical_interpretation,data_connections,possible_causes,action_steps,message_suggestions,confidence,confidence_reason,evidence,model,prompt_version,created_at")
@@ -711,76 +842,46 @@ Deno.serve(async (req) => {
     
     console.log("🔄 MIYA_INSIGHT: Cache miss, generating new insight", { alertStateId, promptVersion });
 
-    // Fetch raw metrics window (may include multiple rows/day from different sources)
+    // Fetch raw metrics window (may include multiple rows/day from different sources).
+    // Merge by day with mergeMax; do not use raw rows per day for insights.
     const { data: rawRows, error: rawErr } = await supabaseAdmin
       .from("wearable_daily_metrics")
-      .select("metric_date,steps,movement_minutes,sleep_minutes,sleep_efficiency_pct,deep_sleep_minutes,rem_sleep_minutes,light_sleep_minutes,awake_minutes,hrv_ms,hrv_rmssd_ms,resting_hr,breaths_avg_per_min,spo2_avg_pct,calories_active,source")
+      .select("metric_date,steps,movement_minutes,sleep_minutes,sleep_efficiency_pct,deep_sleep_minutes,rem_sleep_minutes,light_sleep_minutes,awake_minutes,hrv_ms,hrv_rmssd_ms,resting_hr,breaths_avg_per_min,spo2_avg_pct,calories_active")
       .eq("user_id", memberId)
       .gte("metric_date", start)
       .lte("metric_date", evaluatedEnd)
       .order("metric_date", { ascending: true });
     if (rawErr) return jsonResponse({ ok: false, error: "Failed to load metrics" }, 500);
 
-    // Merge per day: choose row with most non-null fields.
-    const byDay = new Map<string, any[]>();
-    for (const r of rawRows ?? []) {
-      const key = String(r.metric_date);
-      byDay.set(key, [...(byDay.get(key) ?? []), r]);
-    }
-    const mergedSeries = [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([day, rows]) => {
-      const best = [...rows].sort((ra, rb) => {
-        const ca = [
-          ra.steps,
-          ra.movement_minutes,
-          ra.sleep_minutes,
-          ra.sleep_efficiency_pct,
-          ra.deep_sleep_minutes,
-          ra.rem_sleep_minutes,
-          ra.light_sleep_minutes,
-          ra.awake_minutes,
-          ra.hrv_ms,
-          ra.hrv_rmssd_ms,
-          ra.resting_hr,
-          ra.breaths_avg_per_min,
-          ra.spo2_avg_pct,
-          ra.calories_active,
-        ].filter((x) => x != null).length;
-        const cb = [
-          rb.steps,
-          rb.movement_minutes,
-          rb.sleep_minutes,
-          rb.sleep_efficiency_pct,
-          rb.deep_sleep_minutes,
-          rb.rem_sleep_minutes,
-          rb.light_sleep_minutes,
-          rb.awake_minutes,
-          rb.hrv_ms,
-          rb.hrv_rmssd_ms,
-          rb.resting_hr,
-          rb.breaths_avg_per_min,
-          rb.spo2_avg_pct,
-          rb.calories_active,
-        ].filter((x) => x != null).length;
-        return cb - ca;
-      })[0];
-      return {
-        date: day,
-        steps: best?.steps ?? null,
-        movement_minutes: best?.movement_minutes ?? null,
-        sleep_minutes: best?.sleep_minutes ?? null,
-        sleep_efficiency_pct: best?.sleep_efficiency_pct ?? null,
-        deep_sleep_minutes: best?.deep_sleep_minutes ?? null,
-        rem_sleep_minutes: best?.rem_sleep_minutes ?? null,
-        light_sleep_minutes: best?.light_sleep_minutes ?? null,
-        awake_minutes: best?.awake_minutes ?? null,
-        hrv_ms: best?.hrv_ms ?? null,
-        hrv_rmssd_ms: best?.hrv_rmssd_ms ?? null,
-        resting_hr: best?.resting_hr ?? null,
-        breaths_avg_per_min: best?.breaths_avg_per_min ?? null,
-        spo2_avg_pct: best?.spo2_avg_pct ?? null,
-        calories_active: best?.calories_active ?? null,
-      };
-    });
+    const INSIGHT_NUMERIC_FIELDS = [
+      "steps", "movement_minutes", "sleep_minutes", "sleep_efficiency_pct",
+      "deep_sleep_minutes", "rem_sleep_minutes", "light_sleep_minutes", "awake_minutes",
+      "hrv_ms", "hrv_rmssd_ms", "resting_hr", "breaths_avg_per_min", "spo2_avg_pct", "calories_active",
+    ];
+    const mergedByDay = mergeRowsByDay(
+      (rawRows ?? []) as any[],
+      INSIGHT_NUMERIC_FIELDS,
+      "metric_date",
+    );
+    const mergedSeries = [...mergedByDay.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, row]) => ({
+        date,
+        steps: row.steps ?? null,
+        movement_minutes: row.movement_minutes ?? null,
+        sleep_minutes: row.sleep_minutes ?? null,
+        sleep_efficiency_pct: row.sleep_efficiency_pct ?? null,
+        deep_sleep_minutes: row.deep_sleep_minutes ?? null,
+        rem_sleep_minutes: row.rem_sleep_minutes ?? null,
+        light_sleep_minutes: row.light_sleep_minutes ?? null,
+        awake_minutes: row.awake_minutes ?? null,
+        hrv_ms: row.hrv_ms ?? null,
+        hrv_rmssd_ms: row.hrv_rmssd_ms ?? null,
+        resting_hr: row.resting_hr ?? null,
+        breaths_avg_per_min: row.breaths_avg_per_min ?? null,
+        spo2_avg_pct: row.spo2_avg_pct ?? null,
+        calories_active: row.calories_active ?? null,
+      }));
 
     const daysPresent = mergedSeries.length;
     const missingDays = 21 - daysPresent;
@@ -806,18 +907,41 @@ Deno.serve(async (req) => {
       | "spo2_avg_pct"
       | "calories_active";
 
-    const valuesFor = (key: MetricKey) =>
-      mergedSeries.map((d: any) => d[key]).filter((v: any) => typeof v === "number") as number[];
-    
-    const splitBaselineRecent = (vals: number[]) => {
-      if (vals.length < 6) return { baseline: null as number | null, recent: null as number | null };
-      const recent = vals.slice(-3);
-      // Use up to 21 days for baseline (not just 7)
-      const baseline = vals.slice(0, Math.min(21, Math.max(0, vals.length - 3)));
-      return { baseline: avg(baseline), recent: avg(recent) };
-    };
+    // BUG-023: Same semantics as rook/patterns/baseline.ts — recent = last 3 days ending at evaluatedEnd, baseline = up to 21 days immediately before that.
+    function baselineRecentForMetric(
+      series: Array<{ date: string; [k: string]: unknown }>,
+      endDate: string,
+      metricKey: MetricKey,
+    ): { baseline: number | null; recent: number | null } {
+      const recentStart = addDaysUTC(endDate, -2);
+      const recentDates = [recentStart, addDaysUTC(recentStart, 1), addDaysUTC(recentStart, 2)];
+      const baselineStart = addDaysUTC(recentStart, -21);
+      const baselineEnd = addDaysUTC(recentStart, -1);
+      const dateToRow = new Map(series.map((d) => [d.date, d]));
 
-    // Compute baseline/recent for each metric we track
+      const recentValues: number[] = [];
+      for (const d of recentDates) {
+        const row = dateToRow.get(d) as Record<string, unknown> | undefined;
+        const v = row?.[metricKey];
+        if (typeof v !== "number") return { baseline: null, recent: null };
+        recentValues.push(v);
+      }
+      const recentAvg = avg(recentValues);
+
+      const baselineValues: number[] = [];
+      for (let i = 0; i < 21; i++) {
+        const d = addDaysUTC(baselineStart, i);
+        if (d > baselineEnd) break;
+        const row = dateToRow.get(d) as Record<string, unknown> | undefined;
+        const v = row?.[metricKey];
+        if (typeof v === "number") baselineValues.push(v);
+      }
+      if (baselineValues.length < 4) return { baseline: null, recent: recentAvg };
+      const baselineAvg = avg(baselineValues);
+      return { baseline: baselineAvg, recent: recentAvg };
+    }
+
+    // Compute baseline/recent for each metric we track (date-based window aligned with pattern engine)
     const allMetrics: MetricKey[] = [
       "steps",
       "movement_minutes",
@@ -835,11 +959,10 @@ Deno.serve(async (req) => {
       "calories_active",
     ];
     const metricsData = allMetrics.map((m) => {
-      const vals = valuesFor(m);
-      const { baseline, recent } = splitBaselineRecent(vals);
+      const { baseline, recent } = baselineRecentForMetric(mergedSeries, evaluatedEnd, m);
       const deviation = pctChange(baseline, recent);
       const absoluteChange = (recent != null && baseline != null) ? recent - baseline : null;
-      
+
       return {
         name: m,
         current_value: recent,

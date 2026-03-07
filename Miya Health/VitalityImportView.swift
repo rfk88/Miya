@@ -17,6 +17,7 @@ struct VitalityImportView: View {
     @State private var showingImporter = false
     @State private var importStatus: String = ""
     @State private var latestScore: VitalityScore?
+    @State private var isLatestScoreStale = false
     @State private var isSaving = false
     @State private var showAlert = false
     
@@ -77,6 +78,11 @@ struct VitalityImportView: View {
                     
                     if let score = latestScore {
                         VStack(spacing: 10) {
+                            if isLatestScoreStale {
+                                Text("Old data")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
                             Text("Latest Vitality Score")
                                 .font(.headline)
                                 .foregroundColor(.miyaTextPrimary)
@@ -157,7 +163,7 @@ struct VitalityImportView: View {
                 let data = try Data(contentsOf: url)
                 let dataset = try JSONDecoder().decode(ROOKDataset.self, from: data)
                 
-                let age = Calendar.current.dateComponents([.year], from: onboardingManager.dateOfBirth, to: Date()).year ?? 0
+                let age = onboardingManager.dateOfBirth.flatMap { Calendar.current.dateComponents([.year], from: $0, to: Date()).year } ?? 0
                 let windowRaw = ROOKWindowAggregator.buildWindowRawMetrics(age: age, dataset: dataset)
                 let snapshot = VitalityScoringEngine().score(raw: windowRaw)
                 
@@ -349,7 +355,10 @@ struct VitalityImportView: View {
             
             let rollingScores = VitalityCalculator.computeRollingScores(from: parsed, window: 7)
             guard let latest = rollingScores.last else {
-                importStatus = "Need at least 7 days of data to compute a score."
+                isLatestScoreStale = true
+                importStatus = latestScore != nil
+                    ? "This file doesn't have enough data for a new score. Showing last known score below."
+                    : "Need at least 7 days of data to compute a new score."
                 showAlert = true
                 return
             }
@@ -369,6 +378,7 @@ struct VitalityImportView: View {
                     try await dataManager.saveVitalityScores(rows)
                     await MainActor.run {
                         latestScore = latest
+                        isLatestScoreStale = false
                         importStatus = "✅ Imported \(parsed.count) days; latest score \(latest.totalScore)/100"
                         showAlert = false
                         isSaving = false
@@ -411,7 +421,7 @@ struct VitalityImportView: View {
             let data = try Data(contentsOf: url)
             let dataset = try JSONDecoder().decode(ROOKDataset.self, from: data)
             
-            let age = Calendar.current.dateComponents([.year], from: onboardingManager.dateOfBirth, to: Date()).year ?? 0
+            let age = onboardingManager.dateOfBirth.flatMap { Calendar.current.dateComponents([.year], from: $0, to: Date()).year } ?? 0
             let windowRaw = ROOKWindowAggregator.buildWindowRawMetrics(age: age, dataset: dataset)
             let snapshot = VitalityScoringEngine().score(raw: windowRaw)
             

@@ -55,6 +55,7 @@ enum MissingWearableSeverity {
 enum MessagePlatform {
     case whatsapp
     case imessage
+    case sms
 }
 
 // MARK: - Missing Wearable Detail Sheet
@@ -496,6 +497,38 @@ struct MissingWearableMessageSheet: View {
                         .frame(maxWidth: .infinity)
                         .padding()
                         .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(12)
+                    }
+                    .disabled(showCustomInput && customMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    
+                    Button {
+                        let displayedMsg: String = {
+                            if showCustomInput {
+                                return customMessage
+                            }
+                            if !suggestedMessages.isEmpty {
+                                if let cached = regeneratedMessages[selectedMessageIndex]?[selectedTone] {
+                                    return cached
+                                }
+                                if !editedMessage.isEmpty && selectedMessageIndex == selectedMessageIndex {
+                                    return editedMessage
+                                }
+                                return suggestedMessages[selectedMessageIndex].text
+                            }
+                            return customMessage
+                        }()
+                        onSendMessage(displayedMsg, .sms)
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Image(systemName: "message.badge.fill")
+                            Text("Send via SMS")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color(red: 0.45, green: 0.45, blue: 0.48))
                         .foregroundColor(.white)
                         .cornerRadius(12)
                     }

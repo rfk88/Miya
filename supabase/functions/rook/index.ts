@@ -12,9 +12,17 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey",
 };
 
-const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-const supabaseServiceRoleKey =
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_ANON_KEY")!;
+function requireEnv(name: string): string {
+  const v = Deno.env.get(name);
+  if (v == null || String(v).trim().length === 0) {
+    throw new Error(`Missing env var: ${name} (required for Rook webhook; do not use anon key fallback).`);
+  }
+  return v.trim();
+}
+
+// Rook webhook performs privileged writes (webhook events, user mapping, daily metrics, profiles, vitality scores); service role required, no anon fallback.
+const supabaseUrl = requireEnv("SUPABASE_URL");
+const supabaseServiceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
 const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
 function asString(v: unknown): string | null {
@@ -123,6 +131,9 @@ function computeAgeYears(dobISO: string): number | null {
   return age >= 0 ? age : null;
 }
 
+// Single source of truth for UUID validation in this file (BUG-030).
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -196,10 +207,9 @@ Deno.serve(async (req) => {
         }
         
         // Map rookUserId to Miya user_id
-        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         let userId: string | null = null;
         
-        if (uuidRegex.test(rookUserId)) {
+        if (UUID_REGEX.test(rookUserId)) {
           userId = rookUserId;
         } else {
           const { data: mapping } = await supabase
@@ -583,9 +593,6 @@ Deno.serve(async (req) => {
         scoreRaw != null ||
         scoreNormalized != null;
 
-      const uuidRegex =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      
       // Determine Miya user UUID:
       // CRITICAL: ALWAYS look up existing mappings first
       // NEVER assume rookUserId == Supabase user_id, even if it's a valid UUID!
@@ -622,7 +629,7 @@ Deno.serve(async (req) => {
           } else {
             // Step 3: LAST RESORT - check if rookUserId exactly matches a user_profile.user_id
             // This handles the case where Rook user_id is already the Miya auth UUID.
-            if (uuidRegex.test(rookUserId)) {
+            if (UUID_REGEX.test(rookUserId)) {
               const { data: profile, error: profileErr } = await supabase
                 .from("user_profiles")
                 .select("user_id")

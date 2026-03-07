@@ -6,7 +6,15 @@ import Supabase
 
 extension DashboardView {
     // MARK: - Badges (Daily computed; Weekly persisted)
-    
+
+    /// True only for Swift task cancellation or URLSession cancelled; avoids string matching (BUG-025).
+    private func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if (error as? URLError)?.code == .cancelled { return true }
+        return false
+    }
+
+    // Day keys are UTC dates in "yyyy-MM-dd". Use date(fromDayKey:) and comparison helpers for ordering; do not compare day keys with raw string comparison (BUG-026).
     internal func utcDayKey(for date: Date) -> String {
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
@@ -14,12 +22,61 @@ extension DashboardView {
         df.dateFormat = "yyyy-MM-dd"
         return df.string(from: date)
     }
+
+    private static let dayKeyFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// Parses a day-key string ("yyyy-MM-dd" UTC) to Date. Returns nil if malformed (BUG-026).
+    private func date(fromDayKey key: String) -> Date? {
+        Self.dayKeyFormatter.date(from: key)
+    }
+
+    private func isDayKey(_ key: String, lessThanOrEqualTo other: String) -> Bool {
+        guard let d1 = date(fromDayKey: key), let d2 = date(fromDayKey: other) else { return false }
+        return d1 <= d2
+    }
+
+    private func isDayKey(_ key: String, greaterThanOrEqualTo other: String) -> Bool {
+        guard let d1 = date(fromDayKey: key), let d2 = date(fromDayKey: other) else { return false }
+        return d1 >= d2
+    }
+
+    private func areDayKeysEqual(_ a: String, _ b: String) -> Bool {
+        guard let d1 = date(fromDayKey: a), let d2 = date(fromDayKey: b) else { return false }
+        return d1 == d2
+    }
     
     internal func dateByAddingDays(_ days: Int, to date: Date) -> Date {
         Calendar(identifier: .gregorian).date(byAdding: .day, value: days, to: date) ?? date
     }
     
     internal func computeFamilyBadgesIfNeeded() async {
+        // Reentrancy guard: only one badge computation at a time
+        let alreadyComputing = await MainActor.run {
+            if isComputingBadges {
+                #if DEBUG
+                print("ℹ️ Champions: badge computation skipped (already in progress)")
+                #endif
+                return true
+            }
+            isComputingBadges = true
+            return false
+        }
+        if alreadyComputing { return }
+        defer {
+            Task { @MainActor in
+                self.isComputingBadges = false
+            }
+        }
+
+        // BUG-024: Clear any previous save error when starting a new run (pull-to-refresh or retry).
+        await MainActor.run { badgeSaveError = nil }
+
         guard let familyId = dataManager.currentFamilyId else { return }
         
         // Build member list (exclude pending and missing user ids)
@@ -45,9 +102,6 @@ extension DashboardView {
         let prevEndKey = utcDayKey(for: prevEndDate)
         let prevStartKey = utcDayKey(for: prevStartDate)
         
-        weeklyBadgeWeekStart = weekStartKey
-        weeklyBadgeWeekEnd = weekEndKey
-        
         // Fetch score rows for prevStart..todayKey (covers prev week, this week, and today).
         // Primary path: RPC `get_family_vitality_scores`.
         // Fallback path (debug/robustness): per-user queries if RPC isn't deployed yet.
@@ -60,17 +114,13 @@ extension DashboardView {
                 endDate: todayKey
             )
         } catch {
-            // Check if this is a cancellation - if so, preserve existing badges and return early
-            let errorDesc = error.localizedDescription.lowercased()
-            if error is CancellationError ||
-               (error as? URLError)?.code == .cancelled ||
-               errorDesc.contains("cancelled") {
+            // Check if this is a cancellation - if so, preserve existing badges and return early (BUG-025: type/code only, no string match).
+            if isCancellation(error) {
                 #if DEBUG
                 print("ℹ️ Champions: Badge fetch cancelled; preserving existing badges")
                 #endif
                 return // Don't clear badges on cancellation
             }
-            
             #if DEBUG
             print("❌ Champions: fetchFamilyVitalityScores RPC failed; falling back to per-user reads. error=\(error.localizedDescription)")
             #endif
@@ -81,11 +131,8 @@ extension DashboardView {
                     endDate: todayKey
                 )
             } catch {
-                // Also check cancellation in fallback
-                let fallbackErrorDesc = error.localizedDescription.lowercased()
-                if error is CancellationError ||
-                   (error as? URLError)?.code == .cancelled ||
-                   fallbackErrorDesc.contains("cancelled") {
+                // Also check cancellation in fallback (BUG-025: type/code only, no string match).
+                if isCancellation(error) {
                     #if DEBUG
                     print("ℹ️ Champions: Badge fallback fetch cancelled; preserving existing badges")
                     #endif
@@ -109,14 +156,14 @@ extension DashboardView {
             )
         }
         
-        // Filter out future dates (data should only include dates up to today)
-        let validMapped = mapped.filter { $0.dayKey <= todayKey }
+        // Filter out future dates (data should only include dates up to today) (BUG-026: date-based comparison).
+        let validMapped = mapped.filter { isDayKey($0.dayKey, lessThanOrEqualTo: todayKey) }
         
         // Daily badges (computed from today vs yesterday - percentage increase)
-        let todayRows = validMapped.filter { $0.dayKey == todayKey }
+        let todayRows = validMapped.filter { areDayKeysEqual($0.dayKey, todayKey) }
         let yesterdayKey = utcDayKey(for: dateByAddingDays(-1, to: today))
-        let yesterdayRows = validMapped.filter { $0.dayKey == yesterdayKey }
-        dailyBadgeWinners = BadgeEngine.computeDailyBadges(
+        let yesterdayRows = validMapped.filter { areDayKeysEqual($0.dayKey, yesterdayKey) }
+        let dailyWinners = BadgeEngine.computeDailyBadges(
             members: members,
             todayRows: todayRows,
             yesterdayRows: yesterdayRows,
@@ -129,11 +176,8 @@ extension DashboardView {
         do {
             persisted = try await dataManager.fetchFamilyBadges(familyId: familyId, weekStart: weekStartKey)
         } catch {
-            // Check if this is a cancellation - if so, preserve existing badges and return early
-            let errorDesc = error.localizedDescription.lowercased()
-            if error is CancellationError ||
-               (error as? URLError)?.code == .cancelled ||
-               errorDesc.contains("cancelled") {
+            // Check if this is a cancellation - if so, preserve existing badges and return early (BUG-025: type/code only, no string match).
+            if isCancellation(error) {
                 #if DEBUG
                 print("ℹ️ Champions: Badge persistence fetch cancelled; preserving existing badges")
                 #endif
@@ -175,18 +219,18 @@ extension DashboardView {
         }
         
         // Compute weekly winners (this week + prev week + last 14 days ending weekEndKey)
-        // Use validMapped (filtered to exclude future dates)
-        let thisWeekRows = validMapped.filter { $0.dayKey >= weekStartKey && $0.dayKey <= weekEndKey }
-        let prevWeekRows = validMapped.filter { $0.dayKey >= prevStartKey && $0.dayKey <= prevEndKey }
+        // Use validMapped (filtered to exclude future dates) (BUG-026: date-based comparison).
+        let thisWeekRows = validMapped.filter { isDayKey($0.dayKey, greaterThanOrEqualTo: weekStartKey) && isDayKey($0.dayKey, lessThanOrEqualTo: weekEndKey) }
+        let prevWeekRows = validMapped.filter { isDayKey($0.dayKey, greaterThanOrEqualTo: prevStartKey) && isDayKey($0.dayKey, lessThanOrEqualTo: prevEndKey) }
         let last14StartKey = utcDayKey(for: dateByAddingDays(-13, to: weekEndDate))
-        let last14Rows = validMapped.filter { $0.dayKey >= last14StartKey && $0.dayKey <= weekEndKey }
+        let last14Rows = validMapped.filter { isDayKey($0.dayKey, greaterThanOrEqualTo: last14StartKey) && isDayKey($0.dayKey, lessThanOrEqualTo: weekEndKey) }
         
         #if DEBUG
         print("🏆 BadgeEngine: Week window: \(weekStartKey) to \(weekEndKey) (today: \(todayKey))")
         print("🏆 BadgeEngine: Total rows fetched: \(scoreRows.count), Valid (not future): \(validMapped.count)")
         print("🏆 BadgeEngine: This week rows: \(thisWeekRows.count), Prev week rows: \(prevWeekRows.count), Last 14 rows: \(last14Rows.count)")
         if !thisWeekRows.isEmpty {
-            let dates = thisWeekRows.map { $0.dayKey }.sorted()
+            let dates = thisWeekRows.map { $0.dayKey }.sorted { (a, b) in (date(fromDayKey: a) ?? .distantPast) < (date(fromDayKey: b) ?? .distantPast) }
             print("🏆 BadgeEngine: This week dates: \(dates.joined(separator: ", "))")
         }
         #endif
@@ -204,23 +248,36 @@ extension DashboardView {
         
         // Always prefer latest computed winners for current-week freshness.
         // If no winners can be computed yet, fall back to persisted rows (if any).
-        if !computedWinners.isEmpty {
-            weeklyBadgeWinners = computedWinners
-        } else {
-            weeklyBadgeWinners = winnersFromPersisted(persisted)
-        }
+        let weeklyWinners: [BadgeEngine.Winner] = !computedWinners.isEmpty
+            ? computedWinners
+            : winnersFromPersisted(persisted)
         
-        // Persist if caller is admin/superadmin AND we have something to persist.
+        // Persist if caller is admin/superadmin AND we have something to persist (BUG-024: surface failures).
         if let uid = currentUserIdString,
            let myMembership = familyMemberRecords.first(where: { $0.userId?.uuidString == uid }),
            (myMembership.role == "admin" || myMembership.role == "superadmin"),
            !computedWinners.isEmpty {
-            try? await dataManager.upsertFamilyBadges(
-                familyId: familyId,
-                weekStart: weekStartKey,
-                weekEnd: weekEndKey,
-                winners: computedWinners
-            )
+            do {
+                try await dataManager.upsertFamilyBadges(
+                    familyId: familyId,
+                    weekStart: weekStartKey,
+                    weekEnd: weekEndKey,
+                    winners: computedWinners
+                )
+            } catch {
+                await MainActor.run {
+                    badgeSaveError = error.localizedDescription
+                }
+            }
+        }
+        
+        // Atomic update: apply all badge state and clear computing flag in one MainActor block
+        await MainActor.run {
+            weeklyBadgeWeekStart = weekStartKey
+            weeklyBadgeWeekEnd = weekEndKey
+            dailyBadgeWinners = dailyWinners
+            weeklyBadgeWinners = weeklyWinners
+            isComputingBadges = false
         }
     }
     
@@ -557,7 +614,8 @@ extension DashboardView {
                     inviteStatus: rec.inviteStatus,
                     onboardingType: rec.onboardingType,
                     guidedSetupStatus: rec.guidedSetupStatus,
-                    isMe: isMe
+                    isMe: isMe,
+                    vitalityScoreUpdatedAt: updatedAt
                 )
             }
 
@@ -605,7 +663,8 @@ extension DashboardView {
                         inviteStatus: rec.inviteStatus,
                         onboardingType: rec.onboardingType,
                         guidedSetupStatus: rec.guidedSetupStatus,
-                        isMe: isMe
+                        isMe: isMe,
+                        vitalityScoreUpdatedAt: updatedAt
                     )
                 }
             }
@@ -637,7 +696,8 @@ extension DashboardView {
                         inviteStatus: rec.inviteStatus,
                         onboardingType: rec.onboardingType,
                         guidedSetupStatus: rec.guidedSetupStatus,
-                        isMe: isMe
+                        isMe: isMe,
+                        vitalityScoreUpdatedAt: updatedAt
                     )
                 }
             }
@@ -725,18 +785,12 @@ extension DashboardView {
             // Check for backfilled data after members are loaded
             await checkDataBackfillStatus()
         } catch {
-            // SwiftUI refreshes / view transitions can cancel in-flight tasks.
-            // Cancellation can come through as CancellationError, URLError with cancelled code, or wrapped in error messages.
+            // SwiftUI refreshes / view transitions can cancel in-flight tasks. Only treat CancellationError and URLError.cancelled as cancellation (BUG-025).
             // Do not treat cancellation as a failure; keep last-known good UI state (don't overwrite familyMembers).
-            let errorDesc = error.localizedDescription.lowercased()
-            if error is CancellationError || 
-               (error as? URLError)?.code == .cancelled ||
-               errorDesc.contains("cancelled") || 
-               errorDesc.contains("cancel") {
+            if isCancellation(error) {
                 print("ℹ️ Dashboard: loadFamilyMembers cancelled (type: \(type(of: error)))")
                 return
             }
-            
             // Real error (not cancellation): show fallback UI but only if we have partial data
             print("⚠️ Dashboard: Failed to load family members: \(error.localizedDescription)")
             await MainActor.run {
@@ -761,7 +815,8 @@ extension DashboardView {
                         inviteStatus: rec.inviteStatus,
                         onboardingType: rec.onboardingType,
                         guidedSetupStatus: rec.guidedSetupStatus,
-                        isMe: isMe
+                        isMe: isMe,
+                        vitalityScoreUpdatedAt: nil
                     )
                     }
                 }
@@ -801,12 +856,8 @@ extension DashboardView {
                 familyVitalityMembersTotal = summary.membersTotal
             }
         } catch {
-            // Preserve last-known good state on cancellation
-            let errorDesc = error.localizedDescription.lowercased()
-            if error is CancellationError ||
-               (error as? URLError)?.code == .cancelled ||
-               errorDesc.contains("cancelled") ||
-               errorDesc.contains("cancel") {
+            // Preserve last-known good state on cancellation (BUG-025: type/code only, no string match).
+            if isCancellation(error) {
                 print("ℹ️ Dashboard: loadFamilyVitality cancelled (type: \(type(of: error)))")
                 return
             }

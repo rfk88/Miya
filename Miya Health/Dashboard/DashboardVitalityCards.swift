@@ -206,9 +206,11 @@ struct FamilyVitalityCard: View {
             return Color.orange
         case .attention:
             return Color.red
+        @unknown default:
+            return Color.orange
         }
     }
-    
+
     private func notificationPillarIcon(_ pillar: VitalityPillar) -> String {
         switch pillar {
         case .sleep: return "moon.stars.fill"
@@ -435,8 +437,10 @@ struct FamilyVitalityCard: View {
             status = "drifting"
         case .attention:
             status = "low"
+        @unknown default:
+            status = "drifting"
         }
-        
+
         return "\(pillarName) \(status)"
     }
     

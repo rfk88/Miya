@@ -2,6 +2,18 @@
 
 This directory contains utility scripts and tools for managing the Miya Health platform.
 
+## First-time iOS build
+
+Before opening the project in Xcode, create the required secrets file (the project will not open without it):
+
+```bash
+./tools/setup_ios_secrets.sh
+```
+
+Or manually: `cp "Miya Health/Secrets.xcconfig.example" "Miya Health/Secrets.xcconfig"`.
+
+Then edit `Miya Health/Secrets.xcconfig` and replace placeholders with your ROOK client UUID, ROOK secret key, Supabase URL, and Supabase anon key. Do **not** commit `Secrets.xcconfig` (it is in `.gitignore`).
+
 ## Scripts
 
 ### `auto_setup_scoring.ts`
@@ -17,6 +29,8 @@ Automated setup script for server-side vitality scoring. This script:
    - `SUPABASE_URL`: Your Supabase project URL
    - `SUPABASE_SERVICE_ROLE_KEY`: Your Supabase service role key (keep secret!)
    - `SUPABASE_ACCESS_TOKEN`: (Optional) For automated secret management
+
+   **iOS app:** The Miya Health app gets ROOK and Supabase keys from a **gitignored** xcconfig so they are never committed. See **First-time iOS build** above for creating `Secrets.xcconfig`. Then edit it with your ROOK client UUID, ROOK secret key, Supabase URL, and Supabase anon key (ROOK keys from your ROOK dashboard; Supabase values from Supabase project Settings → API). Do **not** commit `Secrets.xcconfig` (it is in `.gitignore`). The app will fail at launch with a clear error if the file is missing or keys are empty. For CI: provide the same variables as CI secrets and generate or inject `Secrets.xcconfig` during the build.
 
 2. **Get Your Keys**:
    - Navigate to your Supabase Dashboard
@@ -72,9 +86,10 @@ node -r dotenv/config tools/auto_setup_scoring.ts
 - ✅ Use environment variables for all secrets
 - ✅ Keep `.env` files local only (already in `.gitignore`)
 - ✅ Use `.env.example` with placeholder values for documentation
-- ✅ Rotate keys immediately if accidentally exposed
+- ✅ **iOS:** Use `Secrets.xcconfig` (gitignored) for ROOK and Supabase keys; copy from `Secrets.xcconfig.example`.
+- ✅ Rotate keys immediately if accidentally exposed (e.g. keys that were ever in git history must be rotated in the ROOK and Supabase dashboards; then use the new keys only in local/CI `Secrets.xcconfig` or env).
 - ❌ Never hardcode API keys or service role keys in source code
-- ❌ Never commit `.env` files
+- ❌ Never commit `.env` files or `Miya Health/Secrets.xcconfig`
 - ❌ Never share service role keys in chat/email
 
 ## Getting Help

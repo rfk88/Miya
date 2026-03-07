@@ -213,6 +213,9 @@ struct FamilyNotificationItem: Identifiable {
                         return keep
                     case .celebrate:
                         return true
+                    @unknown default:
+                        // Unknown severity: keep so new types are not silently dropped (BUG-028).
+                        return true
                     }
                 }
             #if DEBUG
@@ -324,6 +327,8 @@ extension FamilyNotificationItem {
                 case .attention: return 3
                 case .watch: return 2
                 case .celebrate: return 1
+                @unknown default:
+                    return 2 // Treat unknown like watch for ordering (BUG-028).
                 }
             case .fallback:
                 return 3

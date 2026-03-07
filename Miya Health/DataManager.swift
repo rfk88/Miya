@@ -2545,6 +2545,13 @@ class DataManager: ObservableObject {
         }
     }
     
+    /// True only for Swift task cancellation or URLSession cancelled; avoids string matching (BUG-025).
+    private func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if (error as? URLError)?.code == .cancelled { return true }
+        return false
+    }
+
     /// Fetch all family members for a given family (including pending)
     func fetchFamilyMembers(familyId: String) async throws -> [FamilyMemberRecord] {
         do {
@@ -2559,12 +2566,8 @@ class DataManager: ObservableObject {
             return members
         } catch {
             // Important: allow SwiftUI task cancellation to propagate without turning it into a user-visible error.
-            // Cancellation can come through as CancellationError, URLError with cancelled code, or wrapped in error messages.
-            let errorDesc = error.localizedDescription.lowercased()
-            if error is CancellationError || 
-               (error as? URLError)?.code == .cancelled ||
-               errorDesc.contains("cancelled") || 
-               errorDesc.contains("cancel") {
+            // Only treat CancellationError and URLError.cancelled as cancellation (BUG-025).
+            if isCancellation(error) {
                 print("ℹ️ DataManager: fetchFamilyMembers cancelled (type: \(type(of: error)))")
                 throw error
             }

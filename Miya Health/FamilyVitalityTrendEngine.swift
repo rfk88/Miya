@@ -170,22 +170,37 @@ struct FamilyVitalityTrendEngine {
     static let requiredConsecutiveForStreak = 3
     static let windowDays = 21
 
-    // MARK: - Windowing Helper (UTC, last 21 days)
-    private static func filterToWindow(_ scores: [DailyScore]) -> [DailyScore] {
+    /// Reused for day-key parsing (UTC, yyyy-MM-dd); avoid creating inside loops (BUG-033).
+    private static let sharedDayKeyFormatter: DateFormatter = {
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
-        df.timeZone = TimeZone(secondsFromGMT: 0)
+        df.timeZone = TimeZone(secondsFromGMT: 0)!  // UTC; 0 is always valid
         df.dateFormat = "yyyy-MM-dd"
-        
-        // Anchor "today" to UTC midnight
+        return df
+    }()
+
+    /// Reused for UTC date math; avoid creating inside loops (BUG-033).
+    private static let sharedUTCCalendar: Calendar = {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!  // UTC; 0 is always valid
+        return cal
+    }()
+
+    // MARK: - Windowing Helper (UTC, last 21 days)
+    private static func filterToWindow(_ scores: [DailyScore]) -> [DailyScore] {
+        let cal = sharedUTCCalendar
+        // date(bySettingHour:...) and date(byAdding:...) return Optional; they can be nil in DST/edge cases — must guard before use.
         let today = Date()
-        guard let todayUTC = Calendar(identifier: .gregorian).date(bySettingHour: 0, minute: 0, second: 0, of: today, matchingPolicy: .strict, repeatedTimePolicy: .first, direction: .backward) else {
+        guard let todayUTC = cal.date(bySettingHour: 0, minute: 0, second: 0, of: today, matchingPolicy: .strict, repeatedTimePolicy: .first, direction: .backward) else {
+            // Safe fallback: return unfiltered scores so trends can still be computed; avoids using nil downstream.
             return scores
         }
-        guard let startUTC = Calendar(identifier: .gregorian).date(byAdding: .day, value: -windowDays + 1, to: todayUTC) else {
+        guard let startUTC = cal.date(byAdding: .day, value: -windowDays + 1, to: todayUTC) else {
+            // Same fallback if "start of window" cannot be computed (e.g. rare calendar edge case).
             return scores
         }
         
+        let df = sharedDayKeyFormatter
         return scores.filter { score in
             guard let d = df.date(from: score.dayKey) else { return false }
             return d >= startUTC && d <= todayUTC
@@ -465,15 +480,12 @@ struct FamilyVitalityTrendEngine {
     private static func hasConsecutiveStreak(dayKeys: [String], length: Int) -> Bool {
         guard dayKeys.count >= length else { return false }
         // dayKeys are ascending; parse and check consecutive days
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.timeZone = TimeZone(secondsFromGMT: 0)
-        df.dateFormat = "yyyy-MM-dd"
-        let dates: [Date] = dayKeys.compactMap { df.date(from: $0) }
+        let dates: [Date] = dayKeys.compactMap { sharedDayKeyFormatter.date(from: $0) }
         guard dates.count == dayKeys.count else { return false }
+        let cal = sharedUTCCalendar
         var streak = 1
         for i in 1..<dates.count {
-            let diff = Calendar.current.dateComponents([.day], from: dates[i-1], to: dates[i]).day ?? 99
+            let diff = cal.dateComponents([.day], from: dates[i-1], to: dates[i]).day ?? 99
             if diff == 1 {
                 streak += 1
                 if streak >= length { return true }
@@ -486,16 +498,13 @@ struct FamilyVitalityTrendEngine {
     
     private static func longestConsecutiveStreak(dayKeys: [String]) -> Int {
         guard !dayKeys.isEmpty else { return 0 }
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.timeZone = TimeZone(secondsFromGMT: 0)
-        df.dateFormat = "yyyy-MM-dd"
-        let dates: [Date] = dayKeys.compactMap { df.date(from: $0) }.sorted()
+        let dates: [Date] = dayKeys.compactMap { sharedDayKeyFormatter.date(from: $0) }.sorted()
         guard !dates.isEmpty else { return 0 }
+        let cal = sharedUTCCalendar
         var best = 1
         var current = 1
         for i in 1..<dates.count {
-            let diff = Calendar.current.dateComponents([.day], from: dates[i-1], to: dates[i]).day ?? 99
+            let diff = cal.dateComponents([.day], from: dates[i-1], to: dates[i]).day ?? 99
             if diff == 1 {
                 current += 1
                 best = max(best, current)

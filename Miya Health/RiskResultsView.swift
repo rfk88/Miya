@@ -20,6 +20,7 @@ struct RiskResultsView: View {
     // Vitality import state
     @State private var showingFilePicker = false
     @State private var importedVitalityScore: VitalityScore?
+    @State private var isImportedVitalityStale = false
     @State private var isImporting = false
     
     // ROOK export import (used for DEBUG and for guided invitees awaiting admin profile completion)
@@ -58,9 +59,14 @@ struct RiskResultsView: View {
     
     // Product UI state for vitality breakdown display
     @State private var expandedPillars: Set<String> = []
-    
+
+    /// Minimum sensible height (cm) for BMI display; aligned with RiskCalculator.
+    private static let minHeightCm = 10.0
+
     var bmi: Double {
-        guard onboardingManager.heightCm > 0, onboardingManager.weightKg > 0 else { return 0 }
+        guard onboardingManager.heightCm.isFinite, onboardingManager.weightKg.isFinite,
+              onboardingManager.heightCm >= Self.minHeightCm, onboardingManager.weightKg > 0
+        else { return 0 }
         let heightM = onboardingManager.heightCm / 100.0
         return onboardingManager.weightKg / (heightM * heightM)
     }
@@ -419,6 +425,11 @@ struct RiskResultsView: View {
                     if let vitality = importedVitalityScore {
                         // Show imported vitality
                         VStack(alignment: .leading, spacing: 12) {
+                            if isImportedVitalityStale {
+                                Text("Old data")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
                             Text("Current Vitality Score")
                                 .font(.subheadline.bold())
                                 .foregroundColor(.miyaTextPrimary)
@@ -481,7 +492,7 @@ struct RiskResultsView: View {
                             }
                             .padding(.top, 4)
                             
-                            Text("Based on 7-day rolling average from imported data.")
+                            Text(isImportedVitalityStale ? "Last known score — not from latest import" : "Based on 7-day rolling average from imported data.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                                 .italic()
@@ -1032,8 +1043,9 @@ struct RiskResultsView: View {
     }
     
     private func getAge() -> Int {
+        guard let dob = onboardingManager.dateOfBirth else { return 0 }
         let calendar = Calendar.current
-        let ageComponents = calendar.dateComponents([.year], from: onboardingManager.dateOfBirth, to: Date())
+        let ageComponents = calendar.dateComponents([.year], from: dob, to: Date())
         return ageComponents.year ?? 0
     }
     
@@ -1152,8 +1164,8 @@ struct RiskResultsView: View {
                 // TEST: Call new VitalityScoringEngine alongside old engine
                 // Use scoreIfPossible so we can cleanly handle insufficient data without penalizing missing pillars.
                 
-                // Calculate user age
-                let age = Calendar.current.dateComponents([.year], from: onboardingManager.dateOfBirth, to: Date()).year ?? 0
+                // Calculate user age (0 when DOB not set — BUG-032)
+                let age = onboardingManager.dateOfBirth.flatMap { Calendar.current.dateComponents([.year], from: $0, to: Date()).year } ?? 0
                 
                 // Build VitalityRawMetrics from flexible window (7-30 days)
                 let rawMetrics = VitalityMetricsBuilder.fromWindow(age: age, records: vitalityData)
@@ -1185,7 +1197,8 @@ struct RiskResultsView: View {
                 // Calculate 7-day rolling average
                 guard let vitalityScore = VitalityCalculator.calculate7DayAverage(from: vitalityData) else {
                     await MainActor.run {
-                        errorMessage = "Need at least 7 days of data to calculate vitality score"
+                        isImportedVitalityStale = true
+                        errorMessage = "Could not compute a new score from this import (need at least 7 days). Showing last known score below."
                         showError = true
                         isImporting = false
                     }
@@ -1204,6 +1217,7 @@ struct RiskResultsView: View {
                 // Update UI
                 await MainActor.run {
                     importedVitalityScore = vitalityScore
+                    isImportedVitalityStale = false
                     isImporting = false
                 }
                 
@@ -1352,7 +1366,7 @@ struct RiskResultsView: View {
                 let data = try Data(contentsOf: url)
                 let dataset = try JSONDecoder().decode(ROOKDataset.self, from: data)
                 
-                let age = Calendar.current.dateComponents([.year], from: onboardingManager.dateOfBirth, to: Date()).year ?? 0
+                let age = onboardingManager.dateOfBirth.flatMap { Calendar.current.dateComponents([.year], from: $0, to: Date()).year } ?? 0
                 let windowRaw = ROOKWindowAggregator.buildWindowRawMetrics(age: age, dataset: dataset)
                 
                 // Backfill last 7 UTC days of pillar scores into vitality_scores for day-over-day trends (manual testing).
@@ -1466,7 +1480,7 @@ struct RiskResultsView: View {
             wearableSyncStatus = "Building your baseline from Apple Health… This can take a moment the first time."
         }
 
-        let age = Calendar.current.dateComponents([.year], from: onboardingManager.dateOfBirth, to: Date()).year ?? 0
+        let age = onboardingManager.dateOfBirth.flatMap { Calendar.current.dateComponents([.year], from: $0, to: Date()).year } ?? 0
         let engine = VitalityScoringEngine()
 
         func avgDouble(_ xs: [Double?]) -> Double? {

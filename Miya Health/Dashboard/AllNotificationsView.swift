@@ -300,9 +300,11 @@ struct AllNotificationsView: View {
             return Color.orange
         case .attention:
             return Color.red
+        @unknown default:
+            return Color.orange
         }
     }
-    
+
     private func pillarIcon(_ pillar: VitalityPillar) -> String {
         switch pillar {
         case .sleep: return "moon.stars.fill"

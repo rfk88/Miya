@@ -20,6 +20,8 @@ struct FamilyMemberScore: Identifiable {
     let onboardingType: String?
     let guidedSetupStatus: String?
     let isMe: Bool
+    /// Last time this member's vitality was updated (user_profiles.vitality_score_updated_at). Used for "last synced" display; aligns with missing-wearable logic.
+    let vitalityScoreUpdatedAt: Date?
 
     var ringProgress: Double {
         if let progressScore {

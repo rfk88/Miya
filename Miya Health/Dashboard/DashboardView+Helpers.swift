@@ -231,6 +231,7 @@ extension DashboardView {
         }
     }
     
+    /// Opens the Messages app with pre-filled body (user can send as iMessage or SMS depending on recipient).
     internal func openMessages(with message: String) {
         let encoded = message.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         let urlString = "sms:&body=\(encoded)"

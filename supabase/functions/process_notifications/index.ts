@@ -220,6 +220,9 @@ async function processNotification(notification: any): Promise<{
     if (alert?.severity) {
       severity = alert.severity;
     }
+  } else if (payload?.severity && typeof payload.severity === "string") {
+    // Non-pattern notifications (e.g. missing_wearable, challenges) can pass severity in payload
+    severity = payload.severity;
   }
 
   // Check if should send based on user preferences
@@ -329,10 +332,14 @@ Deno.serve(async (req) => {
     return jsonResponse({ ok: false, error: "Method not allowed" }, 405);
   }
 
-  // Verify admin secret for security
-  const expected = Deno.env.get("MIYA_ADMIN_SECRET") ?? "";
+  // Strict admin secret: reject when not configured (missing, non-string, or empty/whitespace).
+  const raw = Deno.env.get("MIYA_ADMIN_SECRET");
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
+  }
+  const expected = raw.trim();
   const provided = req.headers.get("x-miya-admin-secret") ?? "";
-  if (!expected || provided !== expected) {
+  if (provided !== expected) {
     return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
   }
 

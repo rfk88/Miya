@@ -13,6 +13,9 @@ import Supabase
 
 @MainActor
 final class EditProfileViewModel: ObservableObject {
+    /// Display placeholder when no DOB from server; never use Date() so we don't default to "today" (BUG-032). Internal so the view can reset dateOfBirth to this value.
+    static let dobPlaceholder: Date = Calendar.current.date(byAdding: .year, value: -30, to: Date()) ?? Date()
+
     enum SaveState {
         case idle
         case loading
@@ -25,7 +28,7 @@ final class EditProfileViewModel: ObservableObject {
     @Published var lastName: String = ""
 
     @Published var gender: String = ""
-    @Published var dateOfBirth: Date = Date()
+    @Published var dateOfBirth: Date = EditProfileViewModel.dobPlaceholder
     @Published var hasDateOfBirth: Bool = false
     @Published var ethnicity: String = ""
     @Published var smokingStatus: String = ""
@@ -342,18 +345,10 @@ struct EditProfileView: View {
                 LabeledPicker(label: "Gender", selection: $vm.gender, options: genders)
                     .onChange(of: vm.gender) { _ in vm.fieldDidChange() }
 
-                Toggle(isOn: $vm.hasDateOfBirth) {
-                    Text("Include date of birth")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.miyaTextPrimary)
-                }
-                .onChange(of: vm.hasDateOfBirth) { _ in vm.fieldDidChange() }
-
-                if vm.hasDateOfBirth {
-                    DatePicker("Date of birth", selection: $vm.dateOfBirth, displayedComponents: .date)
-                        .datePickerStyle(.compact)
-                        .onChange(of: vm.dateOfBirth) { _ in vm.fieldDidChange() }
-                }
+                // DOB is mandatory (BUG-032); always show picker, no toggle to skip
+                DatePicker("Date of birth", selection: $vm.dateOfBirth, displayedComponents: .date)
+                    .datePickerStyle(.compact)
+                    .onChange(of: vm.dateOfBirth) { _ in vm.fieldDidChange() }
 
                 LabeledPicker(label: "Ethnicity", selection: $vm.ethnicity, options: ethnicities)
                     .onChange(of: vm.ethnicity) { _ in vm.fieldDidChange() }
@@ -645,6 +640,7 @@ struct EditProfileView: View {
                     vm.dateOfBirth = dob
                     vm.hasDateOfBirth = true
                 } else {
+                    vm.dateOfBirth = EditProfileViewModel.dobPlaceholder
                     vm.hasDateOfBirth = false
                 }
 
@@ -678,6 +674,14 @@ struct EditProfileView: View {
             return
         }
 
+        // DOB is mandatory (BUG-032); must be in the past
+        let calendar = Calendar.current
+        let startOfToday = calendar.startOfDay(for: Date())
+        if vm.dateOfBirth >= startOfToday {
+            vm.saveState = .failure("Date of birth must be in the past.")
+            return
+        }
+
         if vm.isLoading { return }
         vm.isLoading = true
         defer { vm.isLoading = false }
@@ -686,7 +690,7 @@ struct EditProfileView: View {
             // 1) Profile fields (user_profiles)
             let height = Double(vm.heightCm.trimmingCharacters(in: .whitespacesAndNewlines))
             let weight = Double(vm.weightKg.trimmingCharacters(in: .whitespacesAndNewlines))
-            let dob: Date? = vm.hasDateOfBirth ? vm.dateOfBirth : nil
+            let dob: Date? = vm.dateOfBirth
 
             try await dataManager.saveUserProfile(
                 firstName: trimmedFirst,
@@ -798,9 +802,8 @@ struct EditProfileView: View {
             onboardingManager.gender = vm.gender
             onboardingManager.ethnicity = vm.ethnicity
             onboardingManager.smokingStatus = vm.smokingStatus
-            if vm.hasDateOfBirth {
-                onboardingManager.dateOfBirth = vm.dateOfBirth
-            }
+            // DOB is mandatory; always sync on save (BUG-032)
+            onboardingManager.dateOfBirth = vm.dateOfBirth
             if let height { onboardingManager.heightCm = height }
             if let weight { onboardingManager.weightKg = weight }
             onboardingManager.nutritionQuality = vm.nutritionQuality

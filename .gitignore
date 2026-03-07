@@ -92,6 +92,9 @@ iOSInjectionProject/
 # Supabase Configuration (contains sensitive API keys)
 Miya Health/SupabaseConfig.swift
 
+# ROOK and Supabase secrets (copy from Secrets.xcconfig.example, do not commit)
+Miya Health/Secrets.xcconfig
+
 # Environment variables and secrets
 .env
 .env.*

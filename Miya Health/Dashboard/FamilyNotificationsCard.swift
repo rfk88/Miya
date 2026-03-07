@@ -106,6 +106,7 @@ struct FamilyNotificationsCard: View {
         case .attention: return 3
         case .watch: return 2
         case .celebrate: return 1
+        @unknown default: return 2
         }
     }
     
@@ -117,6 +118,8 @@ struct FamilyNotificationsCard: View {
             return Color.orange
         case .attention:
             return Color.red
+        @unknown default:
+            return Color.orange
         }
     }
     

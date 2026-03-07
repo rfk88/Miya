@@ -11,7 +11,10 @@ import Foundation
 /// WHO-Based Risk Calculator
 /// Calculates risk points based on modifiable and non-modifiable risk factors
 struct RiskCalculator {
-    
+
+    /// Minimum sensible height (cm) for BMI; below this, BMI is treated as invalid (avoids absurd values from typos).
+    private static let minHeightCm = 10.0
+
     // MARK: - Risk Band Thresholds
     
     /// Risk bands based on total points
@@ -51,9 +54,10 @@ struct RiskCalculator {
     // MARK: - Age Points (0-20)
     
     /// Calculate points based on age
-    /// - Parameter dateOfBirth: User's date of birth
-    /// - Returns: Risk points (0-20)
-    static func agePoints(from dateOfBirth: Date) -> Int {
+    /// - Parameter dateOfBirth: User's date of birth; nil when not set (BUG-032)
+    /// - Returns: Risk points (0-20), or 0 when dateOfBirth is nil
+    static func agePoints(from dateOfBirth: Date?) -> Int {
+        guard let dateOfBirth else { return 0 }
         let calendar = Calendar.current
         let now = Date()
         let ageComponents = calendar.dateComponents([.year], from: dateOfBirth, to: now)
@@ -145,15 +149,18 @@ struct RiskCalculator {
     }
     
     // MARK: - BMI Points (0-10)
-    
-    /// Calculate points based on BMI
+
+    /// Calculate points based on BMI.
+    /// Returns 0 points if height or weight is not positive and finite, or if height is below a minimum sensible value; otherwise computes BMI and maps to 0–10 points.
     /// - Parameters:
     ///   - heightCm: Height in centimeters
     ///   - weightKg: Weight in kilograms
     /// - Returns: Risk points (0-10)
     static func bmiPoints(heightCm: Double, weightKg: Double) -> Int {
-        guard heightCm > 0 && weightKg > 0 else { return 0 }
-        
+        guard heightCm.isFinite, weightKg.isFinite,
+              heightCm >= Self.minHeightCm, weightKg > 0
+        else { return 0 }
+
         let heightM = heightCm / 100.0
         let bmi = weightKg / (heightM * heightM)
         
@@ -184,7 +191,7 @@ struct RiskCalculator {
     ///   - weightKg: Weight in kilograms
     /// - Returns: Tuple of (total points, risk band, optimal vitality target)
     static func calculateRisk(
-        dateOfBirth: Date,
+        dateOfBirth: Date?,
         smokingStatus: String,
         bloodPressureStatus: String,
         diabetesStatus: String,
@@ -204,6 +211,7 @@ struct RiskCalculator {
         let diabetes = diabetesPoints(diabetesStatus)
         let priorEvents = priorEventsPoints(heartAttack: hasPriorHeartAttack, stroke: hasPriorStroke)
         let family = familyHistoryPoints(heartDiseaseEarly: familyHeartDiseaseEarly, strokeEarly: familyStrokeEarly, diabetes: familyType2Diabetes)
+        // BMI points (0 if height/weight invalid; see bmiPoints)
         let bmi = bmiPoints(heightCm: heightCm, weightKg: weightKg)
         
         let totalPoints = age + smoking + bp + diabetes + priorEvents + family + bmi
@@ -240,7 +248,7 @@ struct RiskCalculator {
     /// Note: This returns a risk-adjusted goal on an age-fair 0-100 scale.
     /// Age-specific adjustments are handled by the VitalityScoringEngine's age-specific ranges.
     /// The target is a recommended starting goal (e.g., 85/100 for low risk), not a hard ceiling.
-    static func calculateOptimalTarget(dateOfBirth: Date, riskBand: RiskBand) -> Int {
+    static func calculateOptimalTarget(dateOfBirth: Date?, riskBand: RiskBand) -> Int {
         let personalMax = 100
         let factor = riskTargetFactor(for: riskBand)
         let target = Int((Double(personalMax) * factor).rounded())
