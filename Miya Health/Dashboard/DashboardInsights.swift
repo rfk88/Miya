@@ -224,6 +224,7 @@ struct TrendInsightCard: View {
         case .attention: return .orange
         case .watch: return .yellow
         case .celebrate: return .green
+        @unknown default: return .yellow
         }
     }
     

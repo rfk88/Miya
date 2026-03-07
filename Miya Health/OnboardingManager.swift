@@ -65,7 +65,7 @@ class OnboardingManager: ObservableObject {
             guidedSetupStatus = parseGuidedSetupStatus(rec.guidedSetupStatus)
 
             // Prefer canonical profile data from user_profiles if available; otherwise fall back to family_members.
-            if let profile = (try? await dataManager.loadUserProfile()) ?? nil {
+            if let profile = try? await dataManager.loadUserProfile() {
                 if let fn = profile.first_name?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !fn.isEmpty {
                     firstName = fn
@@ -124,7 +124,7 @@ class OnboardingManager: ObservableObject {
     // MARK: - Step 4: About You
     
     @Published var gender: String = ""
-    @Published var dateOfBirth: Date = Date()
+    @Published var dateOfBirth: Date? = nil
     @Published var ethnicity: String = ""
     @Published var smokingStatus: String = ""
     @Published var heightCm: Double = 0
@@ -239,7 +239,7 @@ class OnboardingManager: ObservableObject {
         
         // Step 4: About You
         gender = ""
-        dateOfBirth = Date()
+        dateOfBirth = nil
         ethnicity = ""
         smokingStatus = ""
         heightCm = 0

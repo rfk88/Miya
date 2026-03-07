@@ -31,6 +31,7 @@ struct MiyaInsightChatSheet: View {
     @State private var messages: [(role: String, text: String)] = []
     @State private var isSending = false
     @State private var errorText: String?
+    @State private var isPreparingInsight = false  // BUG-016: show when retrying after 409
     
     var body: some View {
         AnyView(
@@ -43,6 +44,12 @@ struct MiyaInsightChatSheet: View {
                                 .font(.system(size: 14))
                                 .foregroundColor(.red)
                                 .multilineTextAlignment(.center)
+                                .padding()
+                        }
+                        if isPreparingInsight {
+                            Text("Preparing your insight…")
+                                .font(.system(size: 14))
+                                .foregroundColor(.secondary)
                                 .padding()
                         }
                         if messages.isEmpty {
@@ -137,16 +144,42 @@ struct MiyaInsightChatSheet: View {
             
             let supabase = SupabaseConfig.client
             let session = try await supabase.auth.session
-            guard let url = URL(string: "\(SupabaseConfig.supabaseURL)/functions/v1/miya_insight_chat") else { throw URLError(.badURL) }
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
-            req.setValue(SupabaseConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
-            req.httpBody = try JSONSerialization.data(withJSONObject: ["alert_state_id": alertStateId, "message": text])
+            guard let chatURL = URL(string: "\(SupabaseConfig.supabaseURL)/functions/v1/miya_insight_chat") else { throw URLError(.badURL) }
+            var chatReq = URLRequest(url: chatURL)
+            chatReq.httpMethod = "POST"
+            chatReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            chatReq.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+            chatReq.setValue(SupabaseConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
+            chatReq.httpBody = try JSONSerialization.data(withJSONObject: ["alert_state_id": alertStateId, "message": text])
             
-            let (data, response) = try await URLSession.shared.data(for: req)
+            let (data, response) = try await URLSession.shared.data(for: chatReq)
             let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
+            
+            // BUG-016: On 409, trigger insight generation then retry chat once
+            if httpStatus == 409 {
+                await MainActor.run { isPreparingInsight = true }
+                if let insightURL = URL(string: "\(SupabaseConfig.supabaseURL)/functions/v1/miya_insight") {
+                    var insightReq = URLRequest(url: insightURL)
+                    insightReq.httpMethod = "POST"
+                    insightReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    insightReq.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+                    insightReq.setValue(SupabaseConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
+                    insightReq.httpBody = try? JSONSerialization.data(withJSONObject: ["alert_state_id": alertStateId])
+                    _ = try? await URLSession.shared.data(for: insightReq)
+                }
+                try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5s
+                let (retryData, retryResponse) = try await URLSession.shared.data(for: chatReq)
+                let retryStatus = (retryResponse as? HTTPURLResponse)?.statusCode ?? 0
+                let retryObj = (try? JSONSerialization.jsonObject(with: retryData)) as? [String: Any]
+                await MainActor.run { isPreparingInsight = false }
+                if retryStatus == 200, (retryObj?["ok"] as? Bool) == true, let reply = retryObj?["reply"] as? String {
+                    messages.append((role: "assistant", text: reply))
+                } else {
+                    errorText = "We're still preparing the insight. Please try again in a moment."
+                }
+                return
+            }
+            
             let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             guard (obj?["ok"] as? Bool) == true else {
                 let errBody = (obj?["error"] as? String) ?? String(data: data, encoding: .utf8) ?? "Unknown"
@@ -155,6 +188,7 @@ struct MiyaInsightChatSheet: View {
             let reply = obj?["reply"] as? String ?? "Sorry — I couldn't generate a response."
             messages.append((role: "assistant", text: reply))
         } catch {
+            await MainActor.run { isPreparingInsight = false }
             errorText = error.localizedDescription
         }
     }

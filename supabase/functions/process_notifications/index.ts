@@ -163,26 +163,240 @@ async function shouldSendNotification(
   }
 }
 
-// Send push notification (placeholder - integrate with APNs/FCM)
+// ── APNs JWT ─────────────────────────────────────────────────────────────────
+// JWT tokens are valid for 1 hour; we cache and reuse within a single worker run.
+let _cachedApnsJwt: { token: string; exp: number } | null = null;
+
+async function getApnsJwt(): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  if (_cachedApnsJwt && now < _cachedApnsJwt.exp) return _cachedApnsJwt.token;
+
+  const keyId = Deno.env.get("APNS_KEY_ID")!;
+  const teamId = Deno.env.get("APNS_TEAM_ID")!;
+  const pem = Deno.env.get("APNS_PRIVATE_KEY")!;
+
+  // Strip PEM headers and decode to DER bytes
+  const pemBody = pem
+    .replace(/-----BEGIN PRIVATE KEY-----/g, "")
+    .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\s+/g, "");
+  const keyDer = Uint8Array.from(atob(pemBody), (c) => c.charCodeAt(0));
+
+  const cryptoKey = await crypto.subtle.importKey(
+    "pkcs8",
+    keyDer,
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign"],
+  );
+
+  const b64url = (obj: unknown) =>
+    btoa(JSON.stringify(obj)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+
+  const header = b64url({ alg: "ES256", kid: keyId });
+  const jwtPayload = b64url({ iss: teamId, iat: now });
+  const signingInput = `${header}.${jwtPayload}`;
+
+  const sig = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    cryptoKey,
+    new TextEncoder().encode(signingInput),
+  );
+
+  const sigB64url = btoa(String.fromCharCode(...new Uint8Array(sig)))
+    .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+
+  const jwt = `${signingInput}.${sigB64url}`;
+  _cachedApnsJwt = { token: jwt, exp: now + 50 * 60 }; // Refresh 10 min before expiry
+  return jwt;
+}
+
+// ── Notification content builder ─────────────────────────────────────────────
+// Only these three kinds trigger a push. All others are silently skipped.
+
+function formatMetric(metric: string): string {
+  const map: Record<string, string> = {
+    sleep_minutes: "sleep duration",
+    steps: "step count",
+    hrv_ms: "HRV",
+    resting_hr: "resting heart rate",
+    sleep_efficiency_pct: "sleep efficiency",
+    movement_minutes: "active minutes",
+    deep_sleep_minutes: "deep sleep",
+  };
+  return map[metric] ?? metric.replace(/_/g, " ");
+}
+
+function formatPillar(pillar: string): string {
+  const map: Record<string, string> = {
+    sleep: "Sleep",
+    movement: "Movement",
+    stress: "Stress",
+    heart: "Heart Health",
+    nutrition: "Nutrition",
+  };
+  return map[pillar] ?? pillar;
+}
+
+// Returns { title, body } for allowed notification kinds, or null to skip.
+function buildAlert(
+  payload: any,
+  memberName: string,
+): { title: string; body: string } | null {
+  const kind: string = payload.kind ?? "";
+  const pillar = formatPillar(payload.pillar ?? "");
+  const metric = formatMetric(payload.metric_type ?? "");
+  const days: number = payload.level ?? 3;
+  const success = payload.status === "completed_success";
+
+  switch (kind) {
+    case "pattern_alert": {
+      const direction = payload.pattern_type === "rise_vs_baseline" ? "elevated" : "lower than usual";
+      return {
+        title: `${memberName}'s health alert`,
+        body: `${memberName}'s ${metric} has been ${direction} for ${days}+ days.`,
+      };
+    }
+
+    case "challenge_invite":
+      return {
+        title: "New Health Challenge",
+        body: `You've been invited to a ${pillar} challenge. Tap to see the details.`,
+      };
+
+    case "challenge_completed_member":
+      return {
+        title: success ? "Challenge Complete! 🎉" : "Challenge Ended",
+        body: success
+          ? `You completed your ${pillar} challenge. Great work!`
+          : `Your ${pillar} challenge has ended.`,
+      };
+
+    case "challenge_completed_admin":
+      return {
+        title: success
+          ? `${memberName} completed their challenge! 🎉`
+          : `${memberName}'s challenge ended`,
+        body: success
+          ? `${memberName} finished the ${pillar} challenge successfully.`
+          : `${memberName}'s ${pillar} challenge has ended.`,
+      };
+
+    default:
+      return null; // Skip — not a notification kind we want to push
+  }
+}
+
+async function getMemberFirstName(memberUserId: string | undefined): Promise<string> {
+  if (!memberUserId) return "Your family member";
+  const { data } = await supabase
+    .from("family_members")
+    .select("first_name")
+    .eq("user_id", memberUserId)
+    .maybeSingle();
+  return (data?.first_name as string | null) ?? "Your family member";
+}
+
+// ── Send push notification via APNs ──────────────────────────────────────────
 async function sendPushNotification(
   recipientUserId: string,
   payload: any,
 ): Promise<{ success: boolean; error?: string }> {
-  // TODO: Integrate with APNs (Apple Push Notification service)
-  // For now, log the notification
-  console.log("📱 PUSH_NOTIFICATION:", {
-    recipientUserId,
-    payload,
+  const bundleId = Deno.env.get("APNS_BUNDLE_ID");
+  const keyId = Deno.env.get("APNS_KEY_ID");
+  const teamId = Deno.env.get("APNS_TEAM_ID");
+  const privateKey = Deno.env.get("APNS_PRIVATE_KEY");
+
+  if (!bundleId || !keyId || !teamId || !privateKey) {
+    console.log("⚠️ APNs secrets not configured — skipping push");
+    return { success: true }; // Degrade gracefully so queue doesn't get stuck
+  }
+
+  // Resolve member name for notification copy
+  const memberName = await getMemberFirstName(payload.member_user_id);
+
+  // Build the alert — returns null if this notification kind should not be pushed
+  const alert = buildAlert(payload, memberName);
+  if (!alert) {
+    console.log(`⏭️ Skipping push for kind: ${payload.kind ?? "unknown"}`);
+    return { success: true }; // Mark as handled so queue doesn't retry
+  }
+
+  // Fetch active device tokens for this user
+  const { data: tokens, error: tokenErr } = await supabase
+    .from("device_tokens")
+    .select("device_token")
+    .eq("user_id", recipientUserId)
+    .eq("platform", "ios")
+    .eq("is_active", true);
+
+  if (tokenErr) {
+    console.error("Error fetching device tokens:", tokenErr);
+    return { success: false, error: "token_fetch_error" };
+  }
+
+  if (!tokens?.length) {
+    console.log("⚠️ No active device tokens for user:", recipientUserId);
+    return { success: false, error: "no_device_tokens" };
+  }
+
+  const apnsBody = JSON.stringify({
+    aps: {
+      alert: { title: alert.title, body: alert.body },
+      sound: "default",
+      badge: 1,
+    },
+    data: payload,
   });
 
-  // Placeholder: In production, this would:
-  // 1. Fetch device tokens from device_tokens table
-  // 2. Format APNs payload
-  // 3. Send to Apple's APNs endpoint
-  // 4. Handle response and update delivery status
+  let jwt: string;
+  try {
+    jwt = await getApnsJwt();
+  } catch (e) {
+    console.error("APNs JWT generation failed:", e);
+    return { success: false, error: `jwt_error: ${e}` };
+  }
 
-  // For now, simulate success
-  return { success: true };
+  let anySuccess = false;
+
+  for (const { device_token } of tokens) {
+    try {
+      const res = await fetch(
+        `https://api.push.apple.com/3/device/${device_token}`,
+        {
+          method: "POST",
+          headers: {
+            "authorization": `bearer ${jwt}`,
+            "apns-topic": bundleId,
+            "apns-push-type": "alert",
+            "content-type": "application/json",
+          },
+          body: apnsBody,
+        },
+      );
+
+      if (res.status === 200) {
+        anySuccess = true;
+        console.log(`✅ APNs push sent [${payload.kind}] to user:`, recipientUserId);
+      } else if (res.status === 410) {
+        // Token permanently invalid — deactivate so we don't waste future requests
+        await supabase
+          .from("device_tokens")
+          .update({ is_active: false })
+          .eq("device_token", device_token);
+        console.log("🗑️ Deactivated expired APNs token for user:", recipientUserId);
+      } else {
+        const body = await res.json().catch(() => ({}));
+        console.error("APNs error:", res.status, body);
+      }
+    } catch (e) {
+      console.error("APNs fetch error:", e);
+    }
+  }
+
+  return anySuccess
+    ? { success: true }
+    : { success: false, error: "apns_delivery_failed" };
 }
 
 // Process a single notification
@@ -220,6 +434,9 @@ async function processNotification(notification: any): Promise<{
     if (alert?.severity) {
       severity = alert.severity;
     }
+  } else if (payload?.severity && typeof payload.severity === "string") {
+    // Non-pattern notifications (e.g. missing_wearable, challenges) can pass severity in payload
+    severity = payload.severity;
   }
 
   // Check if should send based on user preferences
@@ -329,10 +546,14 @@ Deno.serve(async (req) => {
     return jsonResponse({ ok: false, error: "Method not allowed" }, 405);
   }
 
-  // Verify admin secret for security
-  const expected = Deno.env.get("MIYA_ADMIN_SECRET") ?? "";
+  // Strict admin secret: reject when not configured (missing, non-string, or empty/whitespace).
+  const raw = Deno.env.get("MIYA_ADMIN_SECRET");
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
+  }
+  const expected = raw.trim();
   const provided = req.headers.get("x-miya-admin-secret") ?? "";
-  if (!expected || provided !== expected) {
+  if (provided !== expected) {
     return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
   }
 

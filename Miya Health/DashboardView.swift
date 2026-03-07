@@ -19,6 +19,21 @@ import RookSDK
 
 // MARK: - DASHBOARD VIEW
 
+struct MemberPillarNavigation: Identifiable, Hashable {
+    let id = UUID()
+    let member: FamilyMemberScore
+    let pillar: PillarType
+    let familyId: String
+
+    static func == (lhs: MemberPillarNavigation, rhs: MemberPillarNavigation) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
 struct DashboardView: View {
     let familyName: String
     
@@ -27,6 +42,7 @@ struct DashboardView: View {
     @EnvironmentObject var onboardingManager: OnboardingManager
     
     @State internal var selectedFactor: VitalityFactor? = nil
+    @State internal var memberPillarNavigation: MemberPillarNavigation? = nil
     @State internal var familyMembers: [FamilyMemberScore] = []
     @State internal var resolvedFamilyName: String = ""
     @State internal var vitalityFactors: [VitalityFactor] = []
@@ -76,6 +92,10 @@ struct DashboardView: View {
     @State internal var serverPatternAlerts: [FamilyNotificationItem] = []
     @State internal var selectedFamilyNotification: FamilyNotificationItem? = nil
     @State internal var dataBackfillStatus: DataBackfillStatus? = nil
+    @State internal var showBackfillDetailSheet: Bool = false
+    @State internal var activeMemberChallenge: ActiveChallenge? = nil
+    @State internal var showChallengeInviteSheet: Bool = false
+    @State internal var pendingChallengeInvite: (challengeId: String, pillar: VitalityPillar, senderName: String)? = nil
     
     // Vitality sync state
     @State internal var isCheckingVitality: Bool = false
@@ -90,23 +110,35 @@ struct DashboardView: View {
     @State internal var isDataInsufficient: Bool = false
     
     struct DataBackfillStatus {
+        struct MemberSyncDetail: Identifiable {
+            let id: String   // userId
+            let name: String
+            let userId: String
+            let lastSyncDate: Date?
+            let hasBackfill: Bool
+        }
         let affectedMemberCount: Int
         let oldestSourceDays: Int
-        let pillarsAffected: [String] // ["Activity", "Sleep"]
+        let pillarsAffected: [String]
+        let memberSyncDetails: [MemberSyncDetail]
     }
     
     // Family badges (Daily computed; Weekly persisted)
     @State internal var dailyBadgeWinners: [BadgeEngine.Winner] = []
     @State internal var weeklyBadgeWinners: [BadgeEngine.Winner] = []
+    @State internal var isComputingBadges: Bool = false
 
     // Bell (personal + challenge) notifications
     @State internal var bellNotifications: [BellNotification] = []
     @State internal var weeklyBadgeWeekStart: String? = nil
     @State internal var weeklyBadgeWeekEnd: String? = nil
     @State internal var selectedBadge: BadgeEngine.Winner? = nil
+    /// When non-nil, weekly Champions save failed; show banner with message and Try again (BUG-024).
+    @State internal var badgeSaveError: String? = nil
     
     // Superadmin-only: present Invite Member flow from sidebar reliably (single source of truth at Dashboard root)
     @State internal var isInviteMemberSheetPresented: Bool = false
+    @State internal var showFamilyChallenges: Bool = false
     
     // Loading states (avoid flashing placeholders while data is still loading)
     @State internal var isLoadingFamilyMembers: Bool = false
@@ -114,15 +146,21 @@ struct DashboardView: View {
     @State internal var isShowingDebugAddRecord: Bool = false
     
     internal var displayedNotifications: [FamilyNotificationItem] {
-        // Only show notifications when we have a valid snapshot and are not in the middle of
-        // recomputing trend insights.
+        // Server pattern alerts come directly from the DB — they don't require a local snapshot
+        // or trend computation. Show them as soon as they are loaded.
+        if !serverPatternAlerts.isEmpty {
+            return filterByCurrentUser(serverPatternAlerts)
+        }
+        
+        // Trend/fallback notifications require a full family snapshot and finished trend insight
+        // computation. Block until all local state is ready to avoid flickering empty states.
         guard let snapshot = familySnapshot,
               familyVitalityScore != nil,
               !isComputingTrendInsights else {
             return []
         }
         
-        // 1) Build base family notifications (trend + fallback), filtering out celebrate-only items.
+        // Build base family notifications (trend + fallback), filtering out celebrate-only items.
         let trendNotifications = FamilyNotificationItem.build(
             snapshot: snapshot,
             trendInsights: trendInsights,
@@ -136,20 +174,19 @@ struct DashboardView: View {
             return true
         }
         
-        let baseList = serverPatternAlerts.isEmpty ? trendNotifications : serverPatternAlerts
-        
-        // 2) Exclude notifications about the logged-in user from the *family* notifications feed.
-        //    Personal drifts are surfaced via the bell / personal notification channels instead.
+        return filterByCurrentUser(trendNotifications)
+    }
+    
+    /// Exclude notifications about the logged-in user from the family notifications feed.
+    /// Personal drifts are surfaced via the bell / personal notification channels instead.
+    private func filterByCurrentUser(_ items: [FamilyNotificationItem]) -> [FamilyNotificationItem] {
         guard let currentUserId = currentUserIdString?.lowercased(), !currentUserId.isEmpty else {
-            return baseList
+            return items
         }
-        
-        return baseList.filter { item in
+        return items.filter { item in
             if let memberId = item.memberUserId?.lowercased() {
                 return memberId != currentUserId
             }
-            // If we don't know who the notification is about, keep it rather than risking
-            // filtering out legitimate family alerts.
             return true
         }
     }
@@ -160,8 +197,6 @@ struct DashboardView: View {
             
             VStack(spacing: 0) {
                 dashboardTopBar
-                
-                manualRefreshRow
                 
                 mainScrollContent
             }
@@ -179,7 +214,29 @@ struct DashboardView: View {
         
         // Attach sheets to the whole dashboard view
         .sheet(item: $selectedFactor) { factor in
-            VitalityFactorDetailSheet(factor: factor, dataManager: dataManager)
+            VitalityFactorDetailSheet(
+                factor: factor,
+                dataManager: dataManager,
+                onMemberTapped: { member, pillar in
+                    guard let fid = dataManager.currentFamilyId else { return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+                        memberPillarNavigation = MemberPillarNavigation(
+                            member: member,
+                            pillar: pillar,
+                            familyId: fid
+                        )
+                    }
+                }
+            )
+        }
+        .navigationDestination(item: $memberPillarNavigation) { nav in
+            FamilyMemberProfileView(
+                memberUserId: nav.member.userId ?? "",
+                memberName: nav.member.name,
+                familyId: nav.familyId,
+                isCurrentUser: nav.member.isMe,
+                initialPillar: nav.pillar
+            )
         }
         .sheet(item: $selectedBadge) { winner in
             BadgeDetailSheet(winner: winner)
@@ -191,7 +248,28 @@ struct DashboardView: View {
             ActivityView(activityItems: [shareText])
         }
         .sheet(item: $selectedFamilyNotification) { item in
-            familyNotificationSheet(item)
+            // Always use the latest version from serverPatternAlerts so care state
+            // updates (e.g. "Following up" after challenge sent) are reflected live.
+            let liveItem = serverPatternAlerts.first(where: { $0.id == item.id }) ?? item
+            familyNotificationSheet(liveItem)
+        }
+        .sheet(isPresented: $showFamilyChallenges) {
+            FamilyChallengesView()
+                .environmentObject(dataManager)
+        }
+        .sheet(isPresented: $showChallengeInviteSheet) {
+            if let invite = pendingChallengeInvite {
+                ChallengeInviteSheet(
+                    challengeId: invite.challengeId,
+                    pillar: invite.pillar,
+                    senderName: invite.senderName,
+                    dataManager: dataManager
+                )
+                .onDisappear {
+                    pendingChallengeInvite = nil
+                    Task { await loadActiveMemberChallenge() }
+                }
+            }
         }
         .sheet(isPresented: $showAllNotifications) {
             allNotificationsSheet
@@ -301,10 +379,13 @@ struct DashboardView: View {
         FamilyNotificationDetailSheet(
             item: item,
             onStartRecommendedChallenge: {
-                // Kick off a 7-day \"get back to baseline\" challenge for this member/pillar.
-                Task { [self] in
-                    await startRecommendedChallenge(for: item)
+                let success = await startRecommendedChallenge(for: item)
+                if success {
+                    // Refresh the notification card immediately so "Following up" appears
+                    // without waiting for the sheet to fully dismiss.
+                    await loadServerPatternAlerts()
                 }
+                return success
             },
             dataManager: dataManager
         )
@@ -447,6 +528,7 @@ struct DashboardView: View {
         internal var dashboardTopBar: some View {
                 DashboardTopBar(
                 familyName: resolvedFamilyName.isEmpty ? familyName : resolvedFamilyName,
+                notificationCount: bellNotifications.count,
                 onShareTapped: {
                     // 1) Build the share text
                     prepareShareText()
@@ -569,8 +651,34 @@ struct DashboardView: View {
                     showNotifications = false
                 }
                 
-            case .challengeInvite, .challengeDaily, .challengeCompleted:
-                // Awareness-only: close the bell panel and keep the user on the dashboard.
+            case .challengeInvite(let isForSelf, let pillar, let challengeId, let adminUserId):
+                if isForSelf {
+                    let senderName = resolveInviterDisplayName(adminUserId: adminUserId) ?? "your family"
+                    pendingChallengeInvite = (challengeId, pillar, senderName)
+                    showChallengeInviteSheet = true
+                } else {
+                    showFamilyChallenges = true
+                }
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                    showNotifications = false
+                }
+                
+            case .careOutcome(let alertStateId, _):
+                if let id = alertStateId,
+                   let item = serverPatternAlerts.first(where: { $0.id == id }) {
+                    selectedFamilyNotification = item
+                }
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                    showNotifications = false
+                }
+                
+            case .challengeInviteExpired:
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                    showNotifications = false
+                }
+                
+            case .challengeDaily, .challengeCompleted:
+                showFamilyChallenges = true
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
                     showNotifications = false
                 }
@@ -582,6 +690,12 @@ struct DashboardView: View {
             withAnimation(.easeInOut(duration: 0.15)) {
                 bellNotifications.removeAll { $0.id == notification.id }
             }
+        }
+        
+        /// Resolve display name for challenge inviter from the admin_user_id in the notification payload.
+        private func resolveInviterDisplayName(adminUserId: String?) -> String? {
+            guard let adminId = adminUserId?.lowercased() else { return nil }
+            return familyMembers.first { $0.userId?.lowercased() == adminId }?.name.components(separatedBy: " ").first
         }
         
         internal var sidebarOverlay: some View {
@@ -607,6 +721,10 @@ struct DashboardView: View {
                     },
                     onUpdateResolvedFamilyName: { newName in
                         resolvedFamilyName = newName
+                    },
+                    onFamilyChallenges: {
+                        showFamilyChallenges = true
+                        showSidebar = false
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -820,15 +938,19 @@ struct DashboardView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: DashboardDesign.sectionSpacing) {
                     dataBackfillBanner
-                    debugButtonsRow
                     familyMembersSection
                     guidedSetupSection
                     missingWearableSection
                     familyVitalitySection
+                    notificationsSection
+                    if let challenge = activeMemberChallenge {
+                        MyChallengeView(challenge: challenge)
+                    }
                     ChatWithArloCard(onTap: {
                         Task { await presentArloChat() }
                     })
                     dataGuidanceBannerSection
+                    badgeSaveErrorBanner
                     badgesSection
                     personalVitalitySection
                     Spacer(minLength: DashboardDesign.sectionSpacing)
@@ -848,17 +970,64 @@ struct DashboardView: View {
         @ViewBuilder
         internal var dataBackfillBanner: some View {
             if let status = dataBackfillStatus {
+                Button {
+                    showBackfillDetailSheet = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .foregroundColor(.orange)
+                            .font(.system(size: 14))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Some data estimated from \(status.oldestSourceDays)d ago")
+                                .font(.system(size: 13))
+                                .foregroundColor(.miyaTextPrimary)
+                            Text("\(status.affectedMemberCount) member\(status.affectedMemberCount == 1 ? "" : "s") affected — tap to see details")
+                                .font(.system(size: 11))
+                                .foregroundColor(.miyaTextSecondary)
+                        }
+                        Spacer()
+                        Button {
+                            withAnimation { dataBackfillStatus = nil }
+                        } label: {
+                            Text("Dismiss")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.blue)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.yellow.opacity(0.15))
+                    .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, DashboardDesign.cardPadding)
+                .padding(.top, 8)
+                .sheet(isPresented: $showBackfillDetailSheet) {
+                    BackfillDetailSheet(status: status)
+                }
+            }
+        }
+        
+        @ViewBuilder
+        internal var badgeSaveErrorBanner: some View {
+            if let message = badgeSaveError {
                 HStack(spacing: 8) {
-                    Image(systemName: "clock.arrow.circlepath")
+                    Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundColor(.orange)
                         .font(.system(size: 14))
-                    Text("Some data estimated from \(status.oldestSourceDays)d ago (\(status.affectedMemberCount) member\(status.affectedMemberCount == 1 ? "" : "s"))")
+                    Text("Champions couldn't be saved. \(message)")
                         .font(.system(size: 13))
                         .foregroundColor(.miyaTextPrimary)
                     Spacer()
+                    Button("Try again") {
+                        Task { await computeFamilyBadgesIfNeeded() }
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.blue)
                     Button("Dismiss") {
                         withAnimation {
-                            dataBackfillStatus = nil
+                            badgeSaveError = nil
                         }
                     }
                     .font(.system(size: 12, weight: .medium))
@@ -925,6 +1094,64 @@ struct DashboardView: View {
                 }
             }
             .padding(.top, 8)
+        }
+
+        // MARK: - Last Synced Status Row
+
+        @ViewBuilder
+        internal var lastSyncedStatusRow: some View {
+            let lastSync = UserDefaults.standard.object(forKey: "rook_last_foreground_sync") as? Date
+            let hoursSince = lastSync.map { Date().timeIntervalSince($0) / 3600 } ?? Double.infinity
+
+            HStack(spacing: 6) {
+                if isWearableSyncing {
+                    ProgressView()
+                        .scaleEffect(0.65)
+                        .frame(width: 14, height: 14)
+                    Text("Syncing health data…")
+                        .font(DashboardDesign.captionFont)
+                        .foregroundColor(DashboardDesign.tertiaryTextColor)
+                } else if let date = lastSync {
+                    Image(systemName: hoursSince < 6 ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(hoursSince < 6 ? .green.opacity(0.65) : .orange.opacity(0.75))
+                    Text("Synced \(relativeSyncLabel(date))")
+                        .font(DashboardDesign.captionFont)
+                        .foregroundColor(DashboardDesign.tertiaryTextColor)
+                } else {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange.opacity(0.75))
+                    Text("Health data not yet synced")
+                        .font(DashboardDesign.captionFont)
+                        .foregroundColor(DashboardDesign.tertiaryTextColor)
+                }
+
+                Spacer()
+
+                if !isWearableSyncing && hoursSince > 6 {
+                    Button {
+                        Task { await checkAndUpdateCurrentUserVitality() }
+                    } label: {
+                        Text("Sync now")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.miyaPrimary)
+                    }
+                    .disabled(isCheckingVitality)
+                }
+            }
+            .padding(.top, -8)
+        }
+
+        private func relativeSyncLabel(_ date: Date) -> String {
+            let seconds = Date().timeIntervalSince(date)
+            let minutes = Int(seconds / 60)
+            let hours = Int(seconds / 3600)
+            if minutes < 1 { return "just now" }
+            if minutes < 60 { return "\(minutes)m ago" }
+            if hours < 24 { return "\(hours)h ago" }
+            let days = hours / 24
+            return "\(days)d ago"
         }
         
         @ViewBuilder
@@ -1057,22 +1284,13 @@ struct DashboardView: View {
                         return nil
                     }(),
                     progressScore: familyVitalityProgressScore,
-                    notifications: displayedNotifications,
-                    onNotificationTap: { item in
-                        selectedFamilyNotification = item
+                    onFactorTapped: { tappedFactor in
+                        selectedFactor = tappedFactor
                     },
-                    onNotificationSeeAll: {
-                        showAllNotifications = true
-                    },
-                    onNotificationSnooze: { item, days in
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            serverPatternAlerts.removeAll { $0.id == item.id }
-                        }
-                        Task { await snoozeNotification(item, days: days) }
+                    onFamilyChallenges: {
+                        showFamilyChallenges = true
                     }
-                ) { tappedFactor in
-                    selectedFactor = tappedFactor
-                }
+                )
             } else {
                 FamilyVitalityPlaceholderCard()
             }
@@ -1116,6 +1334,7 @@ struct DashboardView: View {
                 weekly: weeklyBadgeWinners,
                 weekStart: weeklyBadgeWeekStart,
                 weekEnd: weeklyBadgeWeekEnd,
+                isLoading: isComputingBadges,
                 onBadgeTapped: { selectedBadge = $0 }
             )
         }
@@ -1152,5 +1371,76 @@ struct DashboardView: View {
         }
     }
 
+// MARK: - Backfill Detail Sheet
 
- 
+private struct BackfillDetailSheet: View {
+    let status: DashboardView.DataBackfillStatus
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("When wearable data is missing for a day, Miya estimates using the most recent reading (up to 3 days old). Reach out to members who haven't synced recently and ask them to open the app or check their wearable connection.")
+                        .font(.system(size: 14))
+                        .foregroundColor(.miyaTextSecondary)
+                        .listRowBackground(Color.miyaCreamBg)
+                        .padding(.vertical, 4)
+                }
+
+                Section("Family members") {
+                    ForEach(status.memberSyncDetails) { detail in
+                        HStack(spacing: 12) {
+                            Circle()
+                                .fill(Color.miyaSurfaceGrey)
+                                .frame(width: 36, height: 36)
+                                .overlay(
+                                    Text(String(detail.name.prefix(1)).uppercased())
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundColor(.miyaTextPrimary)
+                                )
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(detail.name)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundColor(.miyaTextPrimary)
+
+                                if let date = detail.lastSyncDate {
+                                    let daysAgo = Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0
+                                    Text(daysAgo == 0 ? "Synced today" : "Last synced \(daysAgo) day\(daysAgo == 1 ? "" : "s") ago")
+                                        .font(.system(size: 13))
+                                        .foregroundColor(daysAgo <= 1 ? .miyaTextSecondary : (daysAgo <= 3 ? .orange : .miyaTerracotta))
+                                } else {
+                                    Text("No wearable data yet")
+                                        .font(.system(size: 13))
+                                        .foregroundColor(.miyaTextSecondary)
+                                }
+                            }
+
+                            Spacer()
+
+                            if detail.hasBackfill {
+                                Image(systemName: "clock.arrow.circlepath")
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.orange)
+                            } else if detail.lastSyncDate != nil {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.green.opacity(0.7))
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Data Sync Status")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}

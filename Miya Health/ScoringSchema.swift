@@ -188,14 +188,14 @@ struct AgeSpecificBenchmarks {
     }
     
     /// Get the metric range for a specific age
-    func range(forAge age: Int) -> MetricRange {
+    func range(forAge age: Int) -> MetricRange? {
         let ageGroup = AgeGroup.from(age: age)
-        return byAgeGroup[ageGroup]!
+        return byAgeGroup[ageGroup]
     }
     
     /// Get the metric range for a specific age group
-    func range(forAgeGroup ageGroup: AgeGroup) -> MetricRange {
-        return byAgeGroup[ageGroup]!
+    func range(forAgeGroup ageGroup: AgeGroup) -> MetricRange? {
+        return byAgeGroup[ageGroup]
     }
 }
 

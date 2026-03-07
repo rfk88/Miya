@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var importStatus: String = ""
     @State private var showingAlert = false
     @State private var currentVitalityScore: VitalityScore?
+    @State private var isVitalityScoreStale = false
     @State private var showingVitalityUpload = false
     
     var body: some View {
@@ -98,6 +99,11 @@ struct SettingsView: View {
                 if let score = currentVitalityScore {
                     Section {
                         VStack(spacing: 16) {
+                            if isVitalityScoreStale {
+                                Text("Old data")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
                             // Total Score
                             HStack {
                                 Text("Current Vitality Score")
@@ -118,7 +124,7 @@ struct SettingsView: View {
                                 ScoreRow(label: "Stress/Recovery", points: score.stressPoints, max: 30)
                             }
                             
-                            Text("Based on 7-day rolling average")
+                            Text(isVitalityScoreStale ? "Last known score — not from latest import" : "Based on 7-day rolling average")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -131,6 +137,7 @@ struct SettingsView: View {
                 Section {
                     Button(role: .destructive) {
                         currentVitalityScore = nil
+                        isVitalityScoreStale = false
                         importStatus = ""
                     } label: {
                         Text("Clear Test Data")
@@ -194,10 +201,12 @@ struct SettingsView: View {
             // Calculate 7-day rolling average
             if let score = VitalityCalculator.calculate7DayAverage(from: vitalityData) {
                 currentVitalityScore = score
+                isVitalityScoreStale = false
                 importStatus = "✅ Imported \(vitalityData.count) days of data"
                 showingAlert = true
             } else {
-                importStatus = "❌ Need at least 7 days of data for calculation"
+                isVitalityScoreStale = true
+                importStatus = "Could not compute a new score from this file (need at least 7 days). Showing last known score."
                 showingAlert = true
             }
             

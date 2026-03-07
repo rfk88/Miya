@@ -244,7 +244,32 @@ struct ROOKWindowAggregator {
     }
     
     // MARK: - Date Normalization
-    
+
+    /// Reused for day-key parse/format; avoid per-call allocation (BUG-034). Synchronous aggregation only.
+    private static let sharedDayFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.timeZone = TimeZone(secondsFromGMT: 0)
+        df.dateFormat = "yyyy-MM-dd"
+        return df
+    }()
+
+    /// ISO8601 with fractional seconds; reused to avoid per-call allocation (BUG-034).
+    private static let sharedISO8601WithFractionalSeconds: ISO8601DateFormatter = {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        iso.timeZone = TimeZone(secondsFromGMT: 0)
+        return iso
+    }()
+
+    /// ISO8601 without fractional seconds; reused to avoid per-call allocation (BUG-034).
+    private static let sharedISO8601NoFractionalSeconds: ISO8601DateFormatter = {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        iso.timeZone = TimeZone(secondsFromGMT: 0)
+        return iso
+    }()
+
     /// Normalize a ROOK date/datetime string to UTC "YYYY-MM-DD".
     /// Supports ISO8601 with/without fractional seconds, plus plain "YYYY-MM-DD".
     private static func normalizeUTCYYYYMMDD(from raw: String) -> String? {
@@ -254,35 +279,23 @@ struct ROOKWindowAggregator {
             // Cheap structural check before DateFormatter parse.
             // (Avoids String integer subscripting; DateFormatter parse is the final truth.)
             if prefix10.count == 10, prefix10.split(separator: "-").count == 3 {
-                // If prefix parses as date, accept it.
-                let df = DateFormatter()
-                df.locale = Locale(identifier: "en_US_POSIX")
-                df.timeZone = TimeZone(secondsFromGMT: 0)
-                df.dateFormat = "yyyy-MM-dd"
-                if df.date(from: prefix10) != nil {
+                if sharedDayFormatter.date(from: prefix10) != nil {
                     return prefix10
                 }
             }
         }
         
         // ISO8601 parsing
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        iso.timeZone = TimeZone(secondsFromGMT: 0)
-        if let d = iso.date(from: raw) {
+        if let d = sharedISO8601WithFractionalSeconds.date(from: raw) {
             return formatUTCYYYYMMDD(d)
         }
-        
-        let isoNoFrac = ISO8601DateFormatter()
-        isoNoFrac.formatOptions = [.withInternetDateTime]
-        isoNoFrac.timeZone = TimeZone(secondsFromGMT: 0)
-        if let d = isoNoFrac.date(from: raw) {
+        if let d = sharedISO8601NoFractionalSeconds.date(from: raw) {
             return formatUTCYYYYMMDD(d)
         }
         
         // Fallback: try replacing space with T (some ROOK granular timestamps use spaces)
         let normalized = raw.replacingOccurrences(of: " ", with: "T")
-        if let d = iso.date(from: normalized) ?? isoNoFrac.date(from: normalized) {
+        if let d = sharedISO8601WithFractionalSeconds.date(from: normalized) ?? sharedISO8601NoFractionalSeconds.date(from: normalized) {
             return formatUTCYYYYMMDD(d)
         }
         
@@ -290,19 +303,11 @@ struct ROOKWindowAggregator {
     }
     
     private static func formatUTCYYYYMMDD(_ date: Date) -> String {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.timeZone = TimeZone(secondsFromGMT: 0)
-        df.dateFormat = "yyyy-MM-dd"
-        return df.string(from: date)
+        return sharedDayFormatter.string(from: date)
     }
     
     private static func parseUTCYYYYMMDD(_ dayKey: String) -> Date? {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.timeZone = TimeZone(secondsFromGMT: 0)
-        df.dateFormat = "yyyy-MM-dd"
-        return df.date(from: dayKey)
+        return sharedDayFormatter.date(from: dayKey)
     }
 }
 

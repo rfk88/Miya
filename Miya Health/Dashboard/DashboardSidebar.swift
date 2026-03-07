@@ -29,25 +29,37 @@ struct AccountSidebarView: View {
     var onAvatarURLUpdated: ((String?) -> Void)? = nil
 
     @EnvironmentObject private var dataManager: DataManager
+    @EnvironmentObject private var onboardingManager: OnboardingManager
 
-    // TEMP: mocked devices – later wire real data
-    private let connectedDevices: [ConnectedDevice] = [
-        ConnectedDevice(name: "Apple Health", lastSyncDescription: "2 hours ago")
-    ]
-    
-    // Profile editing state
-    @State private var isEditingProfile: Bool = false
-    @State private var draftName: String = ""
-    @State private var draftEmail: String = ""
-    @State private var isSavingProfile: Bool = false
-    @State private var profileErrorMessage: String?
-    
+    private var lastRookSync: Date? {
+        UserDefaults.standard.object(forKey: "rook_last_foreground_sync") as? Date
+    }
+
+    private var rookSyncHoursAgo: Double {
+        lastRookSync.map { Date().timeIntervalSince($0) / 3600 } ?? Double.infinity
+    }
+
+    private func relativeSyncLabel(_ date: Date) -> String {
+        let seconds = Date().timeIntervalSince(date)
+        let minutes = Int(seconds / 60)
+        let hours = Int(seconds / 3600)
+        if minutes < 1 { return "just now" }
+        if minutes < 60 { return "\(minutes)m ago" }
+        if hours < 24 { return "\(hours)h ago" }
+        return "\(hours / 24)d ago"
+    }
+
+    // Sheet state
+    @State private var showEditProfile: Bool = false
+    @State private var showChangeEmail: Bool = false
+    @State private var showChangePassword: Bool = false
+
     // DISABLED: Family name editing state variables (feature temporarily removed)
     // @State private var isEditingFamilyName: Bool = false
     // @State private var draftFamilyName: String = ""
     // @State private var isSavingFamilyName: Bool = false
     // @State private var familyNameErrorMessage: String?
-    
+
     // Device detail state
     @State private var activeDevice: ConnectedDevice? = nil
     
@@ -82,17 +94,6 @@ struct AccountSidebarView: View {
     @State private var localUserName: String
     @State private var localFamilyName: String
     
-    private enum ProfileSaveError: LocalizedError {
-        case timeout
-        
-        var errorDescription: String? {
-            switch self {
-            case .timeout:
-                return "Saving took too long. Please check your connection and try again."
-            }
-        }
-    }
-
     private var userInitials: String {
         initials(from: localUserName)
     }
@@ -201,15 +202,11 @@ struct AccountSidebarView: View {
                                     .font(.footnote)
                                     .foregroundColor(.red.opacity(0.9))
                             }
+
                             Button {
-                                draftName = localUserName
-                                draftEmail = userEmail
-                                profileErrorMessage = nil
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    isEditingProfile = true
-                                }
+                                showEditProfile = true
                             } label: {
-                                Text(isEditingProfile ? "Editing…" : "Edit profile")
+                                Text("Edit profile")
                                     .font(.system(size: 14, weight: .semibold))
                                     .padding(.vertical, 6)
                                     .padding(.horizontal, 12)
@@ -217,178 +214,98 @@ struct AccountSidebarView: View {
                                     .foregroundColor(.white)
                                     .cornerRadius(999)
                             }
-                            
-                            if isEditingProfile {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Name")
-                                            .font(.system(size: 13, weight: .medium))
-                                            .foregroundColor(.miyaTextSecondary)
-                                        TextField("Name", text: $draftName)
-                                            .padding(10)
-                                            .background(Color.miyaBackground)
-                                            .cornerRadius(10)
-                                    }
-                                    
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Email")
-                                            .font(.system(size: 13, weight: .medium))
-                                            .foregroundColor(.miyaTextSecondary)
-                                        TextField("Email", text: $draftEmail)
-                                            .padding(10)
-                                            .background(Color.miyaBackground)
-                                            .cornerRadius(10)
-                                            .disabled(true)
-                                        Text("Email is managed by your login provider.")
-                                            .font(.footnote)
-                                            .foregroundColor(.white.opacity(0.7))
-                                    }
-                                    
-                                    if let profileErrorMessage {
-                                        Text(profileErrorMessage)
-                                            .font(.footnote)
-                                            .foregroundColor(.red.opacity(0.9))
-                                    }
-                                    
-                                    HStack {
-                                        Button {
-                                            withAnimation(.easeInOut(duration: 0.2)) {
-                                                isEditingProfile = false
-                                            }
-                                            profileErrorMessage = nil
-                                        } label: {
-                                            Text("Cancel")
-                                                .font(.system(size: 14, weight: .semibold))
-                                                .frame(maxWidth: .infinity)
-                                                .padding(.vertical, 8)
-                                        }
-                                        
-                                        Button {
-                                            Task {
-                                                let trimmed = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                                guard !trimmed.isEmpty else {
-                                                    await MainActor.run {
-                                                        profileErrorMessage = "Name can't be empty."
-                                                    }
-                                                    return
-                                                }
-                                                
-                                                await MainActor.run {
-                                                    isSavingProfile = true
-                                                    profileErrorMessage = nil
-                                                }
-                                                
-                                                defer {
-                                                    Task { @MainActor in
-                                                        isSavingProfile = false
-                                                    }
-                                                }
-                                                
-                                                do {
-                                                    try await saveProfileWithTimeout(trimmed)
-                                                    await MainActor.run {
-                                                        localUserName = trimmed
-                                                        withAnimation(.easeInOut(duration: 0.2)) {
-                                                            isEditingProfile = false
-                                                        }
-                                                        profileErrorMessage = nil
-                                                    }
-                                                } catch {
-                                                    await MainActor.run {
-                                                        profileErrorMessage = error.localizedDescription
-                                                    }
-                                                }
-                                            }
-                                        } label: {
-                                            HStack {
-                                                if isSavingProfile {
-                                                    ProgressView()
-                                                        .progressViewStyle(.circular)
-                                                }
-                                                Text(isSavingProfile ? "Saving…" : "Save")
-                                                    .font(.system(size: 14, weight: .semibold))
-                                            }
-                                            .frame(maxWidth: .infinity)
-                                            .padding(.vertical, 8)
-                                        }
-                                        .background(Color.miyaEmerald)
+
+                            Divider().background(Color.white.opacity(0.15))
+
+                            Button {
+                                showChangeEmail = true
+                            } label: {
+                                HStack {
+                                    Text("Change email")
+                                        .font(.system(size: 13))
                                         .foregroundColor(.white)
-                                        .cornerRadius(10)
-                                        .disabled(isSavingProfile)
-                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(.white.opacity(0.6))
                                 }
-                                .padding(.top, 8)
+                                .padding(.vertical, 4)
+                            }
+
+                            Button {
+                                showChangePassword = true
+                            } label: {
+                                HStack {
+                                    Text("Change password")
+                                        .font(.system(size: 13))
+                                        .foregroundColor(.white)
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(.white.opacity(0.6))
+                                }
+                                .padding(.vertical, 4)
                             }
                         }
                         
                         // CONNECTED DEVICES
                         AccountSection("Connected devices & data") {
-                            if connectedDevices.isEmpty {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("No devices connected yet.")
-                                        .font(.system(size: 13))
-                                        .foregroundColor(.white.opacity(0.85))
-                                    
-                                    Button {
-                                        onConnectWearables()
-                                    } label: {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "plus.circle.fill")
-                                                .font(.system(size: 14, weight: .semibold))
-                                            Text(isSyncingWearables ? "Syncing…" : "Connect a device")
-                                                .font(.system(size: 13, weight: .semibold))
-                                        }
-                                        .padding(.vertical, 6)
-                                        .padding(.horizontal, 12)
-                                        .background(Color.white)
-                                        .foregroundColor(.miyaEmerald)
-                                        .cornerRadius(999)
-                                    }
-                                    .disabled(isSyncingWearables)
-                                }
-                            } else {
-                                VStack(spacing: 10) {
-                                    ForEach(connectedDevices) { device in
-                                        HStack {
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(device.name)
-                                                    .font(.system(size: 14, weight: .semibold))
-                                                    .foregroundColor(.white)
-                                                
-                                                Text("Last sync: \(device.lastSyncDescription)")
+                            VStack(spacing: 10) {
+                                // Apple Health row with live sync status
+                                HStack(spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text("Apple Health")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundColor(.white)
+
+                                        if isSyncingWearables {
+                                            HStack(spacing: 5) {
+                                                ProgressView()
+                                                    .scaleEffect(0.6)
+                                                    .frame(width: 12, height: 12)
+                                                    .tint(.white.opacity(0.8))
+                                                Text("Syncing…")
                                                     .font(.system(size: 12))
                                                     .foregroundColor(.white.opacity(0.7))
                                             }
-                                            
-                                            Spacer()
-                                            
-                                            Image(systemName: "chevron.right")
-                                                .font(.system(size: 12, weight: .semibold))
-                                                .foregroundColor(.white.opacity(0.6))
-                                        }
-                                        .padding(.vertical, 4)
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            withAnimation(.easeInOut(duration: 0.2)) {
-                                                activeDevice = device
+                                        } else if let date = lastRookSync {
+                                            HStack(spacing: 5) {
+                                                Image(systemName: rookSyncHoursAgo < 6 ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                                                    .font(.system(size: 11))
+                                                    .foregroundColor(rookSyncHoursAgo < 6 ? .green.opacity(0.85) : .orange.opacity(0.9))
+                                                Text("Synced \(relativeSyncLabel(date))")
+                                                    .font(.system(size: 12))
+                                                    .foregroundColor(.white.opacity(0.7))
+                                            }
+                                        } else {
+                                            HStack(spacing: 5) {
+                                                Image(systemName: "exclamationmark.circle.fill")
+                                                    .font(.system(size: 11))
+                                                    .foregroundColor(.orange.opacity(0.9))
+                                                Text("Not yet synced")
+                                                    .font(.system(size: 12))
+                                                    .foregroundColor(.white.opacity(0.7))
                                             }
                                         }
                                     }
-                                    
-                                    Button {
-                                        onConnectWearables()
-                                    } label: {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "plus.circle")
-                                                .font(.system(size: 14, weight: .semibold))
-                                            Text(isSyncingWearables ? "Syncing…" : "Connect another device")
-                                                .font(.system(size: 13, weight: .semibold))
+
+                                    Spacer()
+
+                                    if !isSyncingWearables {
+                                        Button {
+                                            onConnectWearables()
+                                        } label: {
+                                            Text("Sync now")
+                                                .font(.system(size: 12, weight: .semibold))
+                                                .padding(.vertical, 5)
+                                                .padding(.horizontal, 10)
+                                                .background(Color.white.opacity(0.18))
+                                                .foregroundColor(.white)
+                                                .cornerRadius(999)
                                         }
-                                        .foregroundColor(.white)
                                     }
-                                    .padding(.top, 4)
-                                    .disabled(isSyncingWearables)
                                 }
+                                .padding(.vertical, 4)
                             }
                         }
                         
@@ -703,6 +620,30 @@ struct AccountSidebarView: View {
         .sheet(item: $activeDevice) { device in
             deviceDetailSheet(for: device)
         }
+        .sheet(isPresented: $showEditProfile) {
+            EditProfileView()
+        }
+        .sheet(isPresented: $showChangeEmail) {
+            ChangeEmailView()
+        }
+        .sheet(isPresented: $showChangePassword) {
+            ChangePasswordView()
+        }
+        .onChange(of: showEditProfile) { _, isShowing in
+            if !isShowing {
+                let first = onboardingManager.firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let last = onboardingManager.lastName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let updated = [first, last].filter { !$0.isEmpty }.joined(separator: " ")
+                if !updated.isEmpty {
+                    localUserName = updated
+                }
+            }
+        }
+        .onChange(of: userName) { _, newName in
+            if !newName.isEmpty {
+                localUserName = newName
+            }
+        }
         .confirmationDialog("Profile picture", isPresented: $showAvatarOptions, titleVisibility: .visible) {
             Button("Change profile picture") {
                 selectedPhotoItem = nil
@@ -780,64 +721,22 @@ struct AccountSidebarView: View {
         }
     }
     
-    private func saveProfileWithTimeout(_ name: String) async throws {
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                try await onSaveProfile(name)
-            }
-            group.addTask {
-                try await Task.sleep(nanoseconds: 10_000_000_000)
-                throw ProfileSaveError.timeout
-            }
-            
-            guard let firstResult = try await group.next() else {
-                throw ProfileSaveError.timeout
-            }
-            group.cancelAll()
-            return firstResult
-        }
-    }
-
     private func deviceDetailSheet(for device: ConnectedDevice) -> some View {
-        NavigationStack {
-            VStack(spacing: 16) {
-                Text(device.name)
-                    .font(.system(size: 18, weight: .semibold))
-                
-                Text("Last sync: \(device.lastSyncDescription)")
-                    .font(.system(size: 14))
-                    .foregroundColor(.secondary)
-                
-                Button {
-                    Task { print("Reconnect \(device.name) tapped") }
-                } label: {
-                    Text("Reconnect")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.borderedProminent)
-                
-                Button {
-                    Task { print("Connect another device tapped") }
-                } label: {
-                    Text("Connect another device")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                }
-                
-                Spacer()
+        DeviceDetailSheet(
+            device: device,
+            onReconnect: {
+                activeDevice = nil
+                onConnectWearables()
+            },
+            onChangeDevice: {
+                activeDevice = nil
+                onConnectWearables()
+            },
+            onDismiss: {
+                activeDevice = nil
             }
-            .padding()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") {
-                        activeDevice = nil
-                    }
-                }
-            }
-        }
+        )
+        .environmentObject(dataManager)
     }
     
     // MARK: - Local helpers (AccountSidebarView)
@@ -931,6 +830,320 @@ struct ConnectedDevice: Identifiable {
     let lastSyncDescription: String
 }
 
+// MARK: - Device Detail Sheet
+
+struct DeviceDetailSheet: View {
+    let device: ConnectedDevice
+    let onReconnect: () -> Void
+    let onChangeDevice: () -> Void
+    let onDismiss: () -> Void
+
+    @EnvironmentObject private var dataManager: DataManager
+
+    @State private var metrics: [DataManager.WearableDailyMetricRow] = []
+    @State private var isLoading = true
+    @State private var fetchError: String? = nil
+
+    // Latest row per pillar (sorted ascending, so .last = most recent)
+    private var latestSleep: DataManager.WearableDailyMetricRow? {
+        metrics.filter { $0.sleepMinutes != nil && ($0.sleepMinutes ?? 0) > 0 }.last
+    }
+    private var latestMovement: DataManager.WearableDailyMetricRow? {
+        metrics.filter { $0.steps != nil && ($0.steps ?? 0) > 0 }.last
+    }
+    private var latestStress: DataManager.WearableDailyMetricRow? {
+        metrics.filter { ($0.hrvMs != nil && ($0.hrvMs ?? 0) > 0) || ($0.restingHr != nil && ($0.restingHr ?? 0) > 0) }.last
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
+
+                    // Header
+                    VStack(spacing: 4) {
+                        Text(device.name)
+                            .font(.system(size: 20, weight: .bold))
+                        Text("Last sync: \(device.lastSyncDescription)")
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.top, 8)
+
+                    // Metrics
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Recent Health Data")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 2)
+
+                        if isLoading {
+                            HStack {
+                                Spacer()
+                                ProgressView("Loading…")
+                                    .padding(.vertical, 24)
+                                Spacer()
+                            }
+                        } else if let err = fetchError {
+                            Text("Could not load health data: \(err)")
+                                .font(.system(size: 13))
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding()
+                        } else {
+                            PillarMetricCard(
+                                pillar: "Sleep",
+                                icon: "moon.fill",
+                                color: .indigo,
+                                latestValue: latestSleep.map { formatSleepMinutes($0.sleepMinutes) },
+                                latestDate: latestSleep?.metricDate,
+                                helpTitle: "No sleep data found",
+                                helpSteps: [
+                                    "Open the Apple Watch app on your iPhone.",
+                                    "Tap Sleep → turn on Track Sleep with Apple Watch.",
+                                    "Open the Health app → Browse → Sleep → set a Sleep Schedule.",
+                                    "Wear your Apple Watch to bed every night."
+                                ],
+                                searchURL: URL(string: "https://www.google.com/search?q=how+to+enable+sleep+tracking+Apple+Watch+Health+app")!
+                            )
+
+                            PillarMetricCard(
+                                pillar: "Movement",
+                                icon: "figure.walk",
+                                color: .green,
+                                latestValue: latestMovement.map { formatSteps($0.steps) },
+                                latestDate: latestMovement?.metricDate,
+                                helpTitle: "No step data found",
+                                helpSteps: [
+                                    "On iPhone: Settings → Privacy & Security → Motion & Fitness → Fitness Tracking ON.",
+                                    "Open the Health app → Browse → Activity → Steps, and confirm your iPhone or Apple Watch is a data source.",
+                                    "On Apple Watch: Settings → Privacy → Motion & Fitness → Fitness Tracking ON.",
+                                    "Carry your iPhone or wear your Apple Watch while walking."
+                                ],
+                                searchURL: URL(string: "https://www.google.com/search?q=how+to+enable+steps+tracking+Apple+Watch+iPhone+Health+app")!
+                            )
+
+                            PillarMetricCard(
+                                pillar: "Stress / HRV",
+                                icon: "waveform.path.ecg",
+                                color: .orange,
+                                latestValue: latestStress.map { formatHRV($0.hrvMs, restingHr: $0.restingHr) },
+                                latestDate: latestStress?.metricDate,
+                                helpTitle: "No HRV or heart rate data found",
+                                helpSteps: [
+                                    "Open the Apple Watch app on your iPhone → General → Wrist Detection → turn ON.",
+                                    "In the Watch app, tap Heart → Heart Rate → turn on Heart Rate.",
+                                    "Wear your Apple Watch snugly (one finger above wrist bone) throughout the day and during sleep.",
+                                    "HRV is only recorded during sleep or background readings — wearing your Watch to bed is key."
+                                ],
+                                searchURL: URL(string: "https://www.google.com/search?q=how+to+enable+HRV+heart+rate+variability+Apple+Watch+Health+app")!
+                            )
+                        }
+                    }
+
+                    // Actions
+                    VStack(spacing: 10) {
+                        Button {
+                            onReconnect()
+                        } label: {
+                            Text("Reconnect")
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button {
+                            onChangeDevice()
+                        } label: {
+                            Text("Reconnect/Change Device")
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                        .tint(.secondary)
+                        .buttonStyle(.bordered)
+                    }
+
+                    Spacer(minLength: 24)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+            }
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { onDismiss() }
+                }
+            }
+        }
+        .onAppear {
+            Task { await loadMetrics() }
+        }
+    }
+
+    // MARK: - Data Loading
+
+    private func loadMetrics() async {
+        do {
+            let rows = try await dataManager.fetchWearableDailyMetrics(days: 30)
+            await MainActor.run {
+                metrics = rows.sorted { $0.metricDate < $1.metricDate }
+                isLoading = false
+            }
+        } catch {
+            await MainActor.run {
+                fetchError = error.localizedDescription
+                isLoading = false
+            }
+        }
+    }
+
+    // MARK: - Formatters
+
+    private func formatSleepMinutes(_ minutes: Int?) -> String {
+        guard let m = minutes, m > 0 else { return "—" }
+        let h = m / 60
+        let min = m % 60
+        return h > 0 ? "\(h)h \(min)m" : "\(min)m"
+    }
+
+    private func formatSteps(_ steps: Int?) -> String {
+        guard let s = steps, s > 0 else { return "—" }
+        return s >= 1000
+            ? String(format: "%.1fk steps", Double(s) / 1000.0)
+            : "\(s) steps"
+    }
+
+    private func formatHRV(_ hrv: Double?, restingHr: Double?) -> String {
+        if let h = hrv, h > 0 {
+            return String(format: "%.0f ms HRV", h)
+        } else if let hr = restingHr, hr > 0 {
+            return String(format: "%.0f bpm resting HR", hr)
+        }
+        return "—"
+    }
+}
+
+// MARK: - Pillar Metric Card
+
+private struct PillarMetricCard: View {
+    let pillar: String
+    let icon: String
+    let color: Color
+    let latestValue: String?
+    let latestDate: String?
+    let helpTitle: String
+    let helpSteps: [String]
+    let searchURL: URL
+
+    var body: some View {
+        if let value = latestValue, let dateStr = latestDate {
+            // Has data — show metric
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(color.opacity(0.12))
+                        .frame(width: 42, height: 42)
+                    Image(systemName: icon)
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundColor(color)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(pillar)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.primary)
+                    Text(formattedDate(dateStr))
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                Text(value)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundColor(color)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color(.systemBackground))
+                    .shadow(color: .black.opacity(0.05), radius: 6, x: 0, y: 2)
+            )
+        } else {
+            // No data — show help tooltip
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: icon)
+                        .font(.system(size: 16))
+                        .foregroundColor(color)
+                    Text(pillar)
+                        .font(.system(size: 14, weight: .semibold))
+                    Spacer()
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundColor(.orange)
+                        .font(.system(size: 16))
+                }
+
+                Text(helpTitle)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.primary)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(helpSteps.enumerated()), id: \.offset) { index, step in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("\(index + 1).")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.orange)
+                                .frame(width: 16, alignment: .leading)
+                            Text(step)
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+
+                Link(destination: searchURL) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 11))
+                        Text("Search Google for help")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundColor(.orange)
+                }
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.orange.opacity(0.06))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(Color.orange.opacity(0.25), lineWidth: 1)
+                    )
+            )
+        }
+    }
+
+    private func formattedDate(_ dateStr: String) -> String {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        df.locale = Locale(identifier: "en_US_POSIX")
+        guard let date = df.date(from: dateStr) else { return dateStr }
+
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "Today" }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+
+        let display = DateFormatter()
+        display.dateFormat = "MMM d"
+        return display.string(from: date)
+    }
+}
+
 // MARK: - Notifications UI
 
 struct NotificationPanel: View {
@@ -1008,12 +1221,20 @@ private struct BellNotificationRowView: View {
             case .movement: return "figure.walk"
             case .stress: return "heart.text.square"
             }
-        case .challengeInvite:
-            return "flag.checkered"
+        case .challengeInvite(_, let pillar, _, _):
+            switch pillar {
+            case .sleep: return "moon.stars.fill"
+            case .movement: return "figure.walk"
+            case .stress: return "heart.text.square"
+            }
         case .challengeDaily:
             return "chart.bar.xaxis"
         case .challengeCompleted:
             return "checkmark.seal.fill"
+        case .careOutcome:
+            return "waveform.path.ecg"
+        case .challengeInviteExpired:
+            return "clock.badge.xmark"
         }
     }
     

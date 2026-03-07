@@ -55,9 +55,14 @@ Deno.serve(async (req) => {
     return jsonResponse({ ok: false, error: "Method not allowed" }, 405);
   }
 
-  const expected = Deno.env.get("MIYA_ADMIN_SECRET") ?? "";
+  // Strict admin secret: reject when not configured (missing, non-string, or empty/whitespace).
+  const raw = Deno.env.get("MIYA_ADMIN_SECRET");
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
+  }
+  const expected = raw.trim();
   const provided = req.headers.get("x-miya-admin-secret") ?? "";
-  if (!expected || provided !== expected) {
+  if (provided !== expected) {
     return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
   }
 
@@ -75,7 +80,73 @@ Deno.serve(async (req) => {
   const today = new Date();
   const todayStr = toYYYYMMDD(today);
 
-  // Fetch active challenges.
+  // 1) Expire pending_invite challenges older than 4 days
+  const fourDaysAgo = new Date(today.getTime() - 4 * 24 * 60 * 60 * 1000);
+  const fourDaysAgoStr = fourDaysAgo.toISOString();
+
+  const { data: expiredInvites, error: expiredErr } = await supabase
+    .from("challenges")
+    .select("id, source_alert_state_id, admin_user_id, member_user_id, pillar")
+    .eq("status", "pending_invite")
+    .lt("created_at", fourDaysAgoStr)
+    .limit(100);
+
+  if (!expiredErr && expiredInvites && expiredInvites.length > 0) {
+    for (const inv of expiredInvites as Array<{
+      id: string;
+      source_alert_state_id: string | null;
+      admin_user_id: string;
+      member_user_id: string;
+      pillar: string;
+    }>) {
+      await supabase
+        .from("challenges")
+        .update({
+          status: "completed_failed",
+          metadata: { reason: "invite_expired" },
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", inv.id);
+
+      if (inv.source_alert_state_id) {
+        const { data: fmRow } = await supabase
+          .from("family_members")
+          .select("first_name")
+          .eq("user_id", inv.member_user_id)
+          .limit(1)
+          .maybeSingle();
+        const firstName = (fmRow?.first_name as string) ?? "They";
+        const outcomeMessage = `${firstName} hasn't started the challenge yet. Consider reaching out directly.`;
+
+        await supabase
+          .from("alert_care_state")
+          .update({
+            care_state: null,
+            outcome_message: outcomeMessage,
+            outcome_evaluated_at: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("alert_id", inv.source_alert_state_id);
+      }
+
+      await supabase.from("notification_queue").insert({
+        recipient_user_id: inv.admin_user_id,
+        member_user_id: inv.member_user_id,
+        alert_state_id: null,
+        channel: "push",
+        payload: {
+          kind: "challenge_invite_expired",
+          challenge_id: inv.id,
+          member_user_id: inv.member_user_id,
+          pillar: inv.pillar,
+          message: "Challenge invite wasn't accepted.",
+        },
+        status: "pending",
+      });
+    }
+  }
+
+  // 2) Fetch active challenges.
   const { data: challenges, error: challengesErr } = await supabase
     .from("challenges")
     .select(

@@ -1,3 +1,4 @@
+import { mergeRowsByDay } from "../shared/merge.ts";
 import { scoreIfPossible } from "./score.ts";
 import { scoringSchema } from "./schema.ts";
 import type { VitalitySnapshot } from "./types.ts";
@@ -43,15 +44,6 @@ function addDaysUTC(dayKey: string, deltaDays: number): string | null {
   if (!d) return null;
   d.setUTCDate(d.getUTCDate() + deltaDays);
   return toYYYYMMDD(d);
-}
-
-function mergeMax(a: number | null | undefined, b: number | null | undefined): number | null {
-  const aa = a == null ? null : Number(a);
-  const bb = b == null ? null : Number(b);
-  if (aa == null && bb == null) return null;
-  if (aa == null) return bb;
-  if (bb == null) return aa;
-  return Math.max(aa, bb);
 }
 
 function avg(nums: Array<number | null>): number | null {
@@ -141,29 +133,18 @@ export async function recomputeRolling7dScoresForUser(
       continue;
     }
 
-    const mergedByDay = new Map<string, DailyRow>();
-    for (const r0 of (rows ?? []) as any[]) {
-      const dayKey = String(r0.metric_date);
-      const prev = mergedByDay.get(dayKey);
-      mergedByDay.set(dayKey, {
-        metric_date: dayKey,
-        steps: mergeMax(prev?.steps, r0.steps),
-        sleep_minutes: mergeMax(prev?.sleep_minutes, r0.sleep_minutes),
-        hrv_ms: mergeMax(prev?.hrv_ms, r0.hrv_ms),
-        hrv_rmssd_ms: mergeMax(prev?.hrv_rmssd_ms, r0.hrv_rmssd_ms),
-        resting_hr: mergeMax(prev?.resting_hr, r0.resting_hr),
-        breaths_avg_per_min: mergeMax(prev?.breaths_avg_per_min, r0.breaths_avg_per_min),
-        spo2_avg_pct: mergeMax(prev?.spo2_avg_pct, r0.spo2_avg_pct),
-        calories_active: mergeMax(prev?.calories_active, r0.calories_active),
-        movement_minutes: mergeMax(prev?.movement_minutes, r0.movement_minutes),
-        deep_sleep_minutes: mergeMax(prev?.deep_sleep_minutes, r0.deep_sleep_minutes),
-        rem_sleep_minutes: mergeMax(prev?.rem_sleep_minutes, r0.rem_sleep_minutes),
-        light_sleep_minutes: mergeMax(prev?.light_sleep_minutes, r0.light_sleep_minutes),
-        awake_minutes: mergeMax(prev?.awake_minutes, r0.awake_minutes),
-        sleep_efficiency_pct: mergeMax(prev?.sleep_efficiency_pct, r0.sleep_efficiency_pct),
-        time_to_fall_asleep_minutes: mergeMax(prev?.time_to_fall_asleep_minutes, r0.time_to_fall_asleep_minutes),
-      });
-    }
+    // Merge by day with mergeMax; do not use raw rows per day for scoring.
+    const RECOMPUTE_NUMERIC_FIELDS = [
+      "steps", "sleep_minutes", "hrv_ms", "hrv_rmssd_ms", "resting_hr",
+      "breaths_avg_per_min", "spo2_avg_pct", "calories_active", "movement_minutes",
+      "deep_sleep_minutes", "rem_sleep_minutes", "light_sleep_minutes", "awake_minutes",
+      "sleep_efficiency_pct", "time_to_fall_asleep_minutes",
+    ] as const;
+    const mergedByDay = mergeRowsByDay<DailyRow>(
+      (rows ?? []) as any[],
+      [...RECOMPUTE_NUMERIC_FIELDS],
+      "metric_date",
+    );
 
     const allKeys = Array.from(mergedByDay.keys()).sort();
     const windowKeys = allKeys.filter((k) => k >= windowStart && k <= endDate);

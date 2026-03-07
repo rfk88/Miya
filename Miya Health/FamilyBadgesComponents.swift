@@ -10,6 +10,7 @@ struct FamilyBadgesCard: View {
     let weekly: [BadgeEngine.Winner]
     let weekStart: String?
     let weekEnd: String?
+    var isLoading: Bool = false
     let onBadgeTapped: (BadgeEngine.Winner) -> Void
     
     @State private var isWeeklyExpanded: Bool = false
@@ -116,8 +117,9 @@ struct FamilyBadgesCard: View {
                 Spacer()
             }
             
-            // Empty state
-            if daily.isEmpty && weekly.isEmpty {
+            // Empty state — only shown once the first computation has finished (isLoading=false),
+            // so the card doesn't flash "No champions yet" while data is still being fetched.
+            if daily.isEmpty && weekly.isEmpty && !isLoading {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("No champions yet")
                         .font(.system(size: 14, weight: .semibold))

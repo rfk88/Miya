@@ -38,10 +38,18 @@ struct FamilyMembersStrip: View {
         let familyId: String?
         var currentUserAvatarURL: String? = nil
 
+        @EnvironmentObject private var dataManager: DataManager
+        @State private var fetchedAvatarURL: String? = nil
+        @State private var showStalePopover = false
+
         private var progress: CGFloat {
             CGFloat(member.ringProgress)
         }
-        
+
+        private var displayAvatarURL: String? {
+            member.isMe ? currentUserAvatarURL : fetchedAvatarURL
+        }
+
         var body: some View {
             NavigationLink {
                 if let fid = familyId, let uid = member.userId {
@@ -57,7 +65,7 @@ struct FamilyMembersStrip: View {
                         vitalityScore: member.currentScore,
                         vitalityTrendDelta: 0,
                         vitalityLabel: vitalityLabel,
-                        avatarURL: member.isMe ? currentUserAvatarURL : nil
+                        avatarURL: displayAvatarURL
                     )
                 }
             } label: {
@@ -73,29 +81,23 @@ struct FamilyMembersStrip: View {
                                 x: DashboardDesign.cardShadowLight.x,
                                 y: DashboardDesign.cardShadowLight.y
                             )
-                        
+
                         // Inner avatar (refined sizing)
                         Circle()
                             .fill(DashboardDesign.groupedBackground)
                             .frame(width: 52, height: 52)
 
-                        if member.isMe {
-                            ProfileAvatarView(
-                                imageURL: currentUserAvatarURL,
-                                initials: member.initials,
-                                diameter: 52,
-                                backgroundColor: DashboardDesign.groupedBackground,
-                                foregroundColor: DashboardDesign.primaryTextColor,
-                                font: .system(size: 19, weight: .semibold, design: .default)
-                            )
-                            .frame(width: 52, height: 52)
-                        } else {
-                            Text(member.initials)
-                                .font(.system(size: 19, weight: .semibold, design: .default))
-                                .foregroundColor(DashboardDesign.primaryTextColor)
-                        }
-                        
-                        // Pending badge
+                        ProfileAvatarView(
+                            imageURL: displayAvatarURL,
+                            initials: member.initials,
+                            diameter: 52,
+                            backgroundColor: DashboardDesign.groupedBackground,
+                            foregroundColor: DashboardDesign.primaryTextColor,
+                            font: .system(size: 19, weight: .semibold, design: .default)
+                        )
+                        .frame(width: 52, height: 52)
+
+                        // Pending badge (top-right)
                         if member.isPending {
                             VStack {
                                 HStack {
@@ -108,10 +110,33 @@ struct FamilyMembersStrip: View {
                                 Spacer()
                             }
                         }
+
+                        // Stale score indicator (top-left) — shown when score is old and not pending
+                        if member.isStale && !member.isPending {
+                            VStack {
+                                HStack {
+                                    Button {
+                                        showStalePopover = true
+                                    } label: {
+                                        Image(systemName: "clock.fill")
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundColor(.gray)
+                                            .padding(5)
+                                            .background(Circle().fill(Color(.systemBackground)).shadow(color: .black.opacity(0.12), radius: 3, x: 0, y: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .popover(isPresented: $showStalePopover, attachmentAnchor: .point(.topLeading)) {
+                                        stalePopoverContent
+                                    }
+                                    Spacer()
+                                }
+                                Spacer()
+                            }
+                        }
                     }
-                    
+
                     vitalityBar
-                    
+
                     // Name under avatar (refined typography)
                     Text(member.isMe ? "Me" : member.name)
                         .font(.system(size: 12, weight: .medium, design: .default))
@@ -119,6 +144,42 @@ struct FamilyMembersStrip: View {
                 }
             }
             .buttonStyle(.plain)
+            .task(id: member.userId) {
+                guard !member.isMe, let uid = member.userId else { return }
+                fetchedAvatarURL = try? await dataManager.fetchAvatarURL(forUserId: uid)
+            }
+        }
+
+        // MARK: - Stale popover
+
+        private var stalePopoverContent: some View {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Score out of date", systemImage: "clock.badge.exclamationmark")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.primary)
+
+                Text(staleAgeText)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.secondary)
+
+                Text("Scores older than 3 days are shown greyed and excluded from family insights. Open the app regularly or keep Apple Health running to stay in sync.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+            .frame(maxWidth: 260)
+            .presentationCompactAdaptation(.popover)
+        }
+
+        private var staleAgeText: String {
+            guard let updatedAt = member.vitalityScoreUpdatedAt else {
+                return "Last sync date unknown."
+            }
+            let days = Calendar.current.dateComponents([.day], from: updatedAt, to: Date()).day ?? 0
+            if days <= 0 { return "Score was updated today." }
+            if days == 1 { return "Score was last updated yesterday." }
+            return "Score was last updated \(days) days ago."
         }
         
         // MARK: - Horizontal Vitality Bar

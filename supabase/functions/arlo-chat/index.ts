@@ -372,11 +372,11 @@ Keep it conversational. 80–140 words.
       ...recentMessages,
     ];
 
-    // 3) OpenAI call with robust timeout handling
+    // 3) OpenAI Chat Completions API
     const payload = {
       model,
-      input,
-      max_output_tokens: 260,
+      messages: input,
+      max_tokens: 260,
     };
 
     console.log("arlo-chat: calling openai", { model, inputCount: input.length });
@@ -387,7 +387,8 @@ Keep it conversational. 80–140 words.
 
     let resp: Response;
     try {
-      resp = await fetch("https://api.openai.com/v1/responses", {
+      // OpenAI Chat Completions API (must be /v1/chat/completions, not /v1/responses).
+      resp = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -438,12 +439,9 @@ Keep it conversational. 80–140 words.
       );
     }
 
-    // Extract output text
+    // Extract output text (Chat Completions API: choices[0].message.content)
     const outputText =
-      data?.output_text ??
-      data?.output?.find((o: any) => o?.type === "message")?.content
-        ?.map((c: any) => c?.text ?? "")
-        .join("") ??
+      data?.choices?.[0]?.message?.content ??
       "";
 
     return new Response(

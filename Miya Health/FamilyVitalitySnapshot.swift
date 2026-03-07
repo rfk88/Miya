@@ -191,11 +191,12 @@ struct FamilyVitalitySnapshotEngine {
         // - alignment is "tight" (no variance to compute)
         // - family state defaults to rebuilding (we're effectively waiting on fresh data)
         if activeMembers.isEmpty {
+            let byValueAscending = pillarAverages.sorted(by: { $0.value < $1.value })
             return FamilyVitalitySnapshot(
                 familyStateLabel: .rebuilding,
                 alignmentLevel: .tight,
-                focusPillar: pillarAverages.min(by: { $0.value < $1.value })?.key,
-                strengthPillar: pillarAverages.max(by: { $0.value < $1.value })?.key,
+                focusPillar: byValueAscending.first?.key,
+                strengthPillar: byValueAscending.last?.key,
                 supportMembers: [],
                 celebrateMembers: [],
                 familyAverageScore: familyAverage,
@@ -211,11 +212,10 @@ struct FamilyVitalitySnapshotEngine {
         // 2. Alignment level (based on variance across member scores)
         let alignment = computeAlignment(members: activeMembers)
         
-        // 3. Focus pillar (lowest family average)
-        let focusPillar = pillarAverages.min(by: { $0.value < $1.value })?.key
-        
-        // 4. Strength pillar (highest family average)
-        let strengthPillar = pillarAverages.max(by: { $0.value < $1.value })?.key
+        // 3. Focus pillar (lowest family average); 4. Strength pillar (highest family average)
+        let byValueAscending = pillarAverages.sorted(by: { $0.value < $1.value })
+        let focusPillar = byValueAscending.first?.key
+        let strengthPillar = byValueAscending.last?.key
         
         // 5. Support members (neutral, supportive framing)
         let supportMembers = computeSupportMembers(members: activeMembers)

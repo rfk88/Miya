@@ -172,6 +172,20 @@ class AuthManager: ObservableObject {
         }
     }
 
+    /// Verify the current user's password without touching the global isLoading state.
+    /// Use this from screens that manage their own local loading state (e.g. ChangePasswordView, ChangeEmailView).
+    /// Throws AuthError.signInFailed if the password is wrong.
+    func verifyCurrentPassword(_ password: String) async throws {
+        guard let email = try await getCurrentEmail() else {
+            throw AuthError.signInFailed("Could not determine current account email.")
+        }
+        do {
+            _ = try await supabase.auth.signIn(email: email, password: password)
+        } catch {
+            throw AuthError.signInFailed(error.localizedDescription)
+        }
+    }
+
     /// Request an email change for the current authenticated user.
     /// Note: Supabase may require confirmation via email depending on project settings.
     func updateEmail(to newEmail: String) async throws {
@@ -190,6 +204,27 @@ class AuthManager: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
+        do {
+            _ = try await supabase.auth.update(user: UserAttributes(password: newPassword))
+        } catch {
+            throw AuthError.updateFailed(error.localizedDescription)
+        }
+    }
+
+    /// Change email using a local loading state only — does NOT set the global isLoading flag,
+    /// preventing the full view hierarchy from re-rendering and freezing the app.
+    /// Supabase sends a confirmation link to the new address; the change is not applied until confirmed.
+    func changeEmail(to newEmail: String) async throws {
+        do {
+            _ = try await supabase.auth.update(user: UserAttributes(email: newEmail))
+        } catch {
+            throw AuthError.updateFailed(error.localizedDescription)
+        }
+    }
+
+    /// Change password using a local loading state only — does NOT set the global isLoading flag.
+    /// No re-authentication is required by Supabase for password changes.
+    func changePassword(to newPassword: String) async throws {
         do {
             _ = try await supabase.auth.update(user: UserAttributes(password: newPassword))
         } catch {

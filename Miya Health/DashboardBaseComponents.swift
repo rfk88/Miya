@@ -226,6 +226,7 @@ public struct ArcShape: Shape {
 // MARK: - TOP BAR
 struct DashboardTopBar: View {
     let familyName: String
+    let notificationCount: Int
     let onShareTapped: () -> Void
     let onMenuTapped: () -> Void
     let onNotificationsTapped: () -> Void
@@ -272,13 +273,26 @@ struct DashboardTopBar: View {
                     Button {
                         onNotificationsTapped()
                     } label: {
-                        Image(systemName: "bell.fill")
-                            .font(.system(size: 17, weight: .medium))
-                            .foregroundColor(.white)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: "bell.fill")
+                                .font(.system(size: 17, weight: .medium))
+                                .foregroundColor(.white)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+
+                            if notificationCount > 0 {
+                                Text(notificationCount > 99 ? "99+" : "\(notificationCount)")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 2)
+                                    .background(Color.red)
+                                    .clipShape(Capsule())
+                                    .offset(x: 4, y: 6)
+                            }
+                        }
                     }
-                    .accessibilityLabel("Notifications")
+                    .accessibilityLabel(notificationCount > 0 ? "\(notificationCount) notifications" : "Notifications")
                 }
             }
             .padding(.horizontal, DashboardDesign.smallSpacing)

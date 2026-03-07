@@ -2545,6 +2545,13 @@ class DataManager: ObservableObject {
         }
     }
     
+    /// True only for Swift task cancellation or URLSession cancelled; avoids string matching (BUG-025).
+    private func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if (error as? URLError)?.code == .cancelled { return true }
+        return false
+    }
+
     /// Fetch all family members for a given family (including pending)
     func fetchFamilyMembers(familyId: String) async throws -> [FamilyMemberRecord] {
         do {
@@ -2559,12 +2566,8 @@ class DataManager: ObservableObject {
             return members
         } catch {
             // Important: allow SwiftUI task cancellation to propagate without turning it into a user-visible error.
-            // Cancellation can come through as CancellationError, URLError with cancelled code, or wrapped in error messages.
-            let errorDesc = error.localizedDescription.lowercased()
-            if error is CancellationError || 
-               (error as? URLError)?.code == .cancelled ||
-               errorDesc.contains("cancelled") || 
-               errorDesc.contains("cancel") {
+            // Only treat CancellationError and URLError.cancelled as cancellation (BUG-025).
+            if isCancellation(error) {
                 print("ℹ️ DataManager: fetchFamilyMembers cancelled (type: \(type(of: error)))")
                 throw error
             }
@@ -3517,9 +3520,11 @@ struct BellNotification: Identifiable {
     enum Kind {
         case personalTrend(pillar: VitalityPillar, durationDays: Int?, severity: TrendSeverity)
         case patternAlert(pillar: VitalityPillar, durationDays: Int?, severity: TrendSeverity, alertStateId: String?)
-        case challengeInvite(isForSelf: Bool, pillar: VitalityPillar)
+        case challengeInvite(isForSelf: Bool, pillar: VitalityPillar, challengeId: String, adminUserId: String?)
         case challengeDaily(isForSelf: Bool, status: String, daysSucceeded: Int, daysEvaluated: Int, remainingDays: Int, successesNeeded: Int?)
         case challengeCompleted(isForSelf: Bool, status: String, daysSucceeded: Int, daysEvaluated: Int)
+        case careOutcome(alertStateId: String?, outcomeMessage: String)
+        case challengeInviteExpired(challengeId: String?, memberUserId: String?, pillar: String)
     }
     
     let id: String
@@ -3613,11 +3618,13 @@ extension BellNotification {
         case "challenge_invite":
             let pillarRaw = string("pillar") ?? "sleep"
             let pillar = VitalityPillar(rawValue: pillarRaw) ?? .sleep
+            let challengeId = string("challenge_id") ?? row.id
+            let adminUserId = string("admin_user_id")
             
             self.id = row.id
             self.createdAt = row.createdAt
             self.memberUserId = memberId
-            self.kind = .challengeInvite(isForSelf: isForSelf, pillar: pillar)
+            self.kind = .challengeInvite(isForSelf: isForSelf, pillar: pillar, challengeId: challengeId, adminUserId: adminUserId)
             if isForSelf {
                 self.title = "New challenge from your family"
                 self.subtitle = "Focus: \(pillar.displayName) over 7 days"
@@ -3684,6 +3691,27 @@ extension BellNotification {
                 self.subtitle = "\(daysSucceeded) of \(daysEvaluated) days hit"
             }
             
+        case "care_outcome":
+            let alertStateId = row.alertStateId
+            let outcomeMessage = string("outcome_message") ?? "Update on this alert."
+            self.id = row.id
+            self.createdAt = row.createdAt
+            self.memberUserId = memberId
+            self.kind = .careOutcome(alertStateId: alertStateId, outcomeMessage: outcomeMessage)
+            self.title = "Care update"
+            self.subtitle = outcomeMessage
+            
+        case "challenge_invite_expired":
+            let challengeId = string("challenge_id")
+            let memberUserId = memberId
+            let pillar = string("pillar") ?? "sleep"
+            self.id = row.id
+            self.createdAt = row.createdAt
+            self.memberUserId = memberUserId
+            self.kind = .challengeInviteExpired(challengeId: challengeId, memberUserId: memberUserId, pillar: pillar)
+            self.title = "Challenge invite wasn't accepted"
+            self.subtitle = "Consider reaching out directly."
+            
         default:
             return nil
         }
@@ -3701,6 +3729,167 @@ extension DataManager {
         
         let currentUserId = await currentUserId
         return rows.compactMap { BellNotification(row: $0, currentUserId: currentUserId) }
+    }
+}
+
+// MARK: - Active Challenge (for member's dashboard)
+
+struct ActiveChallenge: Decodable {
+    let id: String
+    let pillar: String
+    let status: String
+    let startDate: String?
+    let endDate: String?
+    let daysSucceeded: Int
+    let daysEvaluated: Int
+    let requiredSuccessDays: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case pillar
+        case status
+        case startDate = "start_date"
+        case endDate = "end_date"
+        case daysSucceeded = "days_succeeded"
+        case daysEvaluated = "days_evaluated"
+        case requiredSuccessDays = "required_success_days"
+    }
+}
+
+/// Challenge row for Family Challenges tab (get_family_challenges RPC).
+struct FamilyChallenge: Identifiable {
+    let id: String
+    let pillar: String
+    let status: String
+    let memberUserId: String
+    let memberName: String
+    let daysSucceeded: Int
+    let daysEvaluated: Int
+    let endDate: String?
+    let sourceAlertMetric: String?
+    let sourceAlertDays: Int?
+    let myRole: String?
+    let challengerCount: Int
+}
+
+extension DataManager {
+    /// Respond to a challenge invite (accept or decline). Caller must be the member.
+    func respondToChallenge(challengeId: String, action: String) async throws -> Bool {
+        struct Response: Decodable {
+            let success: Bool
+            let status: String?
+        }
+        let result: Response = try await supabase
+            .rpc("respond_to_challenge", params: [
+                "_challenge_id": AnyJSON.string(challengeId),
+                "_action": AnyJSON.string(action),
+            ])
+            .execute()
+            .value
+        return result.success
+    }
+    
+    /// Fetch the current user's active challenge, if any.
+    func fetchActiveChallengeForMember() async throws -> ActiveChallenge? {
+        struct Row: Decodable {
+            let id: String
+            let pillar: String
+            let status: String
+            let start_date: String?
+            let end_date: String?
+            let days_succeeded: Int
+            let days_evaluated: Int
+            let required_success_days: Int
+        }
+        let rows: [Row] = try await supabase
+            .rpc("get_active_challenge_for_member")
+            .execute()
+            .value
+        guard let row = rows.first else { return nil }
+        return ActiveChallenge(
+            id: row.id,
+            pillar: row.pillar,
+            status: row.status,
+            startDate: row.start_date,
+            endDate: row.end_date,
+            daysSucceeded: row.days_succeeded,
+            daysEvaluated: row.days_evaluated,
+            requiredSuccessDays: row.required_success_days
+        )
+    }
+    
+    /// Record a caregiver intervention on an alert (challenge, reach_out, check_in, etc.).
+    func recordAlertIntervention(alertId: String, interventionType: String, challengeId: String?) async throws {
+        struct Response: Decodable {
+            let success: Bool
+        }
+        var params: [String: AnyJSON] = [
+            "p_alert_id": .string(alertId),
+            "p_intervention_type": .string(interventionType),
+        ]
+        if let cid = challengeId {
+            params["p_challenge_id"] = .string(cid)
+        }
+        let result: Response = try await supabase
+            .rpc("record_alert_intervention", params: params)
+            .execute()
+            .value
+        if !result.success {
+            throw DataError.invalidData("record_alert_intervention returned success: false")
+        }
+    }
+    
+    /// Fetch all challenges for the current user (as challenger or challengee). For Family Challenges tab.
+    func fetchFamilyChallenges() async throws -> [FamilyChallenge] {
+        guard let familyId = currentFamilyId else { return [] }
+        struct Row: Decodable {
+            let id: String
+            let pillar: String
+            let status: String
+            let member_user_id: String
+            let member_name: String?
+            let days_succeeded: Int
+            let days_evaluated: Int
+            let end_date: String?
+            let source_alert_metric: String?
+            let source_alert_days: Int?
+            let my_role: String?
+            let challenger_count: Int
+        }
+        let rows: [Row] = try await supabase
+            .rpc("get_family_challenges", params: ["p_family_id": AnyJSON.string(familyId)])
+            .execute()
+            .value
+        return rows.map { row in
+            FamilyChallenge(
+                id: row.id,
+                pillar: row.pillar,
+                status: row.status,
+                memberUserId: row.member_user_id,
+                memberName: row.member_name ?? "Member",
+                daysSucceeded: row.days_succeeded,
+                daysEvaluated: row.days_evaluated,
+                endDate: row.end_date,
+                sourceAlertMetric: row.source_alert_metric,
+                sourceAlertDays: row.source_alert_days,
+                myRole: row.my_role,
+                challengerCount: row.challenger_count
+            )
+        }
+    }
+    
+    /// Join an existing challenge (add current user as challenger).
+    func joinChallenge(challengeId: String) async throws {
+        struct Response: Decodable {
+            let success: Bool
+        }
+        let result: Response = try await supabase
+            .rpc("join_challenge", params: ["p_challenge_id": AnyJSON.string(challengeId)])
+            .execute()
+            .value
+        if !result.success {
+            throw DataError.invalidData("join_challenge returned success: false")
+        }
     }
 }
 

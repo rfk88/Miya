@@ -41,14 +41,13 @@ struct ScoringSchemaExamples {
         print("═" * 60 + "\n")
         
         // Example: Get sleep duration info for a 35-year-old
-        if let sleepDef = VitalitySubMetric.sleepDuration.definition {
+        if let sleepDef = VitalitySubMetric.sleepDuration.definition,
+           let range = sleepDef.ageSpecificBenchmarks.range(forAge: 35) {
             print("📊 Sleep Duration Analysis (35-year-old):")
             print("   Parent Pillar: \(sleepDef.parentPillar.displayName)")
             print("   Weight in Sleep: \(Int(sleepDef.weightWithinPillar * 100))%")
             print("   Direction: \(sleepDef.scoringDirection)")
             print("   Unit: \(VitalitySubMetric.sleepDuration.unit)")
-            
-            let range = sleepDef.ageSpecificBenchmarks.range(forAge: 35)
             print("   Age-Specific Ranges:")
             print("      Optimal: \(range.optimalMin)-\(range.optimalMax) hours")
             print("      Acceptable Low: \(range.acceptableLowMin)-\(range.acceptableLowMax) hours")
@@ -67,8 +66,9 @@ struct ScoringSchemaExamples {
             print("   Optimal Range by Age Group:")
             
             for ageGroup in AgeGroup.allCases {
-                let range = hrvDef.ageSpecificBenchmarks.range(forAgeGroup: ageGroup)
-                print("      \(ageGroup.displayName): \(range.optimalMin)-\(range.optimalMax) ms")
+                if let range = hrvDef.ageSpecificBenchmarks.range(forAgeGroup: ageGroup) {
+                    print("      \(ageGroup.displayName): \(range.optimalMin)-\(range.optimalMax) ms")
+                }
             }
             print("")
         }
@@ -118,8 +118,8 @@ struct ScoringSchemaExamples {
         print("How this would score (once scoring engine is built):")
         print("")
         print("🛏️  SLEEP PILLAR:")
-        if let sleepDef = VitalitySubMetric.sleepDuration.definition {
-            let range = sleepDef.ageSpecificBenchmarks.range(forAge: 45)
+        if let sleepDef = VitalitySubMetric.sleepDuration.definition,
+           let range = sleepDef.ageSpecificBenchmarks.range(forAge: 45) {
             print("   • Sleep Duration: 7.5h")
             print("     Target for 45yo: \(range.optimalMin)-\(range.optimalMax)h optimal")
             print("     → Score: ~94/100 (in optimal range)")
@@ -129,8 +129,8 @@ struct ScoringSchemaExamples {
         print("")
         
         print("🏃 MOVEMENT PILLAR:")
-        if let stepsDef = VitalitySubMetric.steps.definition {
-            let range = stepsDef.ageSpecificBenchmarks.range(forAge: 45)
+        if let stepsDef = VitalitySubMetric.steps.definition,
+           let range = stepsDef.ageSpecificBenchmarks.range(forAge: 45) {
             print("   • Steps: 8,500")
             print("     Target for 45yo: \(Int(range.optimalMin))-\(Int(range.optimalMax)) steps optimal")
             print("     → Score: ~75/100 (in optimal range)")
@@ -140,14 +140,14 @@ struct ScoringSchemaExamples {
         print("")
         
         print("😌 STRESS PILLAR:")
-        if let hrvDef = VitalitySubMetric.hrv.definition {
-            let range = hrvDef.ageSpecificBenchmarks.range(forAge: 45)
+        if let hrvDef = VitalitySubMetric.hrv.definition,
+           let range = hrvDef.ageSpecificBenchmarks.range(forAge: 45) {
             print("   • HRV: 55ms")
             print("     Target for 45yo: \(Int(range.optimalMin))-\(Int(range.optimalMax))ms optimal")
             print("     → Score: ~70/100 (slightly below optimal)")
         }
-        if let rhrDef = VitalitySubMetric.restingHeartRate.definition {
-            let range = rhrDef.ageSpecificBenchmarks.range(forAge: 45)
+        if let rhrDef = VitalitySubMetric.restingHeartRate.definition,
+           let range = rhrDef.ageSpecificBenchmarks.range(forAge: 45) {
             print("   • Resting HR: 68bpm")
             print("     Target for 45yo: \(Int(range.optimalMin))-\(Int(range.optimalMax))bpm optimal")
             print("     → Score: ~80/100 (good range)")
@@ -172,12 +172,13 @@ struct ScoringSchemaExamples {
         
         if let sleepDef = VitalitySubMetric.sleepDuration.definition {
             for ageGroup in AgeGroup.allCases {
-                let range = sleepDef.ageSpecificBenchmarks.range(forAgeGroup: ageGroup)
-                print("\(ageGroup.displayName) (\(ageGroup.ageRange)):")
-                print("  Optimal: \(range.optimalMin)-\(range.optimalMax) hours")
-                print("  Acceptable: \(range.acceptableLowMin)-\(range.acceptableLowMax) and \(range.acceptableHighMin)-\(range.acceptableHighMax) hours")
-                print("  Poor: <\(range.poorLowMax) or >\(range.poorHighMin) hours")
-                print("")
+                if let range = sleepDef.ageSpecificBenchmarks.range(forAgeGroup: ageGroup) {
+                    print("\(ageGroup.displayName) (\(ageGroup.ageRange)):")
+                    print("  Optimal: \(range.optimalMin)-\(range.optimalMax) hours")
+                    print("  Acceptable: \(range.acceptableLowMin)-\(range.acceptableLowMax) and \(range.acceptableHighMin)-\(range.acceptableHighMax) hours")
+                    print("  Poor: <\(range.poorLowMax) or >\(range.poorHighMin) hours")
+                    print("")
+                }
             }
         }
         
@@ -186,10 +187,11 @@ struct ScoringSchemaExamples {
         
         if let hrvDef = VitalitySubMetric.hrv.definition {
             for ageGroup in AgeGroup.allCases {
-                let range = hrvDef.ageSpecificBenchmarks.range(forAgeGroup: ageGroup)
-                print("\(ageGroup.displayName) (\(ageGroup.ageRange)):")
-                print("  Optimal: \(Int(range.optimalMin))-\(Int(range.optimalMax)) ms")
-                print("")
+                if let range = hrvDef.ageSpecificBenchmarks.range(forAgeGroup: ageGroup) {
+                    print("\(ageGroup.displayName) (\(ageGroup.ageRange)):")
+                    print("  Optimal: \(Int(range.optimalMin))-\(Int(range.optimalMax)) ms")
+                    print("")
+                }
             }
         }
     }

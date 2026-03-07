@@ -6,7 +6,15 @@ import Supabase
 
 extension DashboardView {
     // MARK: - Badges (Daily computed; Weekly persisted)
-    
+
+    /// True only for Swift task cancellation or URLSession cancelled; avoids string matching (BUG-025).
+    private func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if (error as? URLError)?.code == .cancelled { return true }
+        return false
+    }
+
+    // Day keys are UTC dates in "yyyy-MM-dd". Use date(fromDayKey:) and comparison helpers for ordering; do not compare day keys with raw string comparison (BUG-026).
     internal func utcDayKey(for date: Date) -> String {
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
@@ -14,12 +22,61 @@ extension DashboardView {
         df.dateFormat = "yyyy-MM-dd"
         return df.string(from: date)
     }
+
+    private static let dayKeyFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// Parses a day-key string ("yyyy-MM-dd" UTC) to Date. Returns nil if malformed (BUG-026).
+    private func date(fromDayKey key: String) -> Date? {
+        Self.dayKeyFormatter.date(from: key)
+    }
+
+    private func isDayKey(_ key: String, lessThanOrEqualTo other: String) -> Bool {
+        guard let d1 = date(fromDayKey: key), let d2 = date(fromDayKey: other) else { return false }
+        return d1 <= d2
+    }
+
+    private func isDayKey(_ key: String, greaterThanOrEqualTo other: String) -> Bool {
+        guard let d1 = date(fromDayKey: key), let d2 = date(fromDayKey: other) else { return false }
+        return d1 >= d2
+    }
+
+    private func areDayKeysEqual(_ a: String, _ b: String) -> Bool {
+        guard let d1 = date(fromDayKey: a), let d2 = date(fromDayKey: b) else { return false }
+        return d1 == d2
+    }
     
     internal func dateByAddingDays(_ days: Int, to date: Date) -> Date {
         Calendar(identifier: .gregorian).date(byAdding: .day, value: days, to: date) ?? date
     }
     
     internal func computeFamilyBadgesIfNeeded() async {
+        // Reentrancy guard: only one badge computation at a time
+        let alreadyComputing = await MainActor.run {
+            if isComputingBadges {
+                #if DEBUG
+                print("ℹ️ Champions: badge computation skipped (already in progress)")
+                #endif
+                return true
+            }
+            isComputingBadges = true
+            return false
+        }
+        if alreadyComputing { return }
+        defer {
+            Task { @MainActor in
+                self.isComputingBadges = false
+            }
+        }
+
+        // BUG-024: Clear any previous save error when starting a new run (pull-to-refresh or retry).
+        await MainActor.run { badgeSaveError = nil }
+
         guard let familyId = dataManager.currentFamilyId else { return }
         
         // Build member list (exclude pending and missing user ids)
@@ -45,9 +102,6 @@ extension DashboardView {
         let prevEndKey = utcDayKey(for: prevEndDate)
         let prevStartKey = utcDayKey(for: prevStartDate)
         
-        weeklyBadgeWeekStart = weekStartKey
-        weeklyBadgeWeekEnd = weekEndKey
-        
         // Fetch score rows for prevStart..todayKey (covers prev week, this week, and today).
         // Primary path: RPC `get_family_vitality_scores`.
         // Fallback path (debug/robustness): per-user queries if RPC isn't deployed yet.
@@ -60,17 +114,13 @@ extension DashboardView {
                 endDate: todayKey
             )
         } catch {
-            // Check if this is a cancellation - if so, preserve existing badges and return early
-            let errorDesc = error.localizedDescription.lowercased()
-            if error is CancellationError ||
-               (error as? URLError)?.code == .cancelled ||
-               errorDesc.contains("cancelled") {
+            // Check if this is a cancellation - if so, preserve existing badges and return early (BUG-025: type/code only, no string match).
+            if isCancellation(error) {
                 #if DEBUG
                 print("ℹ️ Champions: Badge fetch cancelled; preserving existing badges")
                 #endif
                 return // Don't clear badges on cancellation
             }
-            
             #if DEBUG
             print("❌ Champions: fetchFamilyVitalityScores RPC failed; falling back to per-user reads. error=\(error.localizedDescription)")
             #endif
@@ -81,11 +131,8 @@ extension DashboardView {
                     endDate: todayKey
                 )
             } catch {
-                // Also check cancellation in fallback
-                let fallbackErrorDesc = error.localizedDescription.lowercased()
-                if error is CancellationError ||
-                   (error as? URLError)?.code == .cancelled ||
-                   fallbackErrorDesc.contains("cancelled") {
+                // Also check cancellation in fallback (BUG-025: type/code only, no string match).
+                if isCancellation(error) {
                     #if DEBUG
                     print("ℹ️ Champions: Badge fallback fetch cancelled; preserving existing badges")
                     #endif
@@ -98,6 +145,9 @@ extension DashboardView {
             }
         }
         
+        // #region agent log
+        dbgLog("computeFamilyBadgesIfNeeded scoreRows fetched", hyp: "D", data: ["scoreRows_count": scoreRows.count, "members_count": members.count])
+        // #endregion
         let mapped: [BadgeEngine.ScoreRow] = scoreRows.map { r in
             BadgeEngine.ScoreRow(
                 userId: r.userId,
@@ -109,14 +159,14 @@ extension DashboardView {
             )
         }
         
-        // Filter out future dates (data should only include dates up to today)
-        let validMapped = mapped.filter { $0.dayKey <= todayKey }
+        // Filter out future dates (data should only include dates up to today) (BUG-026: date-based comparison).
+        let validMapped = mapped.filter { isDayKey($0.dayKey, lessThanOrEqualTo: todayKey) }
         
         // Daily badges (computed from today vs yesterday - percentage increase)
-        let todayRows = validMapped.filter { $0.dayKey == todayKey }
+        let todayRows = validMapped.filter { areDayKeysEqual($0.dayKey, todayKey) }
         let yesterdayKey = utcDayKey(for: dateByAddingDays(-1, to: today))
-        let yesterdayRows = validMapped.filter { $0.dayKey == yesterdayKey }
-        dailyBadgeWinners = BadgeEngine.computeDailyBadges(
+        let yesterdayRows = validMapped.filter { areDayKeysEqual($0.dayKey, yesterdayKey) }
+        let dailyWinners = BadgeEngine.computeDailyBadges(
             members: members,
             todayRows: todayRows,
             yesterdayRows: yesterdayRows,
@@ -129,11 +179,8 @@ extension DashboardView {
         do {
             persisted = try await dataManager.fetchFamilyBadges(familyId: familyId, weekStart: weekStartKey)
         } catch {
-            // Check if this is a cancellation - if so, preserve existing badges and return early
-            let errorDesc = error.localizedDescription.lowercased()
-            if error is CancellationError ||
-               (error as? URLError)?.code == .cancelled ||
-               errorDesc.contains("cancelled") {
+            // Check if this is a cancellation - if so, preserve existing badges and return early (BUG-025: type/code only, no string match).
+            if isCancellation(error) {
                 #if DEBUG
                 print("ℹ️ Champions: Badge persistence fetch cancelled; preserving existing badges")
                 #endif
@@ -175,18 +222,18 @@ extension DashboardView {
         }
         
         // Compute weekly winners (this week + prev week + last 14 days ending weekEndKey)
-        // Use validMapped (filtered to exclude future dates)
-        let thisWeekRows = validMapped.filter { $0.dayKey >= weekStartKey && $0.dayKey <= weekEndKey }
-        let prevWeekRows = validMapped.filter { $0.dayKey >= prevStartKey && $0.dayKey <= prevEndKey }
+        // Use validMapped (filtered to exclude future dates) (BUG-026: date-based comparison).
+        let thisWeekRows = validMapped.filter { isDayKey($0.dayKey, greaterThanOrEqualTo: weekStartKey) && isDayKey($0.dayKey, lessThanOrEqualTo: weekEndKey) }
+        let prevWeekRows = validMapped.filter { isDayKey($0.dayKey, greaterThanOrEqualTo: prevStartKey) && isDayKey($0.dayKey, lessThanOrEqualTo: prevEndKey) }
         let last14StartKey = utcDayKey(for: dateByAddingDays(-13, to: weekEndDate))
-        let last14Rows = validMapped.filter { $0.dayKey >= last14StartKey && $0.dayKey <= weekEndKey }
+        let last14Rows = validMapped.filter { isDayKey($0.dayKey, greaterThanOrEqualTo: last14StartKey) && isDayKey($0.dayKey, lessThanOrEqualTo: weekEndKey) }
         
         #if DEBUG
         print("🏆 BadgeEngine: Week window: \(weekStartKey) to \(weekEndKey) (today: \(todayKey))")
         print("🏆 BadgeEngine: Total rows fetched: \(scoreRows.count), Valid (not future): \(validMapped.count)")
         print("🏆 BadgeEngine: This week rows: \(thisWeekRows.count), Prev week rows: \(prevWeekRows.count), Last 14 rows: \(last14Rows.count)")
         if !thisWeekRows.isEmpty {
-            let dates = thisWeekRows.map { $0.dayKey }.sorted()
+            let dates = thisWeekRows.map { $0.dayKey }.sorted { (a, b) in (date(fromDayKey: a) ?? .distantPast) < (date(fromDayKey: b) ?? .distantPast) }
             print("🏆 BadgeEngine: This week dates: \(dates.joined(separator: ", "))")
         }
         #endif
@@ -204,23 +251,46 @@ extension DashboardView {
         
         // Always prefer latest computed winners for current-week freshness.
         // If no winners can be computed yet, fall back to persisted rows (if any).
-        if !computedWinners.isEmpty {
-            weeklyBadgeWinners = computedWinners
-        } else {
-            weeklyBadgeWinners = winnersFromPersisted(persisted)
-        }
+        let weeklyWinners: [BadgeEngine.Winner] = !computedWinners.isEmpty
+            ? computedWinners
+            : winnersFromPersisted(persisted)
         
-        // Persist if caller is admin/superadmin AND we have something to persist.
+        // Persist if caller is admin/superadmin AND we have something to persist (BUG-024: surface failures).
         if let uid = currentUserIdString,
            let myMembership = familyMemberRecords.first(where: { $0.userId?.uuidString == uid }),
            (myMembership.role == "admin" || myMembership.role == "superadmin"),
            !computedWinners.isEmpty {
-            try? await dataManager.upsertFamilyBadges(
-                familyId: familyId,
-                weekStart: weekStartKey,
-                weekEnd: weekEndKey,
-                winners: computedWinners
-            )
+            do {
+                try await dataManager.upsertFamilyBadges(
+                    familyId: familyId,
+                    weekStart: weekStartKey,
+                    weekEnd: weekEndKey,
+                    winners: computedWinners
+                )
+            } catch {
+                await MainActor.run {
+                    badgeSaveError = error.localizedDescription
+                }
+            }
+        }
+        
+        // #region agent log
+        dbgLog("computeFamilyBadgesIfNeeded WRITING winners", hyp: "D", data: [
+            "dailyWinners_count": dailyWinners.count,
+            "weeklyWinners_count": weeklyWinners.count,
+            "computedWinners_count": computedWinners.count,
+            "persisted_count": persisted.count,
+            "validMapped_count": validMapped.count,
+            "todayRows_count": todayRows.count
+        ])
+        // #endregion
+        // Atomic update: apply all badge state and clear computing flag in one MainActor block
+        await MainActor.run {
+            weeklyBadgeWeekStart = weekStartKey
+            weeklyBadgeWeekEnd = weekEndKey
+            dailyBadgeWinners = dailyWinners
+            weeklyBadgeWinners = weeklyWinners
+            isComputingBadges = false
         }
     }
     
@@ -256,6 +326,7 @@ extension DashboardView {
         await refreshFamilyVitalitySnapshotsIfPossible()
         await loadFamilyMembers()
         await loadServerPatternAlerts()
+        await loadActiveMemberChallenge()
         // ALWAYS load vitality on app launch (to show cached score)
         await loadFamilyVitality()
         // Weekly refresh logic: only refresh from server on Sundays
@@ -275,8 +346,34 @@ extension DashboardView {
         await computeTrendInsights()
         await computeFamilyBadgesIfNeeded()
         print("DashboardView .task finished, familyVitalityScore=\(String(describing: familyVitalityScore))")
+
+        // If both server alerts and trend insights are empty but we have family members,
+        // the Supabase session may not have been fully propagated on first login.
+        // Re-run the member + trend pipeline once after a short delay.
+        if serverPatternAlerts.isEmpty && trendInsights.isEmpty && !familyMembers.isEmpty {
+            print("⚠️ Dashboard: Empty notifications on initial load — retrying member+trend pipeline after delay")
+            try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 s
+            await loadFamilyMembers()
+            await loadServerPatternAlerts()
+            await computeAndStoreFamilySnapshot()
+            await computeTrendInsights()
+            print("🔁 Dashboard: Retry complete — serverAlerts=\(serverPatternAlerts.count) trendInsights=\(trendInsights.count)")
+        }
     }
     
+    // MARK: - Debug logging helper (session 0f4dd1)
+    private func dbgLog(_ msg: String, hyp: String, data: [String: Any] = [:]) {
+        // #region agent log
+        var payload: [String: Any] = ["sessionId": "0f4dd1", "timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "DashboardView+DataLoading.swift", "message": msg, "hypothesisId": hyp]
+        if !data.isEmpty { payload["data"] = data }
+        if let d = try? JSONSerialization.data(withJSONObject: payload), let s = String(data: d, encoding: .utf8) {
+            let path = "/Users/ramikaawach/Desktop/Miya Live/.cursor/debug-0f4dd1.log"
+            let line = s + "\n"
+            if let h = FileHandle(forWritingAtPath: path) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); h.closeFile() } else { try? line.write(toFile: path, atomically: false, encoding: .utf8) }
+        }
+        // #endregion
+    }
+
     /// Pull-to-refresh handler (extracted for compiler performance)
     internal func onPullToRefresh() async {
         // Avoid overlapping refresh calls that can trigger cancellation
@@ -284,6 +381,19 @@ extension DashboardView {
             print("ℹ️ Dashboard: refresh skipped (already loading)")
             return
         }
+        // #region agent log
+        dbgLog("onPullToRefresh START", hyp: "E", data: [
+            "trendInsights_count": trendInsights.count,
+            "serverPatternAlerts_count": serverPatternAlerts.count,
+            "familyVitalityScore": familyVitalityScore as Any,
+            "isComputingTrendInsights": isComputingTrendInsights,
+            "isComputingBadges": isComputingBadges,
+            "dailyBadgeWinners_count": dailyBadgeWinners.count,
+            "weeklyBadgeWinners_count": weeklyBadgeWinners.count,
+            "familySnapshot_isNil": familySnapshot == nil,
+            "isCheckingVitality": isCheckingVitality
+        ])
+        // #endregion
         await refreshFamilyVitalitySnapshotsIfPossible()
         await loadFamilyMembers()
         await loadServerPatternAlerts()
@@ -301,6 +411,16 @@ extension DashboardView {
         await computeAndStoreFamilySnapshot()
         await computeTrendInsights()
         await computeFamilyBadgesIfNeeded()
+        // #region agent log
+        dbgLog("onPullToRefresh END", hyp: "E", data: [
+            "trendInsights_count": trendInsights.count,
+            "serverPatternAlerts_count": serverPatternAlerts.count,
+            "familyVitalityScore": familyVitalityScore as Any,
+            "isComputingTrendInsights": isComputingTrendInsights,
+            "dailyBadgeWinners_count": dailyBadgeWinners.count,
+            "weeklyBadgeWinners_count": weeklyBadgeWinners.count
+        ])
+        // #endregion
     }
     
     internal func membersDisplayString() -> String {
@@ -325,7 +445,11 @@ extension DashboardView {
     
     internal func loadFamilyMembers() async {
         await MainActor.run {
-            isLoadingFamilyMembers = true
+            // Only show the blocking spinner when there is no data yet (first load).
+            // On navigation return the existing data stays visible while we silently refresh.
+            if familyMembers.isEmpty {
+                isLoadingFamilyMembers = true
+            }
         }
         defer {
             Task { @MainActor in
@@ -392,6 +516,7 @@ extension DashboardView {
                     // This avoids .or()/.in() syntax issues with Supabase Swift client
                     var allProfiles: [VitalityProfileRow] = []
                     for userId in userIds {
+                        try Task.checkCancellation()
                         do {
                             // Try with new progress_score column first (if migration has run)
                             let userProfiles: [VitalityProfileRow] = try await supabase
@@ -403,6 +528,8 @@ extension DashboardView {
                                 .value
                             allProfiles.append(contentsOf: userProfiles)
                         } catch {
+                            // Propagate cancellation so the outer catch can bail cleanly.
+                            if isCancellation(error) { throw error }
                             // Fallback: if new column doesn't exist (migration not run), try without it
                             let errorStr = error.localizedDescription.lowercased()
                             if errorStr.contains("vitality_progress_score_current") || errorStr.contains("does not exist") {
@@ -428,10 +555,11 @@ extension DashboardView {
                                         )
                                     })
                                 } catch {
+                                    if isCancellation(error) { throw error }
                                     print("⚠️ Dashboard: Failed to fetch profile for user_id=\(userId) (fallback): \(error.localizedDescription)")
                                 }
                             } else {
-                            print("⚠️ Dashboard: Failed to fetch profile for user_id=\(userId): \(error.localizedDescription)")
+                                print("⚠️ Dashboard: Failed to fetch profile for user_id=\(userId): \(error.localizedDescription)")
                             }
                         }
                     }
@@ -463,6 +591,7 @@ extension DashboardView {
 
                 if !userIds.isEmpty {
                     for userId in userIds {
+                        try Task.checkCancellation()
                         do {
                             let rows: [LatestMovementRow] = try await supabase
                                 .from("vitality_scores")
@@ -478,6 +607,7 @@ extension DashboardView {
                                 latestMovementByUserId[uid.lowercased()] = movement
                             }
                         } catch {
+                            if isCancellation(error) { throw error }
                             #if DEBUG
                             print("⚠️ Dashboard: Failed to load latest movement pillar score for user_id=\(userId): \(error.localizedDescription)")
                             #endif
@@ -557,7 +687,8 @@ extension DashboardView {
                     inviteStatus: rec.inviteStatus,
                     onboardingType: rec.onboardingType,
                     guidedSetupStatus: rec.guidedSetupStatus,
-                    isMe: isMe
+                    isMe: isMe,
+                    vitalityScoreUpdatedAt: updatedAt
                 )
             }
 
@@ -605,7 +736,8 @@ extension DashboardView {
                         inviteStatus: rec.inviteStatus,
                         onboardingType: rec.onboardingType,
                         guidedSetupStatus: rec.guidedSetupStatus,
-                        isMe: isMe
+                        isMe: isMe,
+                        vitalityScoreUpdatedAt: updatedAt
                     )
                 }
             }
@@ -637,7 +769,8 @@ extension DashboardView {
                         inviteStatus: rec.inviteStatus,
                         onboardingType: rec.onboardingType,
                         guidedSetupStatus: rec.guidedSetupStatus,
-                        isMe: isMe
+                        isMe: isMe,
+                        vitalityScoreUpdatedAt: updatedAt
                     )
                 }
             }
@@ -725,18 +858,12 @@ extension DashboardView {
             // Check for backfilled data after members are loaded
             await checkDataBackfillStatus()
         } catch {
-            // SwiftUI refreshes / view transitions can cancel in-flight tasks.
-            // Cancellation can come through as CancellationError, URLError with cancelled code, or wrapped in error messages.
+            // SwiftUI refreshes / view transitions can cancel in-flight tasks. Only treat CancellationError and URLError.cancelled as cancellation (BUG-025).
             // Do not treat cancellation as a failure; keep last-known good UI state (don't overwrite familyMembers).
-            let errorDesc = error.localizedDescription.lowercased()
-            if error is CancellationError || 
-               (error as? URLError)?.code == .cancelled ||
-               errorDesc.contains("cancelled") || 
-               errorDesc.contains("cancel") {
+            if isCancellation(error) {
                 print("ℹ️ Dashboard: loadFamilyMembers cancelled (type: \(type(of: error)))")
                 return
             }
-            
             // Real error (not cancellation): show fallback UI but only if we have partial data
             print("⚠️ Dashboard: Failed to load family members: \(error.localizedDescription)")
             await MainActor.run {
@@ -761,7 +888,8 @@ extension DashboardView {
                         inviteStatus: rec.inviteStatus,
                         onboardingType: rec.onboardingType,
                         guidedSetupStatus: rec.guidedSetupStatus,
-                        isMe: isMe
+                        isMe: isMe,
+                        vitalityScoreUpdatedAt: nil
                     )
                     }
                 }
@@ -794,6 +922,9 @@ extension DashboardView {
             }
             print("loadFamilyVitality() success, score=\(String(describing: summary.score)) membersWithData=\(summary.membersWithData) membersTotal=\(summary.membersTotal)")
             
+            // #region agent log
+            dbgLog("loadFamilyVitality result", hyp: "B", data: ["score": summary.score as Any, "membersWithData": summary.membersWithData, "membersTotal": summary.membersTotal])
+            // #endregion
             await MainActor.run {
                 familyVitalityScore = summary.score
                 familyVitalityProgressScore = summary.progressScore
@@ -801,20 +932,20 @@ extension DashboardView {
                 familyVitalityMembersTotal = summary.membersTotal
             }
         } catch {
-            // Preserve last-known good state on cancellation
-            let errorDesc = error.localizedDescription.lowercased()
-            if error is CancellationError ||
-               (error as? URLError)?.code == .cancelled ||
-               errorDesc.contains("cancelled") ||
-               errorDesc.contains("cancel") {
+            // Preserve last-known good state on cancellation (BUG-025: type/code only, no string match).
+            if isCancellation(error) {
                 print("ℹ️ Dashboard: loadFamilyVitality cancelled (type: \(type(of: error)))")
                 return
             }
             await MainActor.run {
-                familyVitalityScore = nil
-                familyVitalityProgressScore = nil
-                familyVitalityMembersWithData = nil
-                familyVitalityMembersTotal = nil
+                // Only wipe the score when there is no existing value to show. If a score is already
+                // displayed, keep it visible so notifications/sections don't flash empty on a transient error.
+                if familyVitalityScore == nil {
+                    familyVitalityScore = nil
+                    familyVitalityProgressScore = nil
+                    familyVitalityMembersWithData = nil
+                    familyVitalityMembersTotal = nil
+                }
                 familyVitalityErrorMessage = error.localizedDescription
             }
             print("FamilyVitality ERROR: \(error.localizedDescription)")
@@ -824,97 +955,107 @@ extension DashboardView {
     
     /// Check for backfilled data across family members and update banner status
     internal func checkDataBackfillStatus() async {
-        // Only check if we have members with user IDs
-        let eligibleUserIds = familyMembers.compactMap { $0.userId }.filter { !$0.isEmpty }
-        guard !eligibleUserIds.isEmpty else {
-            await MainActor.run {
-                dataBackfillStatus = nil
-            }
+        // Only check active members (those present in familyMembers, which comes from the live DB query)
+        let eligibleMembers = familyMembers.filter { $0.userId != nil && !($0.userId!.isEmpty) }
+        guard !eligibleMembers.isEmpty else {
+            await MainActor.run { dataBackfillStatus = nil }
             return
         }
-        
-        // Lightweight check: fetch last 7 days of data per member and check for gaps
+
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+
+        let today = Date()
+        let sevenDaysAgo = Calendar.current.date(byAdding: .day, value: -6, to: today) ?? today
+
+        // Build the 7-day expected date window once
+        var expectedDates: [String] = []
+        var cursor = sevenDaysAgo
+        while cursor <= today {
+            expectedDates.append(dateFormatter.string(from: cursor))
+            guard let next = Calendar.current.date(byAdding: .day, value: 1, to: cursor) else { break }
+            cursor = next
+        }
+
         var totalBackfilledDays = 0
         var oldestSourceAge = 0
         var affectedPillars = Set<String>()
         var membersWithBackfill = 0
-        
-        for userId in eligibleUserIds {
+        var memberSyncDetails: [DataBackfillStatus.MemberSyncDetail] = []
+
+        for member in eligibleMembers {
+            guard let userId = member.userId, !Task.isCancelled else { break }
             do {
-                // Fetch last 7 days of wearable metrics
                 let wearableRows = try await dataManager.fetchWearableDailyMetricsForUser(userId: userId, days: 7)
-                
-                // Convert to DailyDataPoint format for backfill check
-                let dateFormatter = DateFormatter()
-                dateFormatter.dateFormat = "yyyy-MM-dd"
-                
-                let today = Date()
-                let sevenDaysAgo = Calendar.current.date(byAdding: .day, value: -6, to: today) ?? today
-                
-                // Build expected date range
-                var expectedDates: [String] = []
-                var currentDate = sevenDaysAgo
-                while currentDate <= today {
-                    expectedDates.append(dateFormatter.string(from: currentDate))
-                    guard let next = Calendar.current.date(byAdding: .day, value: 1, to: currentDate) else { break }
-                    currentDate = next
-                }
-                
-                // Check for missing days
+
                 let existingDates = Set(wearableRows.map { $0.metricDate })
+                let lastSyncDateString = wearableRows.map { $0.metricDate }.max()
+                let lastSyncDate = lastSyncDateString.flatMap { dateFormatter.date(from: $0) }
+
                 let missingDates = expectedDates.filter { !existingDates.contains($0) }
-                
-                if !missingDates.isEmpty {
-                    // Check if we can backfill (look back up to 3 days)
-                    for missingDate in missingDates {
-                        guard let missing = dateFormatter.date(from: missingDate) else { continue }
-                        
-                        // Look back up to 3 days
-                        for daysBack in 1...3 {
-                            guard let lookbackDate = Calendar.current.date(byAdding: .day, value: -daysBack, to: missing),
-                                  let lookbackString = Optional(dateFormatter.string(from: lookbackDate)) else {
-                                continue
+
+                // Track whether this specific member has any backfill (count once per member)
+                var memberHasBackfill = false
+
+                for missingDate in missingDates {
+                    guard let missing = dateFormatter.date(from: missingDate) else { continue }
+
+                    for daysBack in 1...3 {
+                        guard let lookbackDate = Calendar.current.date(byAdding: .day, value: -daysBack, to: missing) else { continue }
+                        let lookbackString = dateFormatter.string(from: lookbackDate)
+
+                        if existingDates.contains(lookbackString) {
+                            totalBackfilledDays += 1
+                            oldestSourceAge = max(oldestSourceAge, daysBack)
+                            memberHasBackfill = true
+
+                            if let row = wearableRows.first(where: { $0.metricDate == lookbackString }) {
+                                if row.steps != nil || row.movementMinutes != nil { affectedPillars.insert("Activity") }
+                                if row.sleepMinutes != nil || row.deepSleepMinutes != nil { affectedPillars.insert("Sleep") }
+                                if row.hrvMs != nil || row.restingHr != nil { affectedPillars.insert("Recovery") }
                             }
-                            
-                            if existingDates.contains(lookbackString) {
-                                // Found backfillable data
-                                totalBackfilledDays += 1
-                                oldestSourceAge = max(oldestSourceAge, daysBack)
-                                membersWithBackfill += 1
-                                
-                                // Determine affected pillars based on available metrics
-                                if let row = wearableRows.first(where: { $0.metricDate == lookbackString }) {
-                                    if row.steps != nil || row.movementMinutes != nil {
-                                        affectedPillars.insert("Activity")
-                                    }
-                                    if row.sleepMinutes != nil || row.deepSleepMinutes != nil {
-                                        affectedPillars.insert("Sleep")
-                                    }
-                                    if row.hrvMs != nil || row.restingHr != nil {
-                                        affectedPillars.insert("Recovery")
-                                    }
-                                }
-                                break
-                            }
+                            break
                         }
                     }
                 }
+
+                if memberHasBackfill { membersWithBackfill += 1 }
+
+                memberSyncDetails.append(DataBackfillStatus.MemberSyncDetail(
+                    id: userId,
+                    name: member.name,
+                    userId: userId,
+                    lastSyncDate: lastSyncDate,
+                    hasBackfill: memberHasBackfill
+                ))
             } catch {
-                // Silently skip errors for backfill check (non-critical)
                 #if DEBUG
                 print("⚠️ Dashboard: Backfill check failed for user \(userId): \(error.localizedDescription)")
                 #endif
+                // Still record member with unknown sync date so they appear in the popup
+                memberSyncDetails.append(DataBackfillStatus.MemberSyncDetail(
+                    id: userId,
+                    name: member.name,
+                    userId: userId,
+                    lastSyncDate: nil,
+                    hasBackfill: false
+                ))
             }
         }
-        
-        // Update banner status if we found backfilled data
+
         await MainActor.run {
             if totalBackfilledDays > 0 {
                 dataBackfillStatus = DataBackfillStatus(
                     affectedMemberCount: membersWithBackfill,
                     oldestSourceDays: oldestSourceAge,
-                    pillarsAffected: Array(affectedPillars)
+                    pillarsAffected: Array(affectedPillars),
+                    memberSyncDetails: memberSyncDetails
                 )
+            } else if !memberSyncDetails.isEmpty {
+                // No backfill, but we still have sync details — keep them available for the popup
+                // but don't show the banner (set to nil to hide it)
+                dataBackfillStatus = nil
             } else {
                 dataBackfillStatus = nil
             }
@@ -1020,17 +1161,19 @@ extension DashboardView {
     /// Start a recommended 7-day challenge for a family member based on a notification.
     /// This calls the `create_challenge` RPC, which enforces that only admins can start
     /// challenges and that at most one active/pending challenge exists per member.
-    internal func startRecommendedChallenge(for notification: FamilyNotificationItem) async {
+    /// Returns true if the challenge was created successfully and the intervention was recorded.
+    @discardableResult
+    internal func startRecommendedChallenge(for notification: FamilyNotificationItem) async -> Bool {
         guard let memberUserId = notification.memberUserId,
               UUID(uuidString: memberUserId) != nil else {
             print("❌ startRecommendedChallenge: Missing or invalid memberUserId")
-            return
+            return false
         }
         
         // The notification ID corresponds to the underlying pattern_alert_state ID.
         guard UUID(uuidString: notification.id) != nil else {
             print("❌ startRecommendedChallenge: Invalid alert ID \(notification.id)")
-            return
+            return false
         }
         
         let pillarKey: String
@@ -1062,14 +1205,27 @@ extension DashboardView {
                 .value
             
             if result.success {
-                #if DEBUG
                 print("✅ Created challenge \(result.challenge_id ?? "") for member \(memberUserId) pillar \(pillarKey)")
-                #endif
+                if let challengeId = result.challenge_id {
+                    do {
+                        try await dataManager.recordAlertIntervention(
+                            alertId: notification.id,
+                            interventionType: "challenge",
+                            challengeId: challengeId
+                        )
+                        print("✅ Recorded alert intervention for alert \(notification.id)")
+                    } catch {
+                        print("⚠️ recordAlertIntervention failed: \(error.localizedDescription)")
+                    }
+                }
+                return true
             } else {
                 print("❌ Failed to create challenge: \(result.error ?? "unknown_error")")
+                return false
             }
         } catch {
             print("❌ startRecommendedChallenge RPC failed: \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -1265,6 +1421,14 @@ extension DashboardView {
                 let deviation_percent: Double?
                 let baseline_value: Double?
                 let recent_value: Double?
+                let care_state: String?
+                let acted_by_user_id: String?
+                let acted_at: String?
+                let follow_up_due_date: String?
+                let outcome_message: String?
+                let cycle_count: Int?
+                let last_intervention_type: String?
+                let my_challenge_status: String?
             }
             
             let rows: [AlertRow] = try await supabase
@@ -1340,6 +1504,10 @@ extension DashboardView {
                     confidence: 1.0
                 )
                 
+                let careState: CareState? = row.care_state.flatMap { CareState(rawValue: $0) }
+                let actedAt: Date? = row.acted_at.flatMap { ISO8601DateFormatter().date(from: $0) }
+                let followUpDueDate: Date? = row.follow_up_due_date.flatMap { (Self.dayKeyFormatter.date(from: $0)) }
+                
                 let item = FamilyNotificationItem(
                     id: row.id,
                     kind: .trend(insight),
@@ -1347,7 +1515,15 @@ extension DashboardView {
                     title: title,
                     body: body,
                     memberInitials: makeInitials(from: memberName),
-                    memberName: memberName
+                    memberName: memberName,
+                    careState: careState,
+                    actedByUserId: row.acted_by_user_id,
+                    actedAt: actedAt,
+                    followUpDueDate: followUpDueDate,
+                    outcomeMessage: row.outcome_message,
+                    cycleCount: row.cycle_count ?? 0,
+                    lastInterventionType: row.last_intervention_type,
+                    myChallengeStatus: row.my_challenge_status
                 )
                 items.append(item)
             }
@@ -1357,14 +1533,40 @@ extension DashboardView {
             
         } catch {
             print("❌ Dashboard: Failed to fetch server pattern alerts: \(error.localizedDescription)")
+            print("❌ Dashboard: Full error: \(error)")
+            if let urlError = error as? URLError {
+                print("❌ Dashboard: URLError code: \(urlError.code.rawValue)")
+            }
             return .failure(error)
+        }
+    }
+    
+    /// Load the current user's active challenge (for My Challenge block).
+    internal func loadActiveMemberChallenge() async {
+        do {
+            let challenge = try await dataManager.fetchActiveChallengeForMember()
+            await MainActor.run { activeMemberChallenge = challenge }
+        } catch {
+            await MainActor.run { activeMemberChallenge = nil }
         }
     }
     
     /// Fetch vitality history for family members and compute trend insights.
     internal func computeTrendInsights() async {
         await MainActor.run {
-            isComputingTrendInsights = true
+            // Only show the blocking "computing" state on first load (no existing insights to display).
+            // On navigation return, keep existing notifications visible while silently refreshing.
+            // #region agent log
+            dbgLog("computeTrendInsights START", hyp: "A", data: [
+                "trendInsights_count_before": trendInsights.count,
+                "isComputingTrendInsights_before": isComputingTrendInsights,
+                "familyVitalityScore": familyVitalityScore as Any,
+                "familySnapshot_isNil": familySnapshot == nil
+            ])
+            // #endregion
+            if trendInsights.isEmpty {
+                isComputingTrendInsights = true
+            }
         }
         
         print("🔍 computeTrendInsights() called")
@@ -1388,8 +1590,21 @@ extension DashboardView {
             print("    [\(idx + 1)] \(uid) (\(member?.name ?? "unknown"))")
         }
         
+        // #region agent log
+        dbgLog("computeTrendInsights eligibility", hyp: "C", data: [
+            "eligibleUserIds_count": eligibleUserIds.count,
+            "familyMembers_count": familyMembers.count,
+            "members_hasScore": familyMembers.map { $0.hasScore },
+            "members_isScoreFresh": familyMembers.map { $0.isScoreFresh },
+            "members_isMe": familyMembers.map { $0.isMe },
+            "members_isPending": familyMembers.map { $0.isPending }
+        ])
+        // #endregion
         guard !eligibleUserIds.isEmpty else {
             await MainActor.run {
+                // #region agent log
+                dbgLog("computeTrendInsights CLEARING trendInsights (no eligible members)", hyp: "C", data: ["trendInsights_count_before": trendInsights.count, "serverPatternAlerts_count": serverPatternAlerts.count])
+                // #endregion
                 trendInsights = []
                 trendCoverage = TrendCoverageStatus(
                     windowDays: 21,

@@ -76,12 +76,36 @@ struct FamilyNotificationsCard: View {
         return order.compactMap { groups[$0] }
     }
     
+    /// Show on main card unless this user has an active challenge on this alert (then hide from card).
+    private var activeGroups: [GroupedNotification] {
+        groupedItems.filter { $0.representativeItem.myChallengeStatus != "active" }
+    }
+    
     private var displayedGroups: [GroupedNotification] {
-        Array(groupedItems.prefix(3))
+        Array(activeGroups.prefix(3))
     }
     
     private var hasMore: Bool {
-        groupedItems.count > 3
+        activeGroups.count > 3
+    }
+    
+    @ViewBuilder
+    private func challengeStatusPill(for item: FamilyNotificationItem) -> some View {
+        if item.myChallengeStatus == "pending_invite" || item.myChallengeStatus == "snoozed" {
+            Text("Challenge Issued")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(DashboardDesign.secondaryTextColor)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.gray.opacity(0.15)))
+        } else if item.myChallengeStatus == "completed_failed", item.lastInterventionType == "challenge" {
+            Text("Challenge Declined")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(DashboardDesign.secondaryTextColor)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.gray.opacity(0.15)))
+        }
     }
     
     private func pillarIcon(_ pillar: VitalityPillar) -> String {
@@ -106,6 +130,7 @@ struct FamilyNotificationsCard: View {
         case .attention: return 3
         case .watch: return 2
         case .celebrate: return 1
+        @unknown default: return 2
         }
     }
     
@@ -117,6 +142,8 @@ struct FamilyNotificationsCard: View {
             return Color.orange
         case .attention:
             return Color.red
+        @unknown default:
+            return Color.orange
         }
     }
     
@@ -211,11 +238,15 @@ struct FamilyNotificationsCard: View {
             Button("Cancel", role: .cancel) {
                 itemToSnooze = nil
             }
-            Button("Snooze") {
-                if let item = itemToSnooze {
+            if let item = itemToSnooze {
+                Button("Snooze (\(defaultSnoozeDays(for: item)) days)") {
                     onSnooze(item, defaultSnoozeDays(for: item))
+                    itemToSnooze = nil
                 }
-                itemToSnooze = nil
+                Button("Not a concern (30 days)") {
+                    onSnooze(item, 30)
+                    itemToSnooze = nil
+                }
             }
         }
     }
@@ -226,13 +257,19 @@ struct FamilyNotificationsCard: View {
             HStack(spacing: 8) {
                 // LEFT: member initials + pillar icons
                 HStack(spacing: 8) {
-                    ZStack {
-                        Circle()
-                            .fill(DashboardDesign.tertiaryBackgroundColor)
-                            .frame(width: 32, height: 32)
-                        Text(group.memberInitials)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(DashboardDesign.primaryTextColor)
+                    VStack(spacing: 3) {
+                        ZStack {
+                            Circle()
+                                .fill(DashboardDesign.tertiaryBackgroundColor)
+                                .frame(width: 32, height: 32)
+                            Text(group.memberInitials)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(DashboardDesign.primaryTextColor)
+                        }
+                        Text(group.memberName.components(separatedBy: " ").first ?? group.memberName)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(DashboardDesign.secondaryTextColor)
+                            .lineLimit(1)
                     }
                     
                     HStack(spacing: 4) {
@@ -246,11 +283,14 @@ struct FamilyNotificationsCard: View {
                 
                 // MIDDLE + RIGHT: summary with days/CTA just left of snooze
                 HStack(spacing: 8) {
-                    Text(summaryLabel(for: group))
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(DashboardDesign.secondaryTextColor)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(summaryLabel(for: group))
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(DashboardDesign.secondaryTextColor)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        challengeStatusPill(for: group.representativeItem)
+                    }
                     
                     Spacer(minLength: 0)
                     
@@ -344,6 +384,9 @@ struct FamilyNotificationsCard: View {
     }
     
     private func summaryLabel(for group: GroupedNotification) -> String {
+        let firstName = group.memberName.components(separatedBy: " ").first ?? group.memberName
+        let possessive = firstName.hasSuffix("s") ? "\(firstName)'" : "\(firstName)'s"
+
         let names = group.pillars.map { pillar -> String in
             switch pillar {
             case .sleep: return "Sleep"
@@ -363,8 +406,7 @@ struct FamilyNotificationsCard: View {
             joined = "Multiple pillars"
         }
         
-        // Keep copy tight and action-oriented
-        return "\(joined) low"
+        return "\(possessive) \(joined) low"
     }
 }
 

@@ -9,18 +9,21 @@ struct FamilyMemberProfileView: View {
     let familyId: String
     let isCurrentUser: Bool
     let previewMock: Bool
+    let initialPillar: PillarType?
     init(
         memberUserId: String,
         memberName: String,
         familyId: String,
         isCurrentUser: Bool,
-        previewMock: Bool = false
+        previewMock: Bool = false,
+        initialPillar: PillarType? = nil
     ) {
         self.memberUserId = memberUserId
         self.memberName = memberName
         self.familyId = familyId
         self.isCurrentUser = isCurrentUser
         self.previewMock = previewMock
+        self.initialPillar = initialPillar
     }
     
     @EnvironmentObject private var dataManager: DataManager
@@ -73,12 +76,12 @@ struct FamilyMemberProfileView: View {
             Color.miyaCreamBg.ignoresSafeArea()
             
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 20) {
                     headerSection
                     healthScoreSection
                     pillarsSection
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 16)
                 .padding(.top, 16)
             }
             
@@ -113,6 +116,9 @@ struct FamilyMemberProfileView: View {
         }
         .navigationTitle("\(memberName)’s Health")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(Color.miyaPrimary, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
         .task {
             // ✅ Xcode Preview mock data (no Supabase)
             if previewMock || ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" {
@@ -153,6 +159,10 @@ struct FamilyMemberProfileView: View {
             }
 
             await self.fetchMemberData()
+            if let pillar = initialPillar {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                await MainActor.run { selectedPillarForDive = pillar }
+            }
         }
         .sheet(item: $selectedPillarForDive) { pillar in
             PillarDiveDeeperSheet(
@@ -182,7 +192,7 @@ private extension FamilyMemberProfileView {
                 foregroundColor: .miyaTextPrimary,
                 font: .system(size: 20, weight: .semibold),
                 showsBorder: true,
-                borderColor: Color.miyaSageLight,
+                borderColor: Color.miyaPrimary,
                 borderWidth: 2
             )
             .frame(width: 58, height: 58)
@@ -219,9 +229,16 @@ private extension FamilyMemberProfileView {
         let dataFreshness = freshness(for: lastMetricDate)
         
         return VStack(alignment: .leading, spacing: 12) {
-            Text("📊 Health Pillars (Last 7 days)")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundColor(.miyaTextPrimary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Health Pillars")
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundColor(DashboardDesign.secondaryTextColor)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                Text("Last 7 days")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundColor(.miyaTextTertiary)
+            }
             
             let days = daysWithMetricsLast7
             
@@ -421,6 +438,14 @@ private extension FamilyMemberProfileView {
                 let deviation_percent: Double?
                 let baseline_value: Double?
                 let recent_value: Double?
+                // Care loop fields (optional so decoding still works when RPC returns them)
+                let care_state: String?
+                let acted_by_user_id: String?
+                let acted_at: String?
+                let follow_up_due_date: String?
+                let outcome_message: String?
+                let cycle_count: Int?
+                let last_intervention_type: String?
             }
             
             let rows: [AlertRow] = try await supabase
@@ -802,13 +827,13 @@ private struct HealthScoreCard: View {
                     .foregroundColor(.miyaTextPrimary)
                 Spacer()
                 Text("\(score)")
-                    .font(.system(size: 28, weight: .bold))
-                    .foregroundColor(.miyaSage)
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundColor(.miyaPrimary)
             }
             
             HStack(alignment: .firstTextBaseline) {
                 Text(statusText)
-                    .font(.system(size: 18, weight: .medium))
+                    .font(.system(size: 18, weight: .semibold))
                     .foregroundColor(.miyaTextSecondary)
 
                 Spacer()
@@ -823,7 +848,7 @@ private struct HealthScoreCard: View {
                             Text("\(isUp ? "Up" : "Down") \(abs(trendDelta))% from last week")
                         }
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(isUp ? .miyaSage : .miyaTerracotta)
+                        .foregroundColor(isUp ? .miyaPrimary : .miyaTerracotta)
                     }
                 } else {
                     Text("Building baseline...")
@@ -837,31 +862,52 @@ private struct HealthScoreCard: View {
             
             if let onAskMiya {
                 Button(action: onAskMiya) {
-                    HStack(spacing: 10) {
-                        Text("🤖")
+                    HStack(spacing: 12) {
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(Color.miyaPrimary.opacity(0.18))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(Color.white.opacity(0.6), lineWidth: 1)
+                            )
+                            .frame(width: 44, height: 44)
+                            .overlay(
+                                Image(systemName: "heart.fill")
+                                    .font(.system(size: 18, weight: .medium))
+                                    .foregroundColor(.miyaPrimary)
+                            )
 
-                        Text("See how \(memberName) is doing")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("See how \(memberName) is doing")
+                                .font(DashboardDesign.title2Font)
+                                .foregroundColor(.miyaTextPrimary)
+                            Text("Chat with Miya")
+                                .font(DashboardDesign.subheadlineFont)
+                                .foregroundColor(.miyaTextSecondary)
+                        }
 
                         Spacer()
 
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.miyaTextSecondary)
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.miyaPrimary.opacity(0.10))
+                            .frame(width: 44, height: 44)
+                            .overlay(
+                                Image(systemName: "bubble.left.fill")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(.miyaPrimary)
+                            )
                     }
-                    .padding(.vertical, 12)
-                    .padding(.horizontal, 14)
-                    .background(Color.miyaSage.opacity(0.12))
-                    .cornerRadius(12)
+                    .padding(14)
+                    .background(DashboardDesign.glassCardBackground())
+                    .cornerRadius(16)
+                    .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 3)
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(24)
+        .padding(16)
         .background(Color.miyaCardWhite)
         .cornerRadius(16)
-        .shadow(color: .black.opacity(0.12), radius: 12, x: 0, y: 4)
+        .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
     }
 }
 
@@ -873,7 +919,7 @@ private struct ProgressBar: View {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color.miyaSurfaceGrey)
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(LinearGradient(colors: [Color.miyaSageDark, Color.miyaSageLight], startPoint: .leading, endPoint: .trailing))
+                    .fill(LinearGradient(colors: [Color.miyaPrimary, Color.miyaTealLight], startPoint: .leading, endPoint: .trailing))
                     .frame(width: geo.size.width * progress)
                     .animation(.easeOut(duration: 1.0), value: progress)
             }
@@ -1036,7 +1082,7 @@ private struct AlertInsightDetailView: View {
                                         HStack(alignment: .top, spacing: 8) {
                                             Text("\(i + 1).")
                                                 .font(.system(size: 14, weight: .medium))
-                                                .foregroundColor(.miyaSageDark)
+                                                .foregroundColor(.miyaPrimary)
                                             Text(step)
                                                 .font(.system(size: 14))
                                                 .foregroundColor(.miyaTextSecondary)
@@ -1116,7 +1162,7 @@ private struct PillarCardView: View {
             if status == .below {
                 return LinearGradient(colors: [Color.miyaTerracotta.opacity(0.08), Color.white], startPoint: .topLeading, endPoint: .bottomTrailing)
             } else {
-                return LinearGradient(colors: [Color.miyaSage.opacity(0.08), Color.white], startPoint: .topLeading, endPoint: .bottomTrailing)
+                return LinearGradient(colors: [Color.miyaPrimary.opacity(0.08), Color.white], startPoint: .topLeading, endPoint: .bottomTrailing)
             }
         case .stress:
             return LinearGradient(colors: [Color.miyaSkyBlue.opacity(0.08), Color.white], startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -1128,7 +1174,7 @@ private struct PillarCardView: View {
         case .sleep:
             return Color.miyaLavender
         case .movement:
-            if status == .below { return Color.miyaTerracotta } else { return Color.miyaSage }
+            if status == .below { return Color.miyaTerracotta } else { return Color.miyaPrimary }
         case .stress:
             return status == .below ? Color.miyaTerracotta : Color.miyaSkyBlue
         }
@@ -1140,7 +1186,7 @@ private struct PillarCardView: View {
         switch status {
         case .above:
             arrow = "arrow.up"
-            color = .miyaSage
+            color = .miyaPrimary
         case .stable:
             arrow = "arrow.right"
             color = .miyaSkyBlue
@@ -1311,7 +1357,7 @@ private struct MovementHeroPillarCard: View {
         switch pillarType {
         case .movement:
             return LinearGradient(
-                colors: [Color.miyaSage.opacity(0.14), Color.miyaCardWhite],
+                colors: [Color.miyaPrimary.opacity(0.14), Color.miyaCardWhite],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -1332,7 +1378,7 @@ private struct MovementHeroPillarCard: View {
 
     private var borderColor: Color {
         switch pillarType {
-        case .movement: return Color.miyaSage
+        case .movement: return Color.miyaPrimary
         case .sleep: return Color.miyaLavender
         case .stress: return Color.miyaSkyBlue
         }
@@ -1407,10 +1453,10 @@ private struct CompactPillarCard: View {
     private var borderColor: Color {
         switch pillarType {
         case .sleep: return Color.miyaLavender
-        case .movement: return Color.miyaSage
+        case .movement: return Color.miyaPrimary
         case .recovery: return Color.miyaSkyBlue
         case .overview:
-            return Color.miyaSageLight
+            return Color.miyaPrimary.opacity(0.4)
         }
     }
 
@@ -1439,7 +1485,7 @@ private struct StatusChip: View {
 
     private var foreground: Color {
         switch status {
-        case .above: return .miyaSage
+        case .above: return .miyaPrimary
         case .stable: return .miyaSkyBlue
         case .below: return .miyaTerracotta
         }
@@ -1474,7 +1520,7 @@ private struct ThinPillarRow: View {
                     Spacer(minLength: 10)
 
                     Text(value)
-                        .font(.system(size: 18, weight: .bold))
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
                         .foregroundColor(.miyaTextPrimary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
@@ -1489,16 +1535,15 @@ private struct ThinPillarRow: View {
                     .foregroundColor(.miyaTextTertiary)
                     .lineLimit(1)
             }
-            .padding(.vertical, 12)
-            .padding(.horizontal, 14)
+            .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.miyaCardWhite)
-            .cornerRadius(14)
+            .cornerRadius(16)
             .overlay(
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: 16)
                     .stroke(borderColor.opacity(0.25), lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.04), radius: 6, x: 0, y: 3)
+            .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
         }
         .buttonStyle(.plain)
     }
@@ -1510,7 +1555,7 @@ private struct ThinPillarRow: View {
         case "Recovery":
             return Color.miyaSkyBlue
         default:
-            return Color.miyaSage
+            return Color.miyaPrimary
         }
     }
 
@@ -1744,22 +1789,51 @@ private struct PillarDiveDeeperSheet: View {
                                 VStack(alignment: .leading, spacing: 10) {
                                     ForEach(messages) { msg in
                                         VStack(alignment: msg.role == .assistant ? .leading : .trailing, spacing: 8) {
-                                            HStack {
+                                            HStack(alignment: .bottom, spacing: 8) {
+                                                if msg.role == .assistant {
+                                                    Circle()
+                                                        .fill(
+                                                            LinearGradient(
+                                                                colors: [Color.miyaPrimary, Color.miyaPrimary.opacity(0.70)],
+                                                                startPoint: .topLeading,
+                                                                endPoint: .bottomTrailing
+                                                            )
+                                                        )
+                                                        .frame(width: 28, height: 28)
+                                                        .overlay(
+                                                            Text("M")
+                                                                .font(.system(size: 12, weight: .bold))
+                                                                .foregroundColor(.white)
+                                                        )
+                                                }
+
                                                 if msg.role == .user {
                                                     Spacer(minLength: 0)
                                                 }
 
-                                                Text(msg.text)
-                                                    .font(.system(size: 14))
-                                                    .foregroundColor(.miyaTextPrimary)
-                                                    .padding(12)
-                                                    .background(
-                                                        msg.role == .assistant
-                                                        ? Color.miyaSage.opacity(0.15)
-                                                        : Color.miyaSurfaceGrey.opacity(0.35)
-                                                    )
-                                                    .cornerRadius(14)
-                                                    .frame(maxWidth: .infinity, alignment: msg.role == .assistant ? .leading : .trailing)
+                                                if msg.role == .assistant {
+                                                    Text(msg.text)
+                                                        .font(.system(size: 15))
+                                                        .foregroundColor(.miyaTextPrimary)
+                                                        .padding(12)
+                                                        .background(.ultraThinMaterial)
+                                                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                                        .shadow(color: .black.opacity(0.06), radius: 6, x: 0, y: 2)
+                                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                                } else {
+                                                    Text(msg.text)
+                                                        .font(.system(size: 15))
+                                                        .foregroundColor(.white)
+                                                        .padding(12)
+                                                        .background(
+                                                            LinearGradient(
+                                                                colors: [Color.miyaPrimary.opacity(0.95), Color.miyaPrimary.opacity(0.70)],
+                                                                startPoint: .topLeading,
+                                                                endPoint: .bottomTrailing
+                                                            )
+                                                        )
+                                                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                                }
 
                                                 if msg.role == .assistant {
                                                     Spacer(minLength: 0)
@@ -1803,12 +1877,21 @@ private struct PillarDiveDeeperSheet: View {
                     VStack(spacing: 0) {
                         Divider().opacity(0.18)
                         HStack(spacing: 10) {
-                            TextField("Write a reply…", text: $chatInput)
-                                .font(.system(size: 15))
-                                .padding(.vertical, 10)
-                                .padding(.horizontal, 12)
-                                .background(Color.miyaSurfaceGrey.opacity(0.16))
-                                .cornerRadius(16)
+                            HStack {
+                                TextField("Write a reply…", text: $chatInput)
+                                    .font(.system(size: 15))
+                                    .padding(.vertical, 10)
+                                    .padding(.horizontal, 14)
+                            }
+                            .background(
+                                RoundedRectangle(cornerRadius: 26)
+                                    .fill(Color(.systemBackground).opacity(0.80))
+                                    .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 2)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 26)
+                                    .stroke(Color.miyaPrimary.opacity(0.12), lineWidth: 1)
+                            )
 
                             Button(action: {
                                 let trimmed = chatInput.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1831,16 +1914,28 @@ private struct PillarDiveDeeperSheet: View {
 
                                 Task { await sendMessage(intent: intentTag) }
                             }) {
-                                Image(systemName: "arrow.up.circle.fill")
-                                    .resizable()
-                                    .frame(width: 28, height: 28)
-                                    .foregroundColor(.miyaSage)
+                                ZStack {
+                                    Circle()
+                                        .fill(
+                                            LinearGradient(
+                                                colors: [Color.miyaPrimary, Color.miyaPrimary.opacity(0.80)],
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            )
+                                        )
+                                        .frame(width: 44, height: 44)
+                                        .shadow(color: Color.miyaPrimary.opacity(0.40), radius: 8, x: 0, y: 4)
+                                    Image(systemName: "arrow.up")
+                                        .font(.system(size: 16, weight: .bold))
+                                        .foregroundColor(.white)
+                                }
                             }
                             .disabled(chatInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
-                        .background(Color.miyaCardWhite.ignoresSafeArea(edges: .bottom))
+                        .background(.ultraThinMaterial)
+                        .ignoresSafeArea(edges: .bottom)
                     }
 
                 } else {
@@ -1921,14 +2016,14 @@ private struct PillarDiveDeeperSheet: View {
                     } label: {
                         Text(pill.title)
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
+                            .foregroundColor(.miyaPrimary)
                             .padding(.vertical, 10)
                             .padding(.horizontal, 12)
-                            .background(Color.miyaCardWhite)
-                            .cornerRadius(999)
+                            .background(Color.white)
+                            .clipShape(Capsule())
                             .overlay(
-                                RoundedRectangle(cornerRadius: 999)
-                                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                                Capsule()
+                                    .stroke(Color.miyaPrimary.opacity(0.18), lineWidth: 1)
                             )
                     }
                     .buttonStyle(.plain)
@@ -1989,6 +2084,21 @@ private struct PillarDiveDeeperSheet: View {
                     Text(err)
                         .font(.system(size: 13))
                         .foregroundColor(.miyaTextSecondary)
+                }
+                .padding(.vertical, 12)
+
+            } else if insufficientDataForRange {
+                let days = actualDayCount
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Not enough data for \(selectedRange.rawValue) days")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.miyaTextPrimary)
+                    Text(days > 0
+                         ? "You have data for \(days) day\(days == 1 ? "" : "s") so far. Switch to the 30-day view to see your recent trend."
+                         : "Keep syncing consistently and you'll see a \(selectedRange.rawValue)-day trend here soon.")
+                        .font(.system(size: 13))
+                        .foregroundColor(.miyaTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.vertical, 12)
 
@@ -2131,6 +2241,24 @@ private struct PillarDiveDeeperSheet: View {
         }
     }
 
+    /// Number of days in the full history that have actual (non-nil) data.
+    private var actualDayCount: Int {
+        history.filter { $0.value != nil }.count
+    }
+
+    /// Returns true when the selected range is 60d or 90d and the user doesn't have
+    /// enough data to make that view meaningful. 30d is always shown as-is per spec.
+    private var insufficientDataForRange: Bool {
+        switch selectedRange {
+        case .days30:
+            return false
+        case .days60:
+            return actualDayCount < 30
+        case .days90:
+            return actualDayCount < 60
+        }
+    }
+
     private func sliceHistory(for range: PillarRange) -> [(date: String, value: Int?)] {
         guard !history.isEmpty else { return [] }
         let n = min(range.rawValue, history.count)
@@ -2258,23 +2386,31 @@ private struct PillarDiveDeeperSheet: View {
 
     private var accentColor: Color {
         switch pillar {
-        case .movement: return .miyaSage
+        case .movement: return .miyaPrimary
         case .sleep: return .miyaLavender
         case .recovery: return .miyaSkyBlue
-        case .overview: return .miyaSageLight
+        case .overview: return .miyaPrimary
         }
     }
 
     private var background: some View {
-        LinearGradient(
-            colors: [
-                Color.miyaSage.opacity(0.65),
-                Color.miyaSageLight.opacity(0.45),
-                Color.miyaCreamBg
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color.miyaPrimary.opacity(0.65),
+                    Color.miyaPrimary.opacity(0.22),
+                    Color.miyaCreamBg
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            RadialGradient(
+                gradient: Gradient(colors: [Color.miyaPrimary.opacity(0.18), Color.clear]),
+                center: .topLeading,
+                startRadius: 20,
+                endRadius: 300
+            )
+        }
     }
 
     private var header: some View {
@@ -2285,10 +2421,31 @@ private struct PillarDiveDeeperSheet: View {
                 .padding(.top, 10)
                 .padding(.bottom, 12)
 
-            HStack {
-                Text(sheetTitle)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(.miyaTextPrimary)
+            HStack(spacing: 10) {
+                if pillar == .overview {
+                    // "M" circle avatar matching ArloChatView
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.miyaPrimary, Color.miyaPrimary.opacity(0.70)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 28, height: 28)
+                        .overlay(
+                            Text("M")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundColor(.white)
+                        )
+                    Text("Miya")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.miyaTextPrimary)
+                } else {
+                    Text(sheetTitle)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.miyaTextPrimary)
+                }
 
                 Spacer()
 
@@ -2363,7 +2520,8 @@ private struct TypingIndicatorBubble: View {
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
-        .background(Color.miyaCardWhite)
+        .background(Color(.systemBackground).opacity(0.70))
+        .background(.ultraThinMaterial)
         .cornerRadius(16)
         .onAppear {
             withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {

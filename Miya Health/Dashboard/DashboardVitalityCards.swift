@@ -13,6 +13,7 @@ struct FamilyVitalityCard: View {
     let onNotificationSeeAll: (() -> Void)?
     let onNotificationSnooze: ((FamilyNotificationItem, Int?) -> Void)?
     let onFactorTapped: (VitalityFactor) -> Void
+    let onFamilyChallenges: (() -> Void)?
     
     @State private var itemToSnooze: FamilyNotificationItem? = nil
     
@@ -26,7 +27,8 @@ struct FamilyVitalityCard: View {
         onNotificationTap: ((FamilyNotificationItem) -> Void)? = nil,
         onNotificationSeeAll: (() -> Void)? = nil,
         onNotificationSnooze: ((FamilyNotificationItem, Int?) -> Void)? = nil,
-        onFactorTapped: @escaping (VitalityFactor) -> Void
+        onFactorTapped: @escaping (VitalityFactor) -> Void,
+        onFamilyChallenges: (() -> Void)? = nil
     ) {
         self.score = score
         self.label = label
@@ -38,6 +40,7 @@ struct FamilyVitalityCard: View {
         self.onNotificationSeeAll = onNotificationSeeAll
         self.onNotificationSnooze = onNotificationSnooze
         self.onFactorTapped = onFactorTapped
+        self.onFamilyChallenges = onFamilyChallenges
     }
 
     private var progressFraction: Double {
@@ -126,6 +129,22 @@ struct FamilyVitalityCard: View {
             if !notifications.isEmpty {
                 embeddedNotificationsSection
             }
+            
+            if onFamilyChallenges != nil {
+                Button(action: { onFamilyChallenges?() }) {
+                    HStack {
+                        Text("Family Challenges")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.miyaPrimary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.miyaPrimary)
+                    }
+                    .padding(.top, 8)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, DashboardDesign.cardPadding)
         .padding(.vertical, DashboardDesign.cardPadding)
@@ -206,9 +225,11 @@ struct FamilyVitalityCard: View {
             return Color.orange
         case .attention:
             return Color.red
+        @unknown default:
+            return Color.orange
         }
     }
-    
+
     private func notificationPillarIcon(_ pillar: VitalityPillar) -> String {
         switch pillar {
         case .sleep: return "moon.stars.fill"
@@ -435,8 +456,10 @@ struct FamilyVitalityCard: View {
             status = "drifting"
         case .attention:
             status = "low"
+        @unknown default:
+            status = "drifting"
         }
-        
+
         return "\(pillarName) \(status)"
     }
     
@@ -445,23 +468,58 @@ struct FamilyVitalityCard: View {
         let tint: Color
         let iconColor: Color
 
+        private enum DataStatus {
+            case fresh, allStale, noScore
+        }
+
+        private var dataStatus: DataStatus {
+            let scores = factor.memberScores
+            guard !scores.isEmpty else { return .noScore }
+            let allNoScore = scores.allSatisfy { !$0.hasScore }
+            if allNoScore { return .noScore }
+            let allStale = scores.allSatisfy { $0.isStale || !$0.hasScore }
+            if allStale { return .allStale }
+            return .fresh
+        }
+
         var body: some View {
             VStack(alignment: .leading, spacing: 6) {
-                // Icon (smaller, compact)
-                Image(systemName: factor.iconName)
-                    .font(.system(size: 24))
-                    .foregroundColor(iconColor)
+                HStack(alignment: .top) {
+                    // Icon (smaller, compact)
+                    Image(systemName: factor.iconName)
+                        .font(.system(size: 24))
+                        .foregroundColor(dataStatus == .fresh ? iconColor : Color.gray.opacity(0.5))
+
+                    Spacer()
+
+                    // Data gap indicator badge
+                    if dataStatus != .fresh {
+                        Image(systemName: dataStatus == .noScore ? "questionmark.circle.fill" : "clock.badge.exclamationmark.fill")
+                            .font(.system(size: 13))
+                            .foregroundColor(dataStatus == .noScore ? Color.gray.opacity(0.5) : Color.orange.opacity(0.75))
+                    }
+                }
 
                 // Pillar name
                 Text(factor.name)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(DashboardDesign.primaryTextColor)
 
-                // Status label derived from pillar percent (Excellent / Good / Stable / Drifting / Urgent)
-                Text(statusLabel)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundColor(DashboardDesign.secondaryTextColor)
-                    .fixedSize(horizontal: false, vertical: true)
+                // Status label — or low-data notice
+                if dataStatus == .noScore {
+                    Text("No data yet")
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundColor(Color.gray.opacity(0.6))
+                } else if dataStatus == .allStale {
+                    Text("Data out of date")
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundColor(.orange.opacity(0.8))
+                } else {
+                    Text(statusLabel)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundColor(DashboardDesign.secondaryTextColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -478,7 +536,7 @@ struct FamilyVitalityCard: View {
         }
 
         // MARK: - Status mapping helper
-        
+
         private static func statusLabel(for percent: Int) -> String {
             let clamped = max(0, min(percent, 100))
             switch clamped {
@@ -494,7 +552,7 @@ struct FamilyVitalityCard: View {
                 return "Urgent"
             }
         }
-        
+
         private var statusLabel: String {
             Self.statusLabel(for: factor.percent)
         }

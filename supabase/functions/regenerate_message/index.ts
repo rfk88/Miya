@@ -49,21 +49,34 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "Missing required fields" }, 400);
     }
 
+    if (typeof tone !== "string") {
+      return jsonResponse({ error: "tone must be a string" }, 400);
+    }
+
+    const toneInstructions: Record<string, string> = {
+      "Warm & caring": "Use warm, compassionate language. Show empathy and care. Make it feel like a close friend reaching out.",
+      "Motivating": "Use energizing, motivating language. Be encouraging, positive, and inspiring. Focus on possibilities and progress.",
+      "Direct & friendly": "Be direct and to-the-point while remaining friendly. No fluff. Clear and actionable but still warm."
+    };
+    const ALLOWED_TONES = new Set(Object.keys(toneInstructions));
+    const toneTrimmed = String(tone).trim();
+    if (!ALLOWED_TONES.has(toneTrimmed)) {
+      console.warn("Invalid tone received:", tone);
+      return jsonResponse(
+        { error: "Invalid tone. Allowed values: Warm & caring, Motivating, Direct & friendly" },
+        400
+      );
+    }
+
     // Call OpenAI
     const openaiKey = Deno.env.get("OPENAI_API_KEY");
     if (!openaiKey) {
       throw new Error("OpenAI API key not configured");
     }
 
-    const toneInstructions = {
-      "Warm & caring": "Use warm, compassionate language. Show empathy and care. Make it feel like a close friend reaching out.",
-      "Motivating": "Use energizing, motivating language. Be encouraging, positive, and inspiring. Focus on possibilities and progress.",
-      "Direct & friendly": "Be direct and to-the-point while remaining friendly. No fluff. Clear and actionable but still warm."
-    };
+    const instruction = toneInstructions[toneTrimmed];
 
-    const instruction = toneInstructions[tone as keyof typeof toneInstructions] || toneInstructions["Warm & caring"];
-
-    const prompt = `Rewrite this outreach message in a "${tone}" tone. Keep it around the same length and preserve the core message.
+    const prompt = `Rewrite this outreach message in a "${toneTrimmed}" tone. Keep it around the same length and preserve the core message.
 
 Original message:
 "${original_message}"

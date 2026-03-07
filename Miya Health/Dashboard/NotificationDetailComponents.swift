@@ -48,11 +48,11 @@ struct WhoopStyleBubble: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             if message.role == .miya {
-                // Miya avatar - circular with gradient
+                // Miya avatar - teal gradient matching ArloChatView
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: [Color.blue.opacity(0.8), Color.purple.opacity(0.6)],
+                            colors: [Color.miyaPrimary, Color.miyaPrimary.opacity(0.70)],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -64,34 +64,35 @@ struct WhoopStyleBubble: View {
                             .foregroundColor(.white)
                     )
                 
-                // Message bubble - Whoop-style rounded with markdown support
+                // Message bubble - ultraThinMaterial matching ArloChatView assistant bubble
                 VStack(alignment: .leading, spacing: 0) {
                     Text(parseMarkdown(message.text))
-                        .font(.system(size: 16, weight: .regular))
+                        .font(.system(size: 15, weight: .regular))
                         .foregroundColor(Color.miyaTextPrimary)
                 }
                 .padding(14)
-                .background(Color(red: 0.95, green: 0.95, blue: 0.97))
-                .cornerRadius(18)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .shadow(color: .black.opacity(0.06), radius: 6, x: 0, y: 2)
                 .frame(maxWidth: UIScreen.main.bounds.width * 0.75, alignment: .leading)
                 
                 Spacer()
             } else {
                 Spacer()
                 
-                // User message bubble - blue gradient
+                // User message bubble - teal gradient matching ArloChatView user bubble
                 Text(message.text)
-                    .font(.system(size: 16, weight: .regular))
+                    .font(.system(size: 15, weight: .regular))
                     .foregroundColor(.white)
                     .padding(14)
                     .background(
                         LinearGradient(
-                            colors: [Color.blue, Color.blue.opacity(0.8)],
+                            colors: [Color.miyaPrimary.opacity(0.95), Color.miyaPrimary.opacity(0.70)],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
-                    .cornerRadius(18)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .frame(maxWidth: UIScreen.main.bounds.width * 0.70, alignment: .trailing)
             }
         }
@@ -126,15 +127,16 @@ struct PillButton: View {
                     .font(.system(size: 14))
                 Text(prompt.text)
                     .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.miyaPrimary)
                     .lineLimit(1)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(Color(red: 0.95, green: 0.95, blue: 0.97))
-            .cornerRadius(20)
+            .background(Color.miyaCardWhite)
+            .clipShape(Capsule())
             .overlay(
-                RoundedRectangle(cornerRadius: 20)
-                    .stroke(Color(red: 0.82, green: 0.82, blue: 0.84), lineWidth: 1)
+                Capsule()
+                    .stroke(Color.miyaPrimary.opacity(0.18), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)

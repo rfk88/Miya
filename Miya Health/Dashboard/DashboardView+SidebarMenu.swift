@@ -23,6 +23,7 @@ extension DashboardView {
         let familyDisplayName: String
         let onReloadMembers: () -> Void
         let onUpdateResolvedFamilyName: (String) -> Void
+        let onFamilyChallenges: () -> Void
         
         // Needed for sign-out + cache reset. Do not access private auth props from views.
         @EnvironmentObject var authManager: AuthManager
@@ -314,6 +315,9 @@ extension DashboardView {
                 
                 // Main menu items
                 VStack(alignment: .leading, spacing: 20) {
+                    menuItem(icon: "figure.2.arms.open", title: "Family Challenges") {
+                        onFamilyChallenges()
+                    }
                     menuItem(icon: "book.closed", title: "Education Hub") {
                         print("Education Hub tapped")
                     }

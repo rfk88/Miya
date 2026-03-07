@@ -178,11 +178,12 @@ struct VitalityScoringEngine {
                     subMetricScores.append(scoreObj)
                     
                     if includeBreakdown {
+                        let rangeOpt = subMetricDef.ageSpecificBenchmarks.range(forAgeGroup: ageGroup)
                         subBreakdowns.append(SubmetricBreakdown(
                             id: breakdownID(for: subMetricDef),
                             label: subMetricDef.id.displayName,
                             valueText: "nil",
-                            targetText: formatTargetText(range: subMetricDef.ageSpecificBenchmarks.range(forAgeGroup: ageGroup), unit: subMetricDef.id.unit, direction: subMetricDef.scoringDirection),
+                            targetText: rangeOpt.map { formatTargetText(range: $0, unit: subMetricDef.id.unit, direction: subMetricDef.scoringDirection) } ?? "—",
                             points: 0.0,
                             maxPoints: 100.0 * subMetricDef.weightWithinPillar,
                             status: .missing,
@@ -193,7 +194,7 @@ struct VitalityScoringEngine {
                 }
                 
                 // Get age-specific range
-                let range = subMetricDef.ageSpecificBenchmarks.range(forAgeGroup: ageGroup)
+                guard let range = subMetricDef.ageSpecificBenchmarks.range(forAgeGroup: ageGroup) else { continue }
                 
                 // Score based on direction
                 let score = scoreValue(value: value, range: range, direction: subMetricDef.scoringDirection)
@@ -356,8 +357,10 @@ struct VitalityScoringEngine {
     
     // MARK: - Scoring Functions
     
-    /// Score a raw value based on its range and scoring direction
+    /// Score a raw value based on its range and scoring direction.
+    /// Non-finite values (NaN, ±Infinity) are treated as invalid and return 0 (BUG-036).
     private func scoreValue(value: Double, range: MetricRange, direction: ScoringDirection) -> Int {
+        guard value.isFinite else { return 0 }
         switch direction {
         case .optimalRange:
             return scoreOptimalRange(value: value, range: normalizedRange(range))

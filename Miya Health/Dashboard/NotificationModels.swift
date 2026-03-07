@@ -5,6 +5,14 @@ import Foundation
 
 // MARK: - Family Notification Item
 
+/// Care loop state for server alerts. nil = new (no action taken yet).
+enum CareState: String, Codable {
+    case monitoring
+    case improving
+    case resolved
+    case archived
+}
+
 struct FamilyNotificationItem: Identifiable {
     enum Kind {
         case trend(TrendInsight)
@@ -18,6 +26,20 @@ struct FamilyNotificationItem: Identifiable {
     let body: String
     let memberInitials: String
     let memberName: String
+    
+    /// Care loop state (server alerts only). nil = new.
+    let careState: CareState?
+    /// Who last acted (for "Sent by [Name]").
+    let actedByUserId: String?
+    let actedAt: Date?
+    let followUpDueDate: Date?
+    /// Miya's outcome or next-step message.
+    let outcomeMessage: String?
+    let cycleCount: Int
+    /// Last intervention type (challenge, reach_out, etc.) for gating CTAs.
+    let lastInterventionType: String?
+    /// Per-user challenge status for this alert (from challenge_challengers). nil, "pending_invite", "active", "completed_failed", "snoozed".
+    let myChallengeStatus: String?
     
     /// Extract member user ID from the item (for history fetching)
     var memberUserId: String? {
@@ -37,6 +59,14 @@ struct FamilyNotificationItem: Identifiable {
         case .fallback:
             return nil
         }
+    }
+    
+    /// True when this notification was produced by the server-side pattern alert engine
+    /// (i.e. has an alertStateId and supports Arlo chat). False for locally-computed
+    /// trend insights and fallback items.
+    var isServerAlert: Bool {
+        guard let why = debugWhy else { return false }
+        return why.contains("serverPattern") && why.contains("alertStateId=")
     }
     
     /// Extract window days if available (for defaulting segmented control)
@@ -213,6 +243,9 @@ struct FamilyNotificationItem: Identifiable {
                         return keep
                     case .celebrate:
                         return true
+                    @unknown default:
+                        // Unknown severity: keep so new types are not silently dropped (BUG-028).
+                        return true
                     }
                 }
             #if DEBUG
@@ -227,7 +260,15 @@ struct FamilyNotificationItem: Identifiable {
                         title: ins.title,
                         body: ins.body,
                         memberInitials: initials,
-                        memberName: ins.memberName
+                        memberName: ins.memberName,
+                        careState: nil,
+                        actedByUserId: nil,
+                        actedAt: nil,
+                        followUpDueDate: nil,
+                        outcomeMessage: nil,
+                        cycleCount: 0,
+                        lastInterventionType: nil,
+                        myChallengeStatus: nil
                     )
                 }
             #if DEBUG
@@ -289,7 +330,15 @@ struct FamilyNotificationItem: Identifiable {
                 title: title,
                 body: body,
                 memberInitials: initials,
-                memberName: m.name
+                memberName: m.name,
+                careState: nil,
+                actedByUserId: nil,
+                actedAt: nil,
+                followUpDueDate: nil,
+                outcomeMessage: nil,
+                cycleCount: 0,
+                lastInterventionType: nil,
+                myChallengeStatus: nil
             )
         }
         .prefix(3)
@@ -324,6 +373,8 @@ extension FamilyNotificationItem {
                 case .attention: return 3
                 case .watch: return 2
                 case .celebrate: return 1
+                @unknown default:
+                    return 2 // Treat unknown like watch for ordering (BUG-028).
                 }
             case .fallback:
                 return 3

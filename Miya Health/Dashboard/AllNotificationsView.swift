@@ -35,7 +35,7 @@ struct AllNotificationsView: View {
         NavigationView {
             content
                 .navigationTitle("Family Notifications")
-                .navigationBarTitleDisplayMode(.large)
+                .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("Done") {
@@ -58,7 +58,7 @@ struct AllNotificationsView: View {
         if localNotifications.isEmpty {
             emptyState
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(UIColor.systemGroupedBackground))
+                .background(Color.miyaCreamBg)
         } else {
             notificationsList
         }
@@ -72,7 +72,7 @@ struct AllNotificationsView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .background(Color(UIColor.systemGroupedBackground))
+        .background(Color.miyaCreamBg)
     }
 
     @ViewBuilder
@@ -122,7 +122,7 @@ struct AllNotificationsView: View {
         HStack(spacing: 12) {
             ZStack {
                 Circle()
-                    .fill(Color(UIColor.systemGray5))
+                    .fill(DashboardDesign.tertiaryBackgroundColor)
                     .frame(width: 40, height: 40)
 
                 Text(group.memberInitials)
@@ -132,7 +132,7 @@ struct AllNotificationsView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(group.memberName)
-                    .font(.system(size: 18, weight: .bold))
+                    .font(.system(size: 18, weight: .semibold))
                     .foregroundColor(DashboardDesign.primaryTextColor)
 
                 Text("\(group.notifications.count) notification\(group.notifications.count == 1 ? "" : "s")")
@@ -157,7 +157,17 @@ struct AllNotificationsView: View {
     @ViewBuilder
     private func notificationRow(notification: FamilyNotificationItem) -> some View {
         notificationCard(notification: notification)
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button {
+                    let id = notification.id
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        localNotifications.removeAll { $0.id == id }
+                    }
+                    onSnooze(notification, 30)
+                } label: {
+                    Label("Not a concern", systemImage: "hand.thumbsup")
+                }
+                .tint(.gray)
                 Button {
                     let id = notification.id
                     withAnimation(.easeInOut(duration: 0.15)) {
@@ -165,7 +175,7 @@ struct AllNotificationsView: View {
                     }
                     onSnooze(notification, defaultSnoozeDays(for: notification))
                 } label: {
-                    Label("Snooze notification", systemImage: "bell.slash.fill")
+                    Label("Snooze", systemImage: "bell.slash.fill")
                 }
                 .tint(.orange)
             }
@@ -175,7 +185,7 @@ struct AllNotificationsView: View {
                 } label: {
                     Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
                 }
-                .tint(.blue)
+                .tint(.miyaPrimary)
             }
     }
     
@@ -214,11 +224,21 @@ struct AllNotificationsView: View {
                     .offset(x: 18, y: -18)
             }
             
-            Text(notification.displayLine)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(DashboardDesign.secondaryTextColor)
-                .lineLimit(2)
-                .truncationMode(.tail)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(notification.displayLine)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(DashboardDesign.secondaryTextColor)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                challengeStatusPill(notification)
+                if let msg = notification.outcomeMessage, !msg.isEmpty {
+                    Text(msg)
+                        .font(.system(size: 12))
+                        .foregroundColor(DashboardDesign.secondaryTextColor)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                }
+            }
             
             Spacer(minLength: 8)
             
@@ -249,6 +269,41 @@ struct AllNotificationsView: View {
                     lineWidth: 1.5
                 )
         )
+    }
+    
+    @ViewBuilder
+    private func challengeStatusPill(_ notification: FamilyNotificationItem) -> some View {
+        if let status = notification.myChallengeStatus {
+            if status == "active" {
+                Text("Active Challenge")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.miyaPrimary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.miyaPrimary.opacity(0.15)))
+            } else if status == "pending_invite" || status == "snoozed" {
+                Text("Challenge Issued")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(DashboardDesign.secondaryTextColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.gray.opacity(0.15)))
+            } else if status == "completed_failed", notification.lastInterventionType == "challenge" {
+                Text("Challenge Declined")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(DashboardDesign.secondaryTextColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.gray.opacity(0.15)))
+            } else if status == "completed_success" {
+                Text("Completed")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(DashboardDesign.secondaryTextColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.gray.opacity(0.15)))
+            }
+        }
     }
     
     // MARK: - Severity Badge
@@ -300,9 +355,11 @@ struct AllNotificationsView: View {
             return Color.orange
         case .attention:
             return Color.red
+        @unknown default:
+            return Color.orange
         }
     }
-    
+
     private func pillarIcon(_ pillar: VitalityPillar) -> String {
         switch pillar {
         case .sleep: return "moon.stars.fill"

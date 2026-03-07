@@ -1622,7 +1622,7 @@ struct WearableSelectionView: View {
                 
                 // Wearable list
                 VStack(alignment: .leading, spacing: 12) {
-                    ForEach(WearableType.allCases) { wearable in
+                    ForEach(WearableType.allCases.filter { $0 != .appleWatch }) { wearable in
                         WearableCard(
                             wearable: wearable,
                             isSelected: selectedWearable == wearable,
@@ -1634,22 +1634,22 @@ struct WearableSelectionView: View {
                         }
                     }
                     
-                    // Rook Connect button
+                    // Apple Watch / Rook Connect button
                     Button {
                         presentRookConnect()
                     } label: {
                         HStack(spacing: 12) {
-                            Image(systemName: "link.circle.fill")
+                            Image(systemName: "applewatch")
                                 .font(.system(size: 26))
                                 .frame(width: 36, height: 36)
                                 .foregroundColor(.miyaPrimary)
                             
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Connect with Rook (sandbox)")
+                                Text("Apple Watch")
                                     .font(.system(size: 16, weight: .semibold))
                                     .foregroundColor(.miyaTextPrimary)
                                 
-                                Text("Link multiple wearables via Rook")
+                                Text("Connect via Apple Health")
                                     .font(.system(size: 13))
                                     .foregroundColor(.miyaTextSecondary)
                             }
@@ -6434,12 +6434,16 @@ struct LoginView: View {
                     }
                     
                     // About You data
-                    if let dobString = profile.date_of_birth {
+                    if let dobString = profile.date_of_birth, !dobString.isEmpty {
                         let formatter = DateFormatter()
                         formatter.dateFormat = "yyyy-MM-dd"
                         if let dob = formatter.date(from: dobString) {
                             onboardingManager.dateOfBirth = dob
+                        } else {
+                            onboardingManager.dateOfBirth = nil
                         }
+                    } else {
+                        onboardingManager.dateOfBirth = nil
                     }
                     if let gender = profile.gender {
                         onboardingManager.gender = gender

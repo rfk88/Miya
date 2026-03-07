@@ -8,6 +8,9 @@
 
 import SwiftUI
 import RookSDK
+import Supabase
+import Combine
+import UIKit
 
 /// Notification posted when user logs out; triggers full session reset.
 extension Notification.Name {
@@ -25,6 +28,8 @@ struct Miya_HealthApp: App {
 
     // Enables ROOK background upload hooks (via UIKit app delegate).
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    
+    @Environment(\.scenePhase) private var scenePhase
     
     // Create the managers once when the app starts
     // @StateObject means they stay alive for the entire app lifetime
@@ -71,7 +76,14 @@ struct Miya_HealthApp: App {
                     
                     // Restore user session on app launch
                     await authManager.restoreSession()
-                    
+
+                    // Re-register for push notifications now that we have an auth session.
+                    // This ensures the device token gets saved to Supabase with a valid user ID,
+                    // since the initial AppDelegate registration fires before session restore.
+                    if authManager.isAuthenticated {
+                        UIApplication.shared.registerForRemoteNotifications()
+                    }
+
                     // Clear any cached family state if the auth user changed (prevents cross-account leakage)
                     await dataManager.clearFamilyCachesIfAuthChanged()
 
@@ -109,6 +121,16 @@ struct Miya_HealthApp: App {
                     authManager.isLoadingProfile = false  // Clear loading flag on logout
                     appSessionId = UUID() // Force view hierarchy rebuild
                     print("🔄 App: Session reset complete (logout)")
+                }
+                .onOpenURL { url in
+                    Task {
+                        try? await SupabaseConfig.client.auth.session(from: url)
+                    }
+                }
+                .onChange(of: scenePhase) { _, newPhase in
+                    if newPhase == .active, authManager.isAuthenticated {
+                        RookService.shared.syncIfStale(cooldownHours: 6)
+                    }
                 }
         }
     }

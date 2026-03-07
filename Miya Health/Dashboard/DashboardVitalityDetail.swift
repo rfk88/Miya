@@ -7,18 +7,29 @@ struct VitalityFactorDetailSheet: View {
     
     let factor: VitalityFactor
     let dataManager: DataManager
+    var onMemberTapped: ((FamilyMemberScore, PillarType) -> Void)? = nil
     
     @State private var memberDetails: [PillarMemberDetail] = []
     @State private var isLoading = true
     @State private var hasAnyBackfilledData = false
     @State private var oldestSourceAgeInDays: Int = 0
     
-    // Map factor name to pillar
+    // Map factor name to VitalityPillar (used for data loading)
     private var pillar: VitalityPillar {
         switch factor.name.lowercased() {
         case "sleep": return .sleep
         case "activity": return .movement
         case "recovery": return .stress
+        default: return .sleep
+        }
+    }
+
+    // Map factor name to PillarType (used for profile deep-dive navigation)
+    private var pillarType: PillarType {
+        switch factor.name.lowercased() {
+        case "sleep": return .sleep
+        case "activity": return .movement
+        case "recovery": return .recovery
         default: return .sleep
         }
     }
@@ -59,7 +70,31 @@ struct VitalityFactorDetailSheet: View {
                         .cornerRadius(8)
                         .padding(.top, 4)
                     }
-                    
+
+                    // HRV / Apple Watch info banner (Recovery pillar only)
+                    if pillar == .stress {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "applewatch")
+                                .font(.system(size: 14))
+                                .foregroundColor(.miyaTextSecondary)
+                                .padding(.top, 1)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Apple Watch required for HRV")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(.miyaTextPrimary)
+                                Text("Heart Rate Variability (HRV) is only measured when your Apple Watch is worn during sleep. Steps and resting heart rate can come from your iPhone or Watch.")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.miyaTextSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
+                        .padding(.top, 4)
+                    }
+
                     // Action plan
                     Text("Action plan")
                         .font(.system(size: 15, weight: .semibold))
@@ -109,6 +144,8 @@ struct VitalityFactorDetailSheet: View {
                 }
                 .padding(20)
             }
+            .background(Color.miyaCreamBg)
+            .scrollContentBackground(.hidden)
             .navigationTitle(factor.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -346,97 +383,113 @@ struct VitalityFactorDetailSheet: View {
     // MARK: - UI Components
     
     private func memberDetailCard(detail: PillarMemberDetail) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header: Avatar, Name, Score, Trend
-            HStack(spacing: 12) {
-                // Avatar
-                Circle()
-                    .fill(Color.miyaBackground)
-                    .frame(width: 40, height: 40)
-                    .overlay(
-                        Text(detail.member.initials)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-                    )
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        Text(detail.member.name)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-                        
-                        if detail.hasBackfilledData {
-                            Image(systemName: "clock.badge.exclamationmark")
-                                .foregroundColor(.orange)
-                                .font(.system(size: 12))
-                        }
-                    }
-                    
-                    if let score = detail.todayScore {
-                        Text("\(score)%")
-                            .font(.system(size: 13))
-                            .foregroundColor(.miyaTextSecondary)
-                    } else {
-                        Text("No data")
-                            .font(.system(size: 13))
-                            .foregroundColor(.miyaTextSecondary)
-                    }
-                }
-                
-                Spacer()
-                
-                // Trend badge
-                trendBadge(direction: detail.trendDirection, percentChange: detail.trendPercentChange)
-            }
-            
-            // Sub-metrics grid
-            if !detail.subMetrics.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(detail.subMetrics.enumerated()), id: \.offset) { _, metric in
-                        HStack(spacing: 8) {
-                            if metric.isBackfilled {
-                                Image(systemName: "clock.fill")
-                                    .foregroundColor(.orange.opacity(0.7))
-                                    .font(.system(size: 10))
+        Button {
+            guard detail.member.userId != nil else { return }
+            dismiss()
+            onMemberTapped?(detail.member, pillarType)
+        } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                // Header: Avatar, Name, Score, Trend
+                HStack(spacing: 12) {
+                    // Avatar
+                    Circle()
+                        .fill(Color.miyaBackground)
+                        .frame(width: 40, height: 40)
+                        .overlay(
+                            Text(detail.member.initials)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.miyaTextPrimary)
+                        )
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text(detail.member.name)
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.miyaTextPrimary)
+
+                            if detail.hasBackfilledData {
+                                Image(systemName: "clock.badge.exclamationmark")
+                                    .foregroundColor(.orange)
+                                    .font(.system(size: 12))
                             }
-                            Text(metric.name)
+                        }
+
+                        if let score = detail.todayScore {
+                            Text("\(score)%")
                                 .font(.system(size: 13))
                                 .foregroundColor(.miyaTextSecondary)
-                            Spacer()
-                            Text(metric.value)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(.miyaTextPrimary)
+                        } else {
+                            Text("No data")
+                                .font(.system(size: 13))
+                                .foregroundColor(.miyaTextSecondary)
+                        }
+                    }
+
+                    Spacer()
+
+                    HStack(spacing: 6) {
+                        // Trend badge
+                        trendBadge(direction: detail.trendDirection, percentChange: detail.trendPercentChange)
+
+                        // Chevron hint (only when tappable)
+                        if detail.member.userId != nil {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.miyaTextSecondary.opacity(0.5))
                         }
                     }
                 }
-                .padding(.leading, 52) // Align with name
-            }
-            
-            // Backfill notice (if applicable)
-            if let age = detail.oldestSourceAgeInDays, age > 0 {
-                Text("Data from \(age) day\(age == 1 ? "" : "s") ago")
-                    .font(.system(size: 11))
-                    .foregroundColor(.orange)
+
+                // Sub-metrics grid
+                if !detail.subMetrics.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(detail.subMetrics.enumerated()), id: \.offset) { _, metric in
+                            HStack(spacing: 8) {
+                                if metric.isBackfilled {
+                                    Image(systemName: "clock.fill")
+                                        .foregroundColor(.orange.opacity(0.7))
+                                        .font(.system(size: 10))
+                                }
+                                Text(metric.name)
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.miyaTextSecondary)
+                                Spacer()
+                                Text(metric.value)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(.miyaTextPrimary)
+                            }
+                        }
+                    }
                     .padding(.leading, 52)
+                }
+
+                // Backfill notice (if applicable)
+                if let age = detail.oldestSourceAgeInDays, age > 0 {
+                    Text("Data from \(age) day\(age == 1 ? "" : "s") ago")
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange)
+                        .padding(.leading, 52)
+                }
             }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .background(DashboardDesign.tertiaryBackgroundColor.opacity(0.5))
+            .cornerRadius(12)
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 12)
-        .background(Color(red: 0.95, green: 0.95, blue: 0.97).opacity(0.3))
-        .cornerRadius(10)
+        .buttonStyle(.plain)
     }
     
     private func trendBadge(direction: TrendDirection, percentChange: Double?) -> some View {
         let (icon, color, text) = {
             switch direction {
             case .up:
-                return ("arrow.up", Color.green, percentChange.map { String(format: "+%.0f%%", $0) } ?? "+")
+                return ("arrow.up", Color.miyaSage, percentChange.map { String(format: "+%.0f%%", $0) } ?? "+")
             case .down:
-                return ("arrow.down", Color.red, percentChange.map { String(format: "%.0f%%", $0) } ?? "-")
+                return ("arrow.down", Color.miyaTerracotta, percentChange.map { String(format: "%.0f%%", $0) } ?? "-")
             case .stable:
-                return ("arrow.right", Color.gray, "→")
+                return ("arrow.right", Color.miyaTextSecondary, "→")
             case .insufficientData:
-                return ("", Color.secondary, "Building baseline...")
+                return ("", Color.miyaTextSecondary, "Building baseline...")
             }
         }()
         
@@ -461,7 +514,7 @@ struct VitalityFactorDetailSheet: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(color.opacity(0.15))
-            .cornerRadius(6)
+            .clipShape(Capsule())
         )
     }
 }

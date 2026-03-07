@@ -200,6 +200,8 @@ supabase functions deploy miya_insight_chat
 - `SUPABASE_SERVICE_ROLE_KEY` - Service role key (keep secret!)
 - `SUPABASE_ANON_KEY` - Anonymous public key
 
+**iOS app:** The app requires `SUPABASE_URL` and `SUPABASE_ANON_KEY` to be set in Info.plist (or via xcconfig that writes into Info.plist). There are no hardcoded defaults; missing values cause a clear runtime failure. For local dev, add these keys to the target’s Info.plist; for CI/production, use a gitignored xcconfig or inject the keys at build time.
+
 ### B. How to add environment variables:
 
 In the Supabase Dashboard:

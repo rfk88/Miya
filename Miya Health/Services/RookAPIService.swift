@@ -12,14 +12,14 @@ import Foundation
 /// Handles API-based sources (Oura, Whoop, Fitbit, Garmin, etc.)
 final class RookAPIService {
     static let shared = RookAPIService()
-    
-    // Reuse credentials from RookService
-    private let clientUUID = "64ab5fac-5196-4b33-bddf-d8ec50f9a63d"
-    private let secretKey = "u5k0G2ZDBde69rBqAsSmvsLHrUZOUGvUjXxf"
-    
+
+    // Credentials from RookConfig only (Secrets.xcconfig, not committed). Do not add literal credentials here.
+    private var clientUUID: String { RookConfig.clientUUID }
+    private var secretKey: String { RookConfig.secretKey }
+
     // Sandbox base URL (update to production URL when transitioning)
     private let baseURL = "https://api.rook-connect.review"
-    
+
     private init() {}
     
     /// Errors that can occur when calling Rook API

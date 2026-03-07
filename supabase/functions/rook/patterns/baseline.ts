@@ -34,6 +34,7 @@ function areConsecutiveAsc(dayKeysAsc: ISODate[]): boolean {
 
 /**
  * Compute baseline vs recent for a given endDate.
+ * Takes exactly 2 parameters: (values, endDate). Do not pass metricName or any third argument.
  *
  * Definitions:
  * - recent: last 3 consecutive days ending at endDate (must be present)
@@ -85,18 +86,13 @@ export function computeBaselineForEndDate(
 }
 
 /**
- * Detect if there's a data gap (zero values or missing days)
+ * Detect if there's a data gap (missing values only).
+ * Zero is valid data (e.g. 0 steps on a rest day, 0 movement minutes); only null/undefined count as a gap.
  * @param recentDays - Array of recent day values
- * @returns true if gap detected
+ * @returns true if any day has no value (null or undefined)
  */
 function hasDataGap(recentDays: Array<{ date: string; value: number | null }>): boolean {
-  // Check for zero values (user didn't wear device)
-  const hasZero = recentDays.some(day => day.value === 0);
-  
-  // Check for null/missing values
-  const hasMissing = recentDays.some(day => day.value === null);
-  
-  return hasZero || hasMissing;
+  return recentDays.some(day => day.value === null || day.value === undefined);
 }
 
 /**
@@ -104,13 +100,11 @@ function hasDataGap(recentDays: Array<{ date: string; value: number | null }>): 
  * Returns baseline, recent, gap detection, and minimum data validation
  * @param allDays - All available daily data points
  * @param endDate - End date for computation (YYYY-MM-DD)
- * @param metricName - Name of the metric being analyzed
  * @returns Object with baseline, recent, gap detection, and data sufficiency
  */
 export function computeBaselineWithGapDetection(
   allDays: Array<{ date: string; value: number | null }>,
-  endDate: string,
-  metricName: string
+  endDate: string
 ): {
   baseline: number;
   recent: number;
@@ -120,38 +114,48 @@ export function computeBaselineWithGapDetection(
 } | null {
   // Check minimum 7-day requirement
   const hasMinimumData = allDays.length >= 7;
-  
-  // Try to compute baseline using existing function
-  const result = computeBaselineForEndDate(allDays, endDate, metricName);
-  
+
+  // computeBaselineForEndDate expects DailyValue[] (value: number); filter out nulls.
+  // Intentionally pass only (daysWithValues, endDate) — computeBaselineForEndDate accepts 2 parameters only.
+  const daysWithValues: DailyValue[] = allDays.filter(
+    (d): d is { date: string; value: number } => d.value !== null && d.value !== undefined
+  );
+  const result = computeBaselineForEndDate(daysWithValues, endDate);
+
   if (!result) {
+    const recentEnd = allDays.findIndex(d => d.date === endDate);
+    const recentDays = recentEnd >= 0
+      ? allDays.slice(Math.max(0, recentEnd - 2), recentEnd + 1)
+      : [];
+    const isGapDetected = hasDataGap(recentDays);
     return {
       baseline: 0,
       recent: 0,
-      isGapDetected: false,
+      isGapDetected,
       hasMinimumData,
       totalDays: allDays.length
     };
   }
-  
+
+  // result is non-null below; safe to use result.baselineAvg and result.recentAvg.
   // Check for data gap in recent period (last 3 days)
   const recentEnd = allDays.findIndex(d => d.date === endDate);
   if (recentEnd === -1) {
     return {
-      baseline: result.baseline,
-      recent: result.recent,
+      baseline: result.baselineAvg,
+      recent: result.recentAvg,
       isGapDetected: false,
       hasMinimumData,
       totalDays: allDays.length
     };
   }
-  
+
   const recentDays = allDays.slice(Math.max(0, recentEnd - 2), recentEnd + 1);
   const isGapDetected = hasDataGap(recentDays);
-  
+
   return {
-    baseline: result.baseline,
-    recent: result.recent,
+    baseline: result.baselineAvg,
+    recent: result.recentAvg,
     isGapDetected,
     hasMinimumData,
     totalDays: allDays.length

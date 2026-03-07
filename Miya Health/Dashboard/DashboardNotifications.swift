@@ -15,7 +15,7 @@ import Supabase
 
 struct FamilyNotificationDetailSheet: View {
     let item: FamilyNotificationItem
-    let onStartRecommendedChallenge: () -> Void
+    let onStartRecommendedChallenge: () async -> Bool
     let dataManager: DataManager // Changed from @EnvironmentObject to parameter
     
     @Environment(\.dismiss) private var dismiss
@@ -119,7 +119,8 @@ struct FamilyNotificationDetailSheet: View {
     @State private var memberHealthProfile: [String: Any]?  // Fetched member health data for AI context
     @State private var memberRelationship: String?  // "Partner", "Parent", "Child", etc.
     @State private var retryCount = 0  // Track retry attempts to prevent infinite loops
-    
+    @State private var isPreparingInsight = false  // BUG-016: show "Preparing..." when generating on 409
+
     // Snooze functionality
     @State private var showSnoozeOptions = false
     @State private var isSnoozingAlert = false
@@ -141,6 +142,7 @@ struct FamilyNotificationDetailSheet: View {
             case .celebrate: return "Trending up"
             case .watch: return "Watch"
             case .attention: return "Needs attention"
+            @unknown default: return "Watch"
             }
         case .fallback:
             return "Needs attention"
@@ -737,14 +739,16 @@ struct FamilyNotificationDetailSheet: View {
         print("🚀 CHAT: initializeConversation started")
         print("🚀 CHAT: debugWhy = \(String(describing: item.debugWhy))")
         
-        // Extract alert_state_id from debugWhy
-        guard let debugWhy = item.debugWhy,
-              debugWhy.contains("serverPattern"),
+        // Extract alert_state_id from debugWhy.
+        // Local trend-insight notifications don't have a server alertStateId — skip chat init
+        // gracefully so the sheet still shows the context banners without an error message.
+        guard item.isServerAlert,
+              let debugWhy = item.debugWhy,
               let extracted = extractAlertStateId(from: debugWhy) else {
-            print("❌ CHAT: Failed to extract alertStateId from debugWhy")
+            print("ℹ️ CHAT: Notification is a local trend insight — skipping chat init")
             await MainActor.run {
-                chatError = "This notification doesn't have chat support yet."
                 isInitializing = false
+                // chatError intentionally left nil — banners already show the useful content
             }
             return
         }
@@ -1242,23 +1246,25 @@ struct FamilyNotificationDetailSheet: View {
             
             print("🔍 CHAT: HTTP status = \(httpResponse.statusCode)")
             
-            // Handle 409: Insight not generated yet - generate it first then retry (max 1 retry)
+            // Handle 409: Insight not generated yet - generate it first then retry (max 2 retries, BUG-016)
             if httpResponse.statusCode == 409 {
-                if retryCount >= 1 {
+                if retryCount >= 2 {
                     print("❌ CHAT: Max retries reached (409 persists), stopping")
                     let errorBody = String(data: data, encoding: .utf8) ?? "No error body"
                     print("❌ CHAT: Error body: \(errorBody)")
                     await MainActor.run {
-                        isAITyping = false  // Hide typing indicator
-                        chatError = "AI insight couldn't be generated. Please try again later or contact support."
+                        isAITyping = false
+                        isPreparingInsight = false
+                        chatError = "We're still preparing the insight for this alert. Please try again in a moment."
                         isSending = false
                     }
                     return
                 }
                 
-                print("⚠️ CHAT: Insight not generated yet, generating now... (retry \(retryCount + 1)/1)")
+                print("⚠️ CHAT: Insight not generated yet, generating now... (retry \(retryCount + 1)/2)")
                 await MainActor.run {
                     retryCount += 1
+                    isPreparingInsight = true
                 }
                 await generateInsightAndRetry(alertId: alertId, userMessage: trimmedText)
                 return
@@ -1287,7 +1293,8 @@ struct FamilyNotificationDetailSheet: View {
             
             // Add GPT response
             await MainActor.run {
-                isAITyping = false  // Hide typing indicator
+                isAITyping = false
+                isPreparingInsight = false
                 chatMessages.append(ChatMessage(role: .miya, text: cleanedReply))
                 isSending = false
                 
@@ -1304,12 +1311,15 @@ struct FamilyNotificationDetailSheet: View {
         } catch {
             print("❌ CHAT: Error in sendMessage: \(error.localizedDescription)")
             await MainActor.run {
-                isAITyping = false  // Hide typing indicator
+                isAITyping = false
+                isPreparingInsight = false
                 chatError = "Failed to get response. Try again?"
                 isSending = false
             }
         }
     }
+    
+    private static let insightNotReadyErrorMessage = "We're still preparing the insight for this alert. Please try again in a moment."
     
     // MARK: - Generate Insight and Retry
     
@@ -1341,8 +1351,10 @@ struct FamilyNotificationDetailSheet: View {
             
             print("✅ CHAT: Insight generated, now retrying chat...")
             
-            // Small delay to ensure insight is cached
-            try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            // Backoff delay: 1s for first retry, 2s for second (BUG-016)
+            let count = await MainActor.run { retryCount }
+            let delayNs = UInt64(count) * 1_000_000_000
+            try await Task.sleep(nanoseconds: delayNs)
             
             // Retry the original message (don't re-add user message to chat)
             await sendMessage(text: userMessage, skipAddingUserMessage: true)
@@ -1350,9 +1362,53 @@ struct FamilyNotificationDetailSheet: View {
         } catch {
             print("❌ CHAT: Error generating insight: \(error.localizedDescription)")
             await MainActor.run {
-                isAITyping = false  // Hide typing indicator
-                chatError = "Failed to initialize AI. Try again?"
+                isAITyping = false
+                isPreparingInsight = false
+                chatError = Self.insightNotReadyErrorMessage
                 isSending = false
+            }
+        }
+    }
+    
+    /// BUG-016: Retry after "insight not ready" — reset, trigger insight, then resend last message.
+    private func tryAgainAfterInsightNotReady() async {
+        let lastUserMessage = chatMessages.last(where: { $0.role == .user })?.text
+        guard let message = lastUserMessage, !message.isEmpty else { return }
+        await MainActor.run {
+            retryCount = 0
+            chatError = nil
+            isPreparingInsight = true
+            isSending = true
+            isAITyping = true
+        }
+        do {
+            let supabase = SupabaseConfig.client
+            let session = try await supabase.auth.session
+            guard let alertId = alertStateId,
+                  let url = URL(string: "\(SupabaseConfig.supabaseURL)/functions/v1/miya_insight") else {
+                await MainActor.run {
+                    isPreparingInsight = false
+                    isSending = false
+                    isAITyping = false
+                    chatError = "Unable to connect. Please try again."
+                }
+                return
+            }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+            req.setValue(SupabaseConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
+            req.httpBody = try JSONSerialization.data(withJSONObject: ["alert_state_id": alertId])
+            _ = try await URLSession.shared.data(for: req)
+            try await Task.sleep(nanoseconds: 1_500_000_000) // 1.5s
+            await sendMessage(text: message, skipAddingUserMessage: true)
+        } catch {
+            await MainActor.run {
+                isPreparingInsight = false
+                isSending = false
+                isAITyping = false
+                chatError = Self.insightNotReadyErrorMessage
             }
         }
     }
@@ -2492,6 +2548,9 @@ struct FamilyNotificationDetailSheet: View {
                 Button("Snooze for 7 days") {
                     Task { await snoozeAlert(days: 7) }
                 }
+                Button("Not a concern (30 days)") {
+                    Task { await snoozeAlert(days: 30) }
+                }
                 Button("Dismiss permanently") {
                     Task { await dismissAlert() }
                 }
@@ -2546,12 +2605,16 @@ struct FamilyNotificationDetailSheet: View {
     private var chatContentView: some View {
         VStack(spacing: 0) {
             chatMessagesView
-            Divider()
-            if !availablePrompts.isEmpty && !isSending {
-                promptSuggestionsView
+            // Only show the chat input bar for server-backed alerts that have Arlo support.
+            // Local trend insights show the context banners but no chat interface.
+            if item.isServerAlert {
                 Divider()
+                if !availablePrompts.isEmpty && !isSending {
+                    promptSuggestionsView
+                    Divider()
+                }
+                textInputView
             }
-            textInputView
         }
     }
     
@@ -2559,6 +2622,8 @@ struct FamilyNotificationDetailSheet: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
+                    // Care context: outcome message, follow-up date, or challenge-sent note
+                    careContextBanner
                     // Inline card to surface "Check in" vs "Send challenge" directly
                     // above the conversation, based on pattern duration.
                     checkInOrChallengeBanner
@@ -2568,12 +2633,17 @@ struct FamilyNotificationDetailSheet: View {
                             .id(message.id)
                     }
                     
-                    if isAITyping {
+                    if isPreparingInsight {
+                        Text("Preparing your insight…")
+                            .font(.system(size: 14))
+                            .foregroundColor(.secondary)
+                            .padding(.vertical, 8)
+                    } else if isAITyping {
                         typingIndicatorView
                     }
                     
                     if let error = chatError {
-                        errorView(error)
+                        errorView(error, onTryAgain: error == Self.insightNotReadyErrorMessage ? { Task { await tryAgainAfterInsightNotReady() } } : nil)
                     }
                 }
                 .padding()
@@ -2587,6 +2657,56 @@ struct FamilyNotificationDetailSheet: View {
                 }
             }
         }
+    }
+    
+    /// Follow-up days label from trigger window (3→3, 7→5, 14→7, 21→10).
+    private var followUpDaysLabel: String {
+        let days: Int
+        switch item.triggerWindowDays ?? 3 {
+        case ...3: days = 3
+        case 4...7: days = 5
+        case 8...14: days = 7
+        default: days = 10
+        }
+        return "\(days)"
+    }
+    
+    @ViewBuilder
+    private var careContextBanner: some View {
+        if let msg = item.outcomeMessage, !msg.isEmpty {
+            Text(msg)
+                .font(.system(size: 13))
+                .foregroundColor(.miyaTextSecondary)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemGray6)))
+                .padding(.horizontal, 4)
+                .padding(.bottom, 4)
+        } else if item.careState == .monitoring, let dueDate = item.followUpDueDate {
+            Text("Miya will check back on \(formatFollowUpDate(dueDate)).")
+                .font(.system(size: 13))
+                .foregroundColor(.miyaTextSecondary)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemGray6)))
+                .padding(.horizontal, 4)
+                .padding(.bottom, 4)
+        } else if hasSentRecommendedChallenge {
+            Text("Challenge sent. Miya will check back in \(followUpDaysLabel) days.")
+                .font(.system(size: 13))
+                .foregroundColor(.miyaTextSecondary)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemGray6)))
+                .padding(.horizontal, 4)
+                .padding(.bottom, 4)
+        }
+    }
+    
+    private func formatFollowUpDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
+        return formatter.string(from: date)
     }
     
     @ViewBuilder
@@ -2628,10 +2748,16 @@ struct FamilyNotificationDetailSheet: View {
                         Text("Challenge sent. Miya will track progress and keep you both updated.")
                             .font(.system(size: 12))
                             .foregroundColor(.miyaTextSecondary)
+                    } else if item.careState == .monitoring && item.lastInterventionType == "challenge" {
+                        Text("Challenge already sent — waiting to hear back.")
+                            .font(.system(size: 13))
+                            .foregroundColor(.miyaTextSecondary)
                     } else {
                         Button {
-                            onStartRecommendedChallenge()
-                            hasSentRecommendedChallenge = true
+                            Task {
+                                let success = await onStartRecommendedChallenge()
+                                hasSentRecommendedChallenge = success
+                            }
                         } label: {
                             Text(commitTogetherLabel)
                                 .font(.system(size: 14, weight: .semibold))
@@ -2688,13 +2814,22 @@ struct FamilyNotificationDetailSheet: View {
     }
     
     @ViewBuilder
-    private func errorView(_ error: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.orange)
-            Text(error)
-                .font(.system(size: 14))
-                .foregroundColor(.secondary)
+    private func errorView(_ error: String, onTryAgain: (() -> Void)? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+                Text(error)
+                    .font(.system(size: 14))
+                    .foregroundColor(.secondary)
+            }
+            if let onTryAgain = onTryAgain {
+                Button("Try again") {
+                    onTryAgain()
+                }
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.blue)
+            }
         }
         .padding()
         .background(Color.orange.opacity(0.1))
@@ -2771,8 +2906,15 @@ struct FamilyNotificationDetailSheet: View {
             onSendMessage: { [self] message, platform in
                 if platform == .whatsapp {
                     openWhatsApp(with: message)
-                } else {
+                } else if platform == .imessage || platform == .sms {
                     openMessages(with: message)
+                }
+                Task {
+                    try? await dataManager.recordAlertIntervention(
+                        alertId: item.id,
+                        interventionType: "reach_out",
+                        challengeId: nil
+                    )
                 }
                 showMessageTemplates = false
             }
@@ -3183,8 +3325,10 @@ struct FamilyNotificationDetailSheet: View {
                         } else {
                             Button {
                                 // For longer 7/14/21d drifts, start a gentle 7-day challenge.
-                                dismiss()
-                                onStartRecommendedChallenge()
+                                Task {
+                                    let success = await onStartRecommendedChallenge()
+                                    if success { dismiss() }
+                                }
                             } label: {
                                 Text(commitTogetherLabel)
                                     .font(.system(size: 17, weight: .semibold))

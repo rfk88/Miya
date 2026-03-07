@@ -2,34 +2,40 @@
 //  SupabaseConfig.swift
 //  Miya Health
 //
-//  Supabase client configuration.
+//  Supabase client configuration. Supabase URL and anon key must ONLY come from the
+//  gitignored Secrets.xcconfig (see Secrets.xcconfig.example). Do not add literal
+//  URL or anon key in this file or in the Xcode project.
 //
 
 import Foundation
 import Supabase
 
 enum SupabaseConfig {
-    private static let defaultSupabaseURL = "https://xmfgdeyrpzpqptckmcbr.supabase.co"
-    private static let defaultSupabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhtZmdkZXlycHpwcXB0Y2ttY2JyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxNjA4NjMsImV4cCI6MjA3OTczNjg2M30.zL4PS7grZF3BJUcdgGmJMa_2KTsl-1fCMbaCyhUqSIA"
+    private static func requireInfoPlist(key: String) -> String {
+        guard let value = Bundle.main.infoDictionary?[key] as? String,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            fatalError("SupabaseConfig: \(key) is missing or empty. Copy Miya Health/Secrets.xcconfig.example to Miya Health/Secrets.xcconfig, replace placeholders with your Supabase URL and anon key, and do not commit Secrets.xcconfig. See tools/README.md.")
+        }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
+    // From Info.plist only (Secrets.xcconfig, not committed). Do not hardcode here.
+    // Key names match Xcode INFOPLIST_KEY_* (SupabaseURL, SupabaseAnonKey) or legacy (SUPABASE_URL, SUPABASE_ANON_KEY)
     static let supabaseURL: String = {
-        if let url = Bundle.main.infoDictionary?["SUPABASE_URL"] as? String,
-           !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return url
-        }
-        return defaultSupabaseURL
+        if let v = Bundle.main.infoDictionary?["SupabaseURL"] as? String, !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return v.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return requireInfoPlist(key: "SUPABASE_URL")
     }()
 
+    // From Info.plist only (Secrets.xcconfig, not committed). Do not hardcode here.
     static let supabaseAnonKey: String = {
-        if let key = Bundle.main.infoDictionary?["SUPABASE_ANON_KEY"] as? String,
-           !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return key
-        }
-        return defaultSupabaseAnonKey
+        if let v = Bundle.main.infoDictionary?["SupabaseAnonKey"] as? String, !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return v.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return requireInfoPlist(key: "SUPABASE_ANON_KEY")
     }()
-    
+
     static let client: SupabaseClient = {
-        let url = URL(string: supabaseURL) ?? URL(string: defaultSupabaseURL)!
+        guard let url = URL(string: supabaseURL) else {
+            fatalError("SupabaseConfig: SUPABASE_URL is not a valid URL.")
+        }
         return SupabaseClient(
             supabaseURL: url,
             supabaseKey: supabaseAnonKey,

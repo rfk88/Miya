@@ -8,6 +8,9 @@
 import SwiftUI
 
 struct GuidedHealthDataEditView: View {
+    /// 30-years-ago placeholder when no DOB; avoid defaulting to "today" (BUG-032).
+    private static let dobPlaceholder: Date = Calendar.current.date(byAdding: .year, value: -30, to: Date()) ?? Date()
+
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var dataManager: DataManager
     
@@ -17,7 +20,7 @@ struct GuidedHealthDataEditView: View {
     
     // Prefilled state (Step 1: About You)
     @State private var selectedGender: Gender?
-    @State private var dateOfBirth: Date = Date()
+    @State private var dateOfBirth: Date = GuidedHealthDataEditView.dobPlaceholder
     @State private var heightCm: String = ""
     @State private var weightKg: String = ""
     @State private var selectedEthnicity: Ethnicity?
