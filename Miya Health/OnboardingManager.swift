@@ -25,7 +25,10 @@ class OnboardingManager: ObservableObject {
     
     /// Whether this user joined via invite code (skips family creation/invite screens)
     @Published var isInvitedUser: Bool = false
-    
+
+    /// True when current user's family_members.role is "superadmin" (family creator; sees paywall).
+    @Published var isSuperAdmin: Bool = false
+
     // MARK: - Guided Setup Invite Status (Canonical)
     
     /// Canonical guided setup status from `family_members.guided_setup_status`.
@@ -63,6 +66,7 @@ class OnboardingManager: ObservableObject {
             invitedMemberId = rec.id.uuidString
             invitedFamilyId = rec.familyId?.uuidString
             guidedSetupStatus = parseGuidedSetupStatus(rec.guidedSetupStatus)
+            isSuperAdmin = rec.role.trimmingCharacters(in: .whitespaces).lowercased() == "superadmin"
 
             // Prefer canonical profile data from user_profiles if available; otherwise fall back to family_members.
             if let profile = try? await dataManager.loadUserProfile() {
@@ -218,10 +222,11 @@ class OnboardingManager: ObservableObject {
     func reset() {
         // Invited user / guided setup state
         isInvitedUser = false
+        isSuperAdmin = false
         guidedSetupStatus = nil
         invitedMemberId = nil
         invitedFamilyId = nil
-        
+
         // Step 1: Account
         firstName = ""
         lastName = ""

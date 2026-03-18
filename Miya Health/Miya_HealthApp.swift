@@ -36,7 +36,8 @@ struct Miya_HealthApp: App {
     @StateObject private var authManager = AuthManager()
     @StateObject private var dataManager = DataManager()
     @StateObject private var onboardingManager = OnboardingManager()
-    
+    @StateObject private var subscriptionManager = SubscriptionManager()
+
     /// Session ID that changes on login/logout to force SwiftUI to rebuild the entire view hierarchy.
     /// This ensures zero state leakage between user sessions.
     @State private var appSessionId = UUID()
@@ -62,10 +63,10 @@ struct Miya_HealthApp: App {
             ContentView()
                 .id(appSessionId) // Forces full rebuild on session change
                 .preferredColorScheme(.light) // Force light mode for consistent appearance across all devices
-                // Make the managers available to ALL views in the app
                 .environmentObject(authManager)
                 .environmentObject(dataManager)
                 .environmentObject(onboardingManager)
+                .environmentObject(subscriptionManager)
                 .task {
                     // Wire manager references after the App's view hierarchy is installed.
                     // (Avoids "Accessing StateObject... without being installed on a View" warnings.)
@@ -115,11 +116,11 @@ struct Miya_HealthApp: App {
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .userDidLogout)) { _ in
-                    // Reset all state on logout
                     onboardingManager.reset()
                     dataManager.resetCaches()
-                    authManager.isLoadingProfile = false  // Clear loading flag on logout
-                    appSessionId = UUID() // Force view hierarchy rebuild
+                    subscriptionManager.reset()
+                    authManager.isLoadingProfile = false
+                    appSessionId = UUID()
                     print("🔄 App: Session reset complete (logout)")
                 }
                 .onOpenURL { url in

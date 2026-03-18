@@ -107,6 +107,9 @@ struct FamilyMemberProfileView: View {
             }
         }
         .task {
+            #if DEBUG
+            if ScreenshotDemoData.isScreenshotModeEnabled { return }
+            #endif
             if memberAvatarURL == nil, !previewMock {
                 do {
                     let url = try await dataManager.fetchAvatarURL(forUserId: memberUserId)
@@ -158,6 +161,20 @@ struct FamilyMemberProfileView: View {
                 return
             }
 
+            #if DEBUG
+            // Demo mode: inject realistic profile data so "See how Sarah is doing" looks real (no "Limited data").
+            if ScreenshotDemoData.isScreenshotModeEnabled && isDemoMemberUserId(memberUserId) {
+                await MainActor.run {
+                    applyDemoProfileData(memberName: memberName)
+                }
+                if let pillar = initialPillar {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    await MainActor.run { selectedPillarForDive = pillar }
+                }
+                return
+            }
+            #endif
+
             await self.fetchMemberData()
             if let pillar = initialPillar {
                 try? await Task.sleep(nanoseconds: 500_000_000)
@@ -184,17 +201,42 @@ private extension FamilyMemberProfileView {
 
     var headerSection: some View {
         HStack(spacing: 12) {
-            ProfileAvatarView(
-                imageURL: memberAvatarURL,
-                initials: self.initials(from: memberName),
-                diameter: 58,
-                backgroundColor: Color.miyaCardWhite,
-                foregroundColor: .miyaTextPrimary,
-                font: .system(size: 20, weight: .semibold),
-                showsBorder: true,
-                borderColor: Color.miyaPrimary,
-                borderWidth: 2
-            )
+            Group {
+                #if DEBUG
+                if ScreenshotDemoData.isScreenshotModeEnabled {
+                    Image(ScreenshotDemoData.demoAvatarAssetName(for: memberName))
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 58, height: 58)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(Color.miyaPrimary, lineWidth: 2))
+                } else {
+                    ProfileAvatarView(
+                        imageURL: memberAvatarURL,
+                        initials: self.initials(from: memberName),
+                        diameter: 58,
+                        backgroundColor: Color.miyaCardWhite,
+                        foregroundColor: .miyaTextPrimary,
+                        font: .system(size: 20, weight: .semibold),
+                        showsBorder: true,
+                        borderColor: Color.miyaPrimary,
+                        borderWidth: 2
+                    )
+                }
+                #else
+                ProfileAvatarView(
+                    imageURL: memberAvatarURL,
+                    initials: self.initials(from: memberName),
+                    diameter: 58,
+                    backgroundColor: Color.miyaCardWhite,
+                    foregroundColor: .miyaTextPrimary,
+                    font: .system(size: 20, weight: .semibold),
+                    showsBorder: true,
+                    borderColor: Color.miyaPrimary,
+                    borderWidth: 2
+                )
+                #endif
+            }
             .frame(width: 58, height: 58)
             .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
 
@@ -350,6 +392,63 @@ private extension FamilyMemberProfileView {
 
 // MARK: - Data Fetching
 private extension FamilyMemberProfileView {
+    #if DEBUG
+    func isDemoMemberUserId(_ uid: String) -> Bool {
+        let lower = uid.lowercased()
+        return lower == ScreenshotDemoData.simonUserId.lowercased()
+            || lower == ScreenshotDemoData.sarahUserId.lowercased()
+            || lower == ScreenshotDemoData.emmaUserId.lowercased()
+            || lower == ScreenshotDemoData.liamUserId.lowercased()
+    }
+
+    /// Fills profile with realistic demo data so "See how X is doing" doesn't show "Limited data".
+    func applyDemoProfileData(memberName: String) {
+        isLoading = false
+        loadError = nil
+        daysWithMetricsLast7 = 7
+        lastMetricDate = Date()
+        vitalityHasMinimumData = true
+        animateProgress = true
+        switch memberName {
+        case "Simon":
+            vitalityScore = 72
+            vitalityLabel = "Good"
+            vitalityTrendDelta = 2
+            sleepData = ProfilePillarData(value: "6.8 hours", status: .stable, changeText: "→ 1% • Stable", context: "Sleep vs baseline")
+            movementData = ProfilePillarData(value: "8,200 steps", status: .stable, changeText: "→ 3% • Stable", context: "Movement vs baseline")
+            stressData = ProfilePillarData(value: "58 ms HRV", status: .below, changeText: "↓ 5% • Below baseline", context: "Recovery vs baseline")
+        case "Sarah":
+            vitalityScore = 78
+            vitalityLabel = "Great"
+            vitalityTrendDelta = 4
+            sleepData = ProfilePillarData(value: "7.5 hours", status: .above, changeText: "↑ 4% • Above baseline", context: "Sleep vs baseline")
+            movementData = ProfilePillarData(value: "9,100 steps", status: .stable, changeText: "→ 2% • Stable", context: "Movement vs baseline")
+            stressData = ProfilePillarData(value: "65 ms HRV", status: .stable, changeText: "→ 1% • Stable", context: "Recovery vs baseline")
+        case "Emma":
+            vitalityScore = 65
+            vitalityLabel = "Okay"
+            vitalityTrendDelta = -2
+            sleepData = ProfilePillarData(value: "6.2 hours", status: .below, changeText: "↓ 3% • Below baseline", context: "Sleep vs baseline")
+            movementData = ProfilePillarData(value: "5,800 steps", status: .below, changeText: "↓ 8% • Below baseline", context: "Movement vs baseline")
+            stressData = ProfilePillarData(value: "52 ms HRV", status: .stable, changeText: "→ 0% • Stable", context: "Recovery vs baseline")
+        case "Liam":
+            vitalityScore = 70
+            vitalityLabel = "Good"
+            vitalityTrendDelta = 1
+            sleepData = ProfilePillarData(value: "7.0 hours", status: .stable, changeText: "→ 2% • Stable", context: "Sleep vs baseline")
+            movementData = ProfilePillarData(value: "7,400 steps", status: .stable, changeText: "→ 1% • Stable", context: "Movement vs baseline")
+            stressData = ProfilePillarData(value: "60 ms HRV", status: .below, changeText: "↓ 4% • Below baseline", context: "Recovery vs baseline")
+        default:
+            vitalityScore = 75
+            vitalityLabel = "Good"
+            vitalityTrendDelta = 0
+            sleepData = ProfilePillarData(value: "7.0 hours", status: .stable, changeText: "→ 0% • Stable", context: "Sleep vs baseline")
+            movementData = ProfilePillarData(value: "8,000 steps", status: .stable, changeText: "→ 0% • Stable", context: "Movement vs baseline")
+            stressData = ProfilePillarData(value: "62 ms HRV", status: .stable, changeText: "→ 0% • Stable", context: "Recovery vs baseline")
+        }
+    }
+    #endif
+
     func fetchMemberData() async {
         await MainActor.run {
             isLoading = true

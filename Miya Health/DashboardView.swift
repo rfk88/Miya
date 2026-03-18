@@ -613,6 +613,15 @@ struct DashboardView: View {
         // MARK: - Bell Notifications Helpers
         
         internal func loadBellNotifications() async {
+            #if DEBUG
+            if ScreenshotDemoData.isScreenshotModeEnabled {
+                let uid = await MainActor.run { currentUserIdString }
+                await MainActor.run {
+                    bellNotifications = ScreenshotDemoData.makeBellNotifications(currentUserId: uid)
+                }
+                return
+            }
+            #endif
             do {
                 let items = try await dataManager.fetchBellNotifications(limit: 25)
                 await MainActor.run {
@@ -1077,6 +1086,28 @@ struct DashboardView: View {
                     .foregroundColor(DashboardDesign.secondaryTextColor)
                     .cornerRadius(DashboardDesign.tinyCornerRadius)
                 }
+                
+                Button {
+                    ScreenshotDemoData.isScreenshotModeEnabled.toggle()
+                    Task {
+                        await onDashboardAppear()
+                        if ScreenshotDemoData.isScreenshotModeEnabled {
+                            await loadBellNotifications()
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .font(.system(size: 11, weight: .medium))
+                        Text(ScreenshotDemoData.isScreenshotModeEnabled ? "Screenshot on" : "Screenshot data")
+                            .font(DashboardDesign.tinyFont)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(ScreenshotDemoData.isScreenshotModeEnabled ? Color.orange.opacity(0.3) : DashboardDesign.tertiaryBackgroundColor.opacity(0.5))
+                    .foregroundColor(DashboardDesign.secondaryTextColor)
+                    .cornerRadius(DashboardDesign.tinyCornerRadius)
+                }
             }
             .padding(.bottom, DashboardDesign.tinySpacing)
 #else
@@ -1342,7 +1373,18 @@ struct DashboardView: View {
         @ViewBuilder
         internal var personalVitalitySection: some View {
             if let me = familyMembers.first(where: { $0.isMe }) {
-                PersonalVitalityCard(currentUser: me, factors: vitalityFactors, avatarURL: onboardingManager.avatarURL)
+                PersonalVitalityCard(
+                    currentUser: me,
+                    factors: vitalityFactors,
+                    avatarURL: onboardingManager.avatarURL,
+                    demoAvatarImageName: {
+                        #if DEBUG
+                        return ScreenshotDemoData.isScreenshotModeEnabled ? ScreenshotDemoData.demoAvatarAssetName(for: me.name) : nil
+                        #else
+                        return nil
+                        #endif
+                    }()
+                )
             }
         }
     }

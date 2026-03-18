@@ -279,6 +279,18 @@ struct ArloChatView: View {
     }
 
     private func loadFactsAndSeedOpening() async {
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled {
+            await MainActor.run {
+                let opening = ScreenshotDemoData.chatWithMiyaDemoOpeningMessage(firstName: firstName)
+                messages = [.init(role: .assistant, text: opening)]
+                isLoadingFacts = false
+                showPills = true
+            }
+            return
+        }
+        #endif
+
         await MainActor.run {
             isLoadingFacts = true
             factsLoadError = nil

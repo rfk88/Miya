@@ -739,6 +739,29 @@ struct FamilyNotificationDetailSheet: View {
         print("🚀 CHAT: initializeConversation started")
         print("🚀 CHAT: debugWhy = \(String(describing: item.debugWhy))")
         
+        #if DEBUG
+        // Demo mode: run first so we always show pre-loaded/opening chat regardless of guard below.
+        if ScreenshotDemoData.isScreenshotModeEnabled {
+            let firstName = item.memberName.split(separator: " ").first.map(String.init) ?? item.memberName
+            let demoPrompts: [PillPrompt] = [
+                PillPrompt(icon: "🤝", text: "Reach out to \(firstName)", category: .reachOut),
+                PillPrompt(icon: "📊", text: "Show me the numbers", category: .general),
+                PillPrompt(icon: "💡", text: "Why is this happening?", category: .general),
+            ]
+            await MainActor.run {
+                if item.memberName == "Simon" {
+                    chatMessages = ScreenshotDemoData.simonNotificationPreloadedChat()
+                } else {
+                    let opening = ScreenshotDemoData.notificationChatOpeningMessage(memberName: item.memberName, pillar: item.pillar)
+                    chatMessages = [ChatMessage(role: .miya, text: opening)]
+                }
+                availablePrompts = demoPrompts
+                isInitializing = false
+            }
+            return
+        }
+        #endif
+        
         // Extract alert_state_id from debugWhy.
         // Local trend-insight notifications don't have a server alertStateId — skip chat init
         // gracefully so the sheet still shows the context banners without an error message.
@@ -1217,6 +1240,18 @@ struct FamilyNotificationDetailSheet: View {
             isAITyping = true  // Show animated typing indicator
             chatError = nil
         }
+        
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled {
+            let canned = ScreenshotDemoData.notificationChatCannedReply(pillar: item.pillar)
+            await MainActor.run {
+                chatMessages.append(ChatMessage(role: .miya, text: canned))
+                isAITyping = false
+                isSending = false
+            }
+            return
+        }
+        #endif
         
         do {
             let supabase = SupabaseConfig.client

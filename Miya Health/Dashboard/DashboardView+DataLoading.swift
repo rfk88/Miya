@@ -320,6 +320,12 @@ extension DashboardView {
             loadDismissedMissingWearable(for: uid)
             loadDismissedGuidedMembers(for: uid)
         }
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled {
+            await loadScreenshotDemoData()
+            return
+        }
+        #endif
         await dataManager.clearFamilyCachesIfAuthChanged()
         await detectMissingWearableData()
 
@@ -381,6 +387,13 @@ extension DashboardView {
             print("ℹ️ Dashboard: refresh skipped (already loading)")
             return
         }
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled {
+            await loadScreenshotDemoData()
+            familyMembersRefreshID = UUID()
+            return
+        }
+        #endif
         // #region agent log
         dbgLog("onPullToRefresh START", hyp: "E", data: [
             "trendInsights_count": trendInsights.count,
@@ -897,6 +910,50 @@ extension DashboardView {
             }
         }
     }
+
+    #if DEBUG
+    /// Load demo family of 4 and two drifting notifications for screenshot mode. Call on MainActor.
+    internal func loadScreenshotDemoData() async {
+        // In demo mode always treat Simon as "Me" so the first avatar is the current user.
+        let members = ScreenshotDemoData.makeFamilyMembers(currentUserId: ScreenshotDemoData.simonUserId)
+        let ordered = members.filter(\.isMe) + members.filter { !$0.isMe }
+        let factors = ScreenshotDemoData.makeVitalityFactors(members: ordered)
+        let today = Date()
+        let weekEnd = today
+        let weekStart = dateByAddingDays(-6, to: weekEnd)
+        let weekStartKey = utcDayKey(for: weekStart)
+        let weekEndKey = utcDayKey(for: weekEnd)
+        let dailyWinners: [BadgeEngine.Winner] = [
+            BadgeEngine.Winner(badgeType: "daily_most_sleep", winnerUserId: ScreenshotDemoData.sarahUserId, winnerName: "Sarah", metadata: ["percentIncrease": 12.0, "historyDays": 7, "todayValue": 82, "baselineAverage": 73.0]),
+            BadgeEngine.Winner(badgeType: "daily_most_movement", winnerUserId: ScreenshotDemoData.emmaUserId, winnerName: "Emma", metadata: ["percentIncrease": 8.0, "historyDays": 7, "todayValue": 7200, "baselineAverage": 6667.0]),
+            BadgeEngine.Winner(badgeType: "daily_most_stressfree", winnerUserId: ScreenshotDemoData.liamUserId, winnerName: "Liam", metadata: ["percentIncrease": 6.0, "historyDays": 7, "todayValue": 68, "baselineAverage": 64.0]),
+        ]
+        let weeklyWinners: [BadgeEngine.Winner] = [
+            BadgeEngine.Winner(badgeType: "weekly_vitality_mvp", winnerUserId: ScreenshotDemoData.simonUserId, winnerName: "Simon", metadata: ["percentIncrease": 8.0, "thisAvg": 74.0, "prevAvg": 68.0, "delta": 6.0, "thisWeekDays": 7, "prevWeekDays": 7]),
+            BadgeEngine.Winner(badgeType: "weekly_sleep_mvp", winnerUserId: ScreenshotDemoData.sarahUserId, winnerName: "Sarah", metadata: ["percentIncrease": 5.0, "thisAvg": 80.0, "prevAvg": 76.0]),
+            BadgeEngine.Winner(badgeType: "weekly_movement_mvp", winnerUserId: ScreenshotDemoData.emmaUserId, winnerName: "Emma", metadata: ["percentIncrease": 7.0, "thisAvg": 72.0, "prevAvg": 67.0]),
+        ]
+        await MainActor.run {
+            familyMembers = ordered
+            familyMemberRecords = ScreenshotDemoData.makeFamilyMemberRecords()
+            serverPatternAlerts = ScreenshotDemoData.makeServerPatternAlerts()
+            familyVitalityScore = 71
+            familyVitalityMembersWithData = 4
+            familyVitalityMembersTotal = 4
+            vitalityFactors = factors
+            trendInsights = []
+            familyMembersRefreshID = UUID()
+            resolvedFamilyName = "The Smiths"
+            dataManager.currentFamilyId = ScreenshotDemoData.familyIdUUID.uuidString
+            weeklyBadgeWeekStart = weekStartKey
+            weeklyBadgeWeekEnd = weekEndKey
+            dailyBadgeWinners = dailyWinners
+            weeklyBadgeWinners = weeklyWinners
+            isComputingBadges = false
+        }
+        print("DashboardView: Loaded screenshot demo data (4 members, 2 alerts, champions)")
+    }
+    #endif
 
     internal func loadFamilyVitality() async {
         print("loadFamilyVitality() called")

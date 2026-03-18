@@ -173,6 +173,14 @@ struct FamilyChallengesView: View {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled {
+            await MainActor.run {
+                challenges = ScreenshotDemoData.makeDemoFamilyChallenges()
+            }
+            return
+        }
+        #endif
         do {
             let list = try await dataManager.fetchFamilyChallenges()
             await MainActor.run {

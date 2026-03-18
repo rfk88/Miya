@@ -87,6 +87,25 @@ struct FamilyMembersStrip: View {
                             .fill(DashboardDesign.groupedBackground)
                             .frame(width: 52, height: 52)
 
+                        #if DEBUG
+                        if ScreenshotDemoData.isScreenshotModeEnabled {
+                            Image(ScreenshotDemoData.demoAvatarAssetName(for: member.name))
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 52, height: 52)
+                                .clipShape(Circle())
+                        } else {
+                            ProfileAvatarView(
+                                imageURL: displayAvatarURL,
+                                initials: member.initials,
+                                diameter: 52,
+                                backgroundColor: DashboardDesign.groupedBackground,
+                                foregroundColor: DashboardDesign.primaryTextColor,
+                                font: .system(size: 19, weight: .semibold, design: .default)
+                            )
+                            .frame(width: 52, height: 52)
+                        }
+                        #else
                         ProfileAvatarView(
                             imageURL: displayAvatarURL,
                             initials: member.initials,
@@ -96,6 +115,7 @@ struct FamilyMembersStrip: View {
                             font: .system(size: 19, weight: .semibold, design: .default)
                         )
                         .frame(width: 52, height: 52)
+                        #endif
 
                         // Pending badge (top-right)
                         if member.isPending {
@@ -145,6 +165,9 @@ struct FamilyMembersStrip: View {
             }
             .buttonStyle(.plain)
             .task(id: member.userId) {
+                #if DEBUG
+                guard !ScreenshotDemoData.isScreenshotModeEnabled else { return }
+                #endif
                 guard !member.isMe, let uid = member.userId else { return }
                 fetchedAvatarURL = try? await dataManager.fetchAvatarURL(forUserId: uid)
             }

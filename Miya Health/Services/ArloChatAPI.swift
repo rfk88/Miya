@@ -19,7 +19,11 @@ enum ArloChatAPI {
         firstName: String,
         openingLine: String
     ) async throws -> String {
-
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled {
+            return ScreenshotDemoData.arloCannedReply
+        }
+        #endif
         // 1) Build Edge Function URL
         let urlString = "\(SupabaseConfig.supabaseURL)/functions/v1/arlo-chat"
         guard let url = URL(string: urlString) else {
@@ -161,10 +165,52 @@ extension ArloChatAPI {
     /// This uses `AnyJSON.string(...)` because Supabase Swift RPC params are `AnyJSON` values.
     /// We pass UUID as a canonical string.
     static func fetchFacts(familyId: UUID) async throws -> Facts {
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled {
+            return try screenshotMockFacts(familyId: familyId)
+        }
+        #endif
         let client = SupabaseConfig.client
         return try await client
             .rpc("get_arlo_facts", params: ["p_family_id": AnyJSON.string(familyId.uuidString)])
             .execute()
             .value
     }
+
+    #if DEBUG
+    private static func screenshotMockFacts(familyId: UUID) throws -> Facts {
+        let json: [String: Any] = [
+            "family_id": familyId.uuidString,
+            "time_window_label": "Last 7 days",
+            "family_vitality_current": 71,
+            "family_vitality_delta": -4,
+            "movement_contribution": -8,
+            "sleep_contribution": 2,
+            "recovery_contribution": -6,
+            "members_total": 4,
+            "members_with_data": 4,
+            "data_coverage_days": 7,
+            "missing_members_count": 0,
+            "confidence_level": "high",
+            "confidence": 0.9,
+            "opener_headline": "Recovery and movement need attention",
+            "opener_why": "Simon's recovery and Emma's movement have been drifting for 14 days.",
+            "opener_hook": "I can suggest a 7-day challenge for either — or both.",
+            "suggested_pills": [
+                "Start recovery challenge for Simon",
+                "Check Emma's activity",
+                "View family trends"
+            ],
+            "member_highlights": [
+                "best_sleep_member_name": "Sarah",
+                "best_movement_member_name": "Liam",
+                "best_recovery_member_name": "Sarah",
+                "most_improved_member_name": NSNull(),
+                "most_improved_member_delta": NSNull()
+            ] as [String: Any]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: json)
+        return try JSONDecoder().decode(Facts.self, from: data)
+    }
+    #endif
 }

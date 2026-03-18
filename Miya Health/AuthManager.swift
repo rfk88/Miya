@@ -63,6 +63,49 @@ class AuthManager: ObservableObject {
         }
     }
     
+    /// Sign in with Apple (native id token).
+    /// - Parameters:
+    ///   - idToken: The identity token from ASAuthorizationAppleIDCredential (as UTF-8 string).
+    ///   - nonce: Optional nonce used for the request (Supabase may require it for verification).
+    ///   - fullName: Person name from Apple (only provided on first authorization); if present, stored in user metadata.
+    /// - Returns: The signed-in user's UUID string.
+    func signInWithApple(idToken: String, nonce: String?, fullName: PersonNameComponents?) async throws -> String {
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            let credentials = OpenIDConnectCredentials(
+                provider: .apple,
+                idToken: idToken,
+                nonce: nonce
+            )
+            let session = try await supabase.auth.signInWithIdToken(credentials: credentials)
+            let user = session.user
+
+            isAuthenticated = true
+            UserDefaults.standard.set(false, forKey: explicitLogoutKey)
+            print("✅ AuthManager: User signed in with Apple: \(user.id.uuidString)")
+
+            if let name = fullName {
+                let given = name.givenName ?? ""
+                let family = name.familyName ?? ""
+                let full = [given, family].filter { !$0.isEmpty }.joined(separator: " ")
+                var data: [String: AnyJSON] = [
+                    "first_name": .string(given.isEmpty ? (family.isEmpty ? "User" : family) : given),
+                    "full_name": .string(full.isEmpty ? "User" : full),
+                    "given_name": .string(given),
+                    "family_name": .string(family)
+                ]
+                try? await supabase.auth.update(user: UserAttributes(data: data))
+            }
+
+            return user.id.uuidString
+        } catch {
+            print("❌ AuthManager: Sign in with Apple error: \(error.localizedDescription)")
+            throw AuthError.signInFailed(error.localizedDescription)
+        }
+    }
+
     /// Sign in an existing user
     /// - Parameters:
     ///   - email: User's email address

@@ -601,6 +601,8 @@ struct PersonalVitalityCard: View {
     let currentUser: FamilyMemberScore
     let factors: [VitalityFactor]
     var avatarURL: String? = nil
+    /// When set (e.g. screenshot mode), show this asset name instead of avatarURL.
+    var demoAvatarImageName: String? = nil
     @State private var isExpanded: Bool = false
     
     private func label(for score: Int) -> String {
@@ -620,14 +622,24 @@ struct PersonalVitalityCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DashboardDesign.internalSpacing) {
             HStack(spacing: DashboardDesign.internalSpacing) {
-                ProfileAvatarView(
-                    imageURL: avatarURL,
-                    initials: currentUser.initials,
-                    diameter: 44,
-                    backgroundColor: DashboardDesign.miyaTealSoft.opacity(0.15),
-                    foregroundColor: DashboardDesign.miyaTealSoft.opacity(0.9),
-                    font: DashboardDesign.bodyFont
-                )
+                Group {
+                    if let demoName = demoAvatarImageName {
+                        Image(demoName)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 44, height: 44)
+                            .clipShape(Circle())
+                    } else {
+                        ProfileAvatarView(
+                            imageURL: avatarURL,
+                            initials: currentUser.initials,
+                            diameter: 44,
+                            backgroundColor: DashboardDesign.miyaTealSoft.opacity(0.15),
+                            foregroundColor: DashboardDesign.miyaTealSoft.opacity(0.9),
+                            font: DashboardDesign.bodyFont
+                        )
+                    }
+                }
                 .frame(width: 44, height: 44)
 
                 VStack(alignment: .leading, spacing: DashboardDesign.tinySpacing) {
