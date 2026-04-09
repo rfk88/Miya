@@ -113,3 +113,4 @@ supabase/.temp/
 # Local IDE
 xcuserdata/
 *.code-workspace
+supabase/.temp/
