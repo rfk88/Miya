@@ -41,6 +41,10 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
+        .environmentObject(AuthManager())
+        .environmentObject(DataManager())
+        .environmentObject(OnboardingManager())
+        .environmentObject(SubscriptionManager())
 }
 
 // MARK: - Hard-locked Theme Tokens (do not modify)
@@ -127,21 +131,208 @@ struct MiyaSecondaryButtonStyle: ButtonStyle {
     }
 }
 
+// MARK: - Cold start / profile restore (visible loading, not blank)
+
+#if DEBUG
+/// Logs routing-relevant state when the authenticated “Syncing your profile…” gate is visible (plan: profile sync hang diagnosis).
+private func debugLogSyncingProfileGate(authManager: AuthManager, onboardingManager: OnboardingManager) {
+    print("""
+    📛 SyncingGate DEBUG | branch=LandingView authenticated-hydration-gate (ContentView)
+      isAuthenticated=\(authManager.isAuthenticated)
+      isLoadingProfile=\(authManager.isLoadingProfile)
+      isHydrated=\(onboardingManager.isHydrated)
+      needsLaunchRestoreRetry=\(authManager.needsLaunchRestoreRetry)
+      currentStep=\(onboardingManager.currentStep) isOnboardingComplete=\(onboardingManager.isOnboardingComplete)
+    Repro matrix (record which case hangs):
+      • Fresh install → Get started → sign up
+      • Same session → sign out → Get started → sign up (do not kill app)
+      • Kill app after sign-out vs stay in app before next sign-up
+      • Invite sign-up vs superadmin Get started; login sheet vs embedded sign-up
+    """)
+}
+#endif
+
+private struct StartupGateView: View {
+    var message: String = "Loading your account…"
+
+    @EnvironmentObject private var authManager: AuthManager
+    @EnvironmentObject private var onboardingManager: OnboardingManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulsing = false
+    @State private var showReassurance = false
+
+    var body: some View {
+        ZStack {
+            MiyaBackgroundWash()
+            VStack(spacing: 20) {
+                Image("e96bc988831220de186601645fd93835b8dede817e5045c208d02c6fb54bd4c8")
+                    .resizable()
+                    .renderingMode(.original)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 80, height: 80)
+                    .scaleEffect(pulsing ? 1.08 : 0.95)
+                    .opacity(pulsing ? 1.0 : 0.7)
+                    .animation(
+                        reduceMotion
+                            ? nil
+                            : .easeInOut(duration: 1.0).repeatForever(autoreverses: true),
+                        value: pulsing
+                    )
+
+                Text(message)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(MiyaTheme.ink.opacity(0.65))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+
+                if message == "Syncing your profile…" {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: MiyaTheme.ink.opacity(0.45)))
+                        .scaleEffect(1.05)
+                        .accessibilityLabel("Loading profile")
+                }
+
+                if showReassurance {
+                    Text("This can take a moment on slower connections.")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundColor(MiyaTheme.ink.opacity(0.4))
+                        .transition(.opacity)
+                }
+            }
+        }
+        .ignoresSafeArea()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Loading")
+        .onAppear {
+            pulsing = true
+#if DEBUG
+            if message == "Syncing your profile…" {
+                debugLogSyncingProfileGate(authManager: authManager, onboardingManager: onboardingManager)
+            }
+#endif
+        }
+        .task {
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: 0.4)) {
+                showReassurance = true
+            }
+        }
+    }
+}
+
+// MARK: - Auto-resume onboarding back (mirrors `LandingView.resumeDestination`)
+
+/// Previous step index for the single-push resume link, or `nil` when Back should return to auth entry.
+fileprivate func previousResumeStep(for m: OnboardingManager) -> Int? {
+    if m.guidedSetupStatus == .dataCompletePendingReview, m.invitedMemberId != nil {
+        return nil
+    }
+    let step = m.currentStep
+    let invited = m.isInvitedUser
+    if invited && step <= 1 {
+        return nil
+    }
+    switch step {
+    case 1:
+        return nil
+    case 2:
+        if invited { return nil }
+        return 1
+    case 3: return 2
+    case 4: return 3
+    case 5: return 4
+    case 6: return 5
+    case 7: return 6
+    case 8: return 7
+    default:
+        return nil
+    }
+}
+
+/// Wraps `resumeDestination` so Back decrements `currentStep` instead of popping to Get started.
+private struct OnboardingResumeShell<Content: View>: View {
+    @Binding var navigateResume: Bool
+    @EnvironmentObject private var onboardingManager: OnboardingManager
+    private let content: Content
+
+    init(navigateResume: Binding<Bool>, @ViewBuilder content: () -> Content) {
+        _navigateResume = navigateResume
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .environment(\.onboardingBackBehavior, .resumeStep)
+            .environment(\.onboardingResumeStepBack, { performResumeBack() })
+    }
+
+    private func performResumeBack() {
+        if let prev = previousResumeStep(for: onboardingManager) {
+            onboardingManager.setCurrentStep(prev)
+        } else {
+            navigateResume = false
+        }
+    }
+}
+
 struct LandingView: View {
     @State private var showingSettings = false
     @State private var navigateResume = false
     @State private var showingLogin = false
     @State private var hasRefreshedGuidedContext = false
+    @State private var hasAutoResumed = false
+    @State private var familyBillingState: DataManager.FamilyBillingState?
+    @State private var isRefreshingBillingState = false
+    @State private var billingActionError: String?
     
     @EnvironmentObject var onboardingManager: OnboardingManager
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var dataManager: DataManager
     @EnvironmentObject var subscriptionManager: SubscriptionManager
 
+    private var isSuperAdminPaywallFlow: Bool {
+        authManager.isAuthenticated
+            && onboardingManager.isOnboardingComplete
+            && onboardingManager.isSuperAdmin
+    }
+
+    private var shouldShowSubscriptionLoader: Bool {
+        // Never block a fresh Get Started completion: brand-new superadmins have no subscription.
+        guard !onboardingManager.freshlyCompletedGetStarted else { return false }
+        return isSuperAdminPaywallFlow && !subscriptionManager.entitlementCheckComplete
+    }
+
+    /// Verified StoreKit subscription dismisses the superadmin paywall (App Store 3.1.1: no non-IAP unlock).
+    private var hasActiveSubscriptionAccess: Bool {
+        subscriptionManager.hasActiveSubscription
+    }
+
+    private var shouldShowPaywall: Bool {
+        guard isSuperAdminPaywallFlow else { return false }
+        if hasActiveSubscriptionAccess { return false }
+        // New account on any device = paywall, regardless of stale sandbox/device subscriptions.
+        // Cleared after successful verified purchase.
+        if onboardingManager.freshlyCompletedGetStarted { return true }
+        // Returning user without subscription: show paywall once entitlement check finishes.
+        return subscriptionManager.entitlementCheckComplete
+    }
+    
+    private var shouldShowBillingRecovery: Bool {
+        authManager.isAuthenticated
+            && onboardingManager.isOnboardingComplete
+            && familyBillingState?.billingStatus == "billing_required"
+    }
+
     /// Global loading flag (auth/data/profile/subscription). Keep UI consistent without touching workflows.
+    /// When the dashboard is already visible, skip this overlay — the dashboard handles its own
+    /// section-level loading states. This prevents a dark spinner flash on every background refresh.
     private var isGlobalLoading: Bool {
-        authManager.isLoading || dataManager.isLoading || authManager.isLoadingProfile
-        || (authManager.isAuthenticated && onboardingManager.isOnboardingComplete && onboardingManager.isSuperAdmin && !subscriptionManager.entitlementCheckComplete)
+        let onDashboard = authManager.isAuthenticated && onboardingManager.isOnboardingComplete
+            && !shouldShowPaywall && !shouldShowBillingRecovery
+        if onDashboard { return false }
+        return authManager.isLoading || dataManager.isLoading || authManager.isLoadingProfile
+        || shouldShowSubscriptionLoader
     }
     
     /// Returns the view for the saved onboarding step
@@ -177,6 +368,8 @@ struct LandingView: View {
             }
         case 7:
             AlertsChampionView()
+        case 8:
+            AdditionalFamilyMembersCountView()
         default:
             SuperadminOnboardingView()
         }
@@ -186,28 +379,47 @@ struct LandingView: View {
     
     var body: some View {
         Group {
+            // Startup guard: while auth/profile restoration is in progress, avoid flashing Get Started.
+            if authManager.isLoadingProfile && !authManager.isAuthenticated {
+                StartupGateView(message: "Loading your account…")
+            }
             // HARD GATE: Invited members with admin-filled data awaiting their review
-            if authManager.isAuthenticated,
+            else if authManager.isAuthenticated,
                onboardingManager.guidedSetupStatus == .dataCompletePendingReview,
                let memberId = onboardingManager.invitedMemberId {
                 NavigationStack {
                     GuidedSetupReviewView(memberId: memberId)
                 }
             }
-            // LOADING GUARD: If authenticated but profile is loading, show loading state (prevents onboarding flash)
-            else if authManager.isAuthenticated && authManager.isLoadingProfile {
-                Color.clear
+            // LOADING GUARD: If authenticated but profile/step hydration is not yet done,
+            // hold the loading gate so the user never sees a flash of the wrong screen.
+            else if authManager.isAuthenticated && (authManager.isLoadingProfile || !onboardingManager.isHydrated) {
+                StartupGateView(message: "Syncing your profile…")
             }
             // Superadmin waiting for subscription check: show loading until entitlement is known
-            else if authManager.isAuthenticated && onboardingManager.isOnboardingComplete && onboardingManager.isSuperAdmin && !subscriptionManager.entitlementCheckComplete {
-                Color.clear
+            else if shouldShowSubscriptionLoader {
+                StartupGateView(message: "Checking subscription…")
             }
             // Superadmin with no active subscription: show paywall
-            else if authManager.isAuthenticated && onboardingManager.isOnboardingComplete && onboardingManager.isSuperAdmin && subscriptionManager.entitlementCheckComplete && !subscriptionManager.hasActiveSubscription {
+            else if shouldShowPaywall {
                 NavigationStack {
                     PaywallView(
                         onStartTrial: {
-                            Task { await subscriptionManager.purchase() }
+                            Task {
+                                await subscriptionManager.purchase()
+                                // Consume the one-time fresh flag as soon as payment lands so
+                                // shouldShowPaywall can re-evaluate without it holding the gate open.
+                                if subscriptionManager.hasActiveSubscription {
+                                    onboardingManager.freshlyCompletedGetStarted = false
+#if DEBUG
+                                    print("✅ PaywallGate purchase succeeded — freshFlag cleared, shouldShowPaywall=\(shouldShowPaywall)")
+#endif
+                                } else {
+#if DEBUG
+                                    print("⚠️ PaywallGate purchase attempt completed — hasActive=false error=\(subscriptionManager.purchaseError ?? "none")")
+#endif
+                                }
+                            }
                         },
                         onRestore: {
                             Task { await subscriptionManager.restore() }
@@ -217,6 +429,23 @@ struct LandingView: View {
                     .environmentObject(authManager)
                     .environmentObject(dataManager)
                     .environmentObject(onboardingManager)
+                }
+                .task {
+                    // Always refresh products when the paywall is shown (fixes empty product / “Item Unavailable” after failed load).
+                    await subscriptionManager.loadProductsAndCheckEntitlements()
+                }
+            }
+            else if shouldShowBillingRecovery {
+                NavigationStack {
+                    BillingRecoveryView(
+                        errorMessage: billingActionError,
+                        isLoading: isRefreshingBillingState,
+                        onTakeOverBilling: {
+                            Task {
+                                await claimFamilyBillingOwner()
+                            }
+                        }
+                    )
                 }
             }
             // Authenticated, onboarding complete, and (not superadmin or has subscription): show dashboard
@@ -246,9 +475,12 @@ struct LandingView: View {
                     }
                     
                     NavigationLink(
-                        destination: resumeDestination
-                            .environmentObject(onboardingManager)
-                            .environmentObject(dataManager),
+                        destination: OnboardingResumeShell(navigateResume: $navigateResume) {
+                            resumeDestination
+                                .environmentObject(onboardingManager)
+                                .environmentObject(dataManager)
+                        }
+                        .environmentObject(onboardingManager),
                         isActive: $navigateResume
                     ) {
                         EmptyView()
@@ -267,6 +499,168 @@ struct LandingView: View {
                 }
                 .allowsHitTesting(true)
                 .transition(.opacity)
+            }
+        }
+        .overlay(alignment: .top) {
+            if authManager.needsLaunchRestoreRetry,
+               authManager.isAuthenticated,
+               !authManager.isLoadingProfile {
+                HStack(alignment: .center, spacing: 12) {
+                    Image(systemName: "wifi.exclamationmark")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(MiyaTheme.ink.opacity(0.85))
+                    Text("We couldn’t finish syncing. Check your connection and try again.")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(MiyaTheme.ink.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button("Retry") {
+                        NotificationCenter.default.post(name: .miyaColdStartHydrationRetry, object: nil)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.miyaPrimary)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
+                .padding(.horizontal, MiyaTheme.hPad)
+                .padding(.top, 8)
+            }
+        }
+        .task(id: "\(authManager.isAuthenticated)-\(onboardingManager.isOnboardingComplete)-\(onboardingManager.isSuperAdmin)-\(subscriptionManager.entitlementCheckComplete)-\(subscriptionManager.hasActiveSubscription)-\(onboardingManager.freshlyCompletedGetStarted)-\(onboardingManager.isHydrated)") {
+#if DEBUG
+            do {
+                let route: String
+                if authManager.isLoadingProfile && !authManager.isAuthenticated {
+                    route = "startup-gate (loading, not authed)"
+                } else if authManager.isAuthenticated && authManager.isLoadingProfile {
+                    route = "startup-gate (authed, syncing profile)"
+                } else if authManager.isAuthenticated && !onboardingManager.isOnboardingComplete {
+                    route = "auth-entry + onboarding-resume (step=\(onboardingManager.currentStep) hydrated=\(onboardingManager.isHydrated) autoResumed=\(hasAutoResumed))"
+                } else if authManager.isAuthenticated && onboardingManager.isOnboardingComplete {
+                    if shouldShowPaywall { route = "paywall" }
+                    else if shouldShowBillingRecovery { route = "billing-recovery" }
+                    else { route = "dashboard" }
+                } else {
+                    route = "auth-entry (not authenticated)"
+                }
+                print("🗺️ RouteDecision [\(route)] auth=\(authManager.isAuthenticated) loading=\(authManager.isLoadingProfile) complete=\(onboardingManager.isOnboardingComplete) step=\(onboardingManager.currentStep) hydrated=\(onboardingManager.isHydrated)")
+            }
+            if authManager.isAuthenticated && onboardingManager.isOnboardingComplete {
+                let reason: String
+                if !onboardingManager.isSuperAdmin {
+                    reason = "not-superadmin → dashboard"
+                } else if onboardingManager.freshlyCompletedGetStarted {
+                    reason = "fresh-new-account → PAYWALL (hasActive=\(subscriptionManager.hasActiveSubscription) ignored)"
+                } else if hasActiveSubscriptionAccess {
+                    reason = "has-active-subscription → dashboard"
+                } else if !subscriptionManager.entitlementCheckComplete {
+                    reason = "entitlement-pending → loader"
+                } else {
+                    reason = "no-access → PAYWALL"
+                }
+                print("🔎 PaywallGate [\(reason)] shouldShowPaywall=\(shouldShowPaywall)")
+            }
+#endif
+            await refreshFamilyBillingState()
+        }
+        // Auto-resume: .task handles the common case where hydration finished during splash
+        // (before this view mounted). .onChange handles the rare case where hydration
+        // finishes after this view is already on screen.
+        .task { autoResumeOnboardingIfNeeded() }
+        .onChange(of: onboardingManager.isHydrated) { _, _ in autoResumeOnboardingIfNeeded() }
+    }
+
+    /// Push the user to their saved onboarding step after cold-start hydration,
+    /// instead of leaving them stuck at the Get Started / Log In screen.
+    private func autoResumeOnboardingIfNeeded() {
+        guard onboardingManager.isHydrated,
+              authManager.isAuthenticated,
+              !onboardingManager.isOnboardingComplete,
+              !navigateResume,
+              !hasAutoResumed else { return }
+        hasAutoResumed = true
+        navigateResume = true
+#if DEBUG
+        print("🔁 AutoResume: navigating to step \(onboardingManager.currentStep)")
+#endif
+    }
+    
+    @MainActor
+    private func refreshFamilyBillingState() async {
+        guard authManager.isAuthenticated, onboardingManager.isOnboardingComplete else {
+            familyBillingState = nil
+            billingActionError = nil
+            return
+        }
+        isRefreshingBillingState = true
+        defer { isRefreshingBillingState = false }
+        do {
+            familyBillingState = try await dataManager.fetchMyFamilyBillingState()
+            billingActionError = nil
+        } catch {
+            billingActionError = "Couldn't verify family billing state."
+        }
+    }
+    
+    @MainActor
+    private func claimFamilyBillingOwner() async {
+        isRefreshingBillingState = true
+        defer { isRefreshingBillingState = false }
+        do {
+            try await dataManager.claimFamilyBillingOwnership()
+            familyBillingState = try await dataManager.fetchMyFamilyBillingState()
+            billingActionError = nil
+        } catch {
+            billingActionError = "Could not take over billing. Please try again."
+        }
+    }
+}
+
+private struct BillingRecoveryView: View {
+    let errorMessage: String?
+    let isLoading: Bool
+    let onTakeOverBilling: () -> Void
+    
+    var body: some View {
+        ZStack {
+            MiyaBackgroundWash()
+            VStack(spacing: 16) {
+                Image(systemName: "creditcard.trianglebadge.exclamationmark")
+                    .font(.system(size: 40))
+                    .foregroundColor(.miyaPrimary)
+                Text("Billing required")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundColor(.miyaTextPrimary)
+                Text("Your family's billing grace period ended. Take over billing to restore access.")
+                    .font(.system(size: 15))
+                    .foregroundColor(.miyaTextSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                Button(action: onTakeOverBilling) {
+                    HStack {
+                        if isLoading {
+                            ProgressView().tint(.white)
+                        }
+                        Text(isLoading ? "Processing..." : "Take over billing")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.miyaPrimary)
+                    .foregroundColor(.white)
+                    .cornerRadius(12)
+                }
+                .disabled(isLoading)
+                .padding(.horizontal, 24)
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.system(size: 13))
+                        .foregroundColor(.red)
+                }
             }
         }
     }
@@ -291,10 +685,14 @@ struct EnterCodeView: View {
     @State private var codeValidated: Bool = false
     
     // Account creation state
+    @State private var firstName: String = ""
     @State private var email: String = ""
     @State private var password: String = ""
     @State private var confirmPassword: String = ""
-    
+    @State private var showEmailSignupForm: Bool = false
+    /// Inline hint when user taps Apple/Email before entering name (no alert).
+    @State private var authNameInlineHint: String?
+
     // Guided setup acceptance (only for Guided Setup invites)
     @State private var showGuidedAcceptancePrompt: Bool = false
     @State private var wearablesIsGuidedSetupInvite: Bool = false
@@ -316,6 +714,7 @@ struct EnterCodeView: View {
     
     private var isFormValid: Bool {
         guard codeValidated else { return false }
+        guard !firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         guard !email.isEmpty else { return false }
         guard password.count >= 8 else { return false }
         guard passwordsMatch else { return false }
@@ -355,6 +754,12 @@ struct EnterCodeView: View {
         } message: {
             Text(errorMessage)
         }
+        .onChange(of: firstName) { _ in
+            if !firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                authNameInlineHint = nil
+                showError = false
+            }
+        }
         // Guided setup acceptance prompt (Guided Setup invites only)
         .sheet(isPresented: $showGuidedAcceptancePrompt) {
             if let details = inviteDetails {
@@ -390,7 +795,7 @@ struct EnterCodeView: View {
             Text("Enter your invite code")
                 .font(.system(size: 28, weight: .bold))
             
-            Text("Enter the code shared by your family member to join their health team.")
+            Text("Enter the code your family shared with you to join them in Miya.")
                 .font(.system(size: 16))
                 .foregroundColor(.secondary)
             
@@ -469,94 +874,140 @@ struct EnterCodeView: View {
             Divider()
                 .padding(.vertical, 8)
             
-            // Account creation form
-            Text("Create your account")
-                .font(.system(size: 20, weight: .semibold))
-            
-            // Email
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Email")
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Name")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(.secondary)
-                
-                TextField("your@email.com", text: $email)
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.emailAddress)
+
+                TextField("Your name", text: $firstName)
+                    .textInputAutocapitalization(.words)
                     .autocorrectionDisabled()
                     .padding()
                     .background(Color(red: 0.95, green: 0.95, blue: 0.97))
                     .cornerRadius(12)
             }
-            
-            // Password
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Password")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.secondary)
-                
-                SecureField("At least 8 characters", text: $password)
-                    .padding()
-                    .background(Color(red: 0.95, green: 0.95, blue: 0.97))
-                    .cornerRadius(12)
-            }
-            
-            // Confirm password
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Confirm Password")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.secondary)
-                
-                SecureField("Confirm your password", text: $confirmPassword)
-                    .padding()
-                    .background(Color(red: 0.95, green: 0.95, blue: 0.97))
-                    .cornerRadius(12)
-                
-                if !confirmPassword.isEmpty && !passwordsMatch {
-                    Text("Passwords do not match")
-                        .font(.system(size: 12))
-                        .foregroundColor(.red)
-                }
-            }
-            
-            // Join button
-            Button {
-                Task {
-                    await createAccountAndJoin()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    if authManager.isLoading {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(0.8)
+
+            if !showEmailSignupForm {
+                let nameMissing = firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let appleBlocked = isAppleSignInLoading || authManager.isLoading
+
+                ZStack {
+                    SignInWithAppleButtonView { idToken, nonce, fullName in
+                        await handleAppleSignInForInvite(idToken: idToken, nonce: nonce, fullName: fullName)
                     }
-                    Text(authManager.isLoading ? "Creating account..." : "Join Family")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: MiyaTheme.buttonH)
+                    .disabled(appleBlocked)
+
+                    if nameMissing && !appleBlocked {
+                        Color.clear
+                            .contentShape(RoundedRectangle(cornerRadius: MiyaTheme.radius, style: .continuous))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: MiyaTheme.buttonH)
+                            .onTapGesture {
+                                authNameInlineHint = "Please add your first name above before using Sign in with Apple."
+                            }
+                    }
+                }
+
+                Button {
+                    if nameMissing {
+                        authNameInlineHint = "Please add your first name above before signing up with email."
+                    } else {
+                        showEmailSignupForm = true
+                    }
+                } label: {
+                    Text("Sign up with Email")
                         .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: MiyaTheme.buttonH)
+                        .background(Color.miyaPrimary)
+                        .cornerRadius(MiyaTheme.radius)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(isFormValid ? Color.miyaPrimary : Color.gray.opacity(0.3))
-                .foregroundColor(.white)
-                .cornerRadius(18)
-            }
-            .disabled(!isFormValid || authManager.isLoading)
-            .padding(.top, 12)
-            
-            // Or sign in with Apple
-            VStack(spacing: 12) {
-                HStack {
-                    Rectangle().fill(Color(red: 0.9, green: 0.9, blue: 0.92)).frame(height: 1)
-                    Text("Or sign in with Apple")
+                .padding(.top, 8)
+
+                if let hint = authNameInlineHint {
+                    Text(hint)
                         .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                // Account creation form (email path)
+                Text("Create your account")
+                    .font(.system(size: 20, weight: .semibold))
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Email")
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.secondary)
-                    Rectangle().fill(Color(red: 0.9, green: 0.9, blue: 0.92)).frame(height: 1)
+                    TextField("your@email.com", text: $email)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.emailAddress)
+                        .autocorrectionDisabled()
+                        .padding()
+                        .background(Color(red: 0.95, green: 0.95, blue: 0.97))
+                        .cornerRadius(12)
                 }
-                SignInWithAppleButtonView { idToken, nonce, fullName in
-                    await handleAppleSignInForInvite(idToken: idToken, nonce: nonce, fullName: fullName)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Password")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.secondary)
+                    SecureField("At least 8 characters", text: $password)
+                        .padding()
+                        .background(Color(red: 0.95, green: 0.95, blue: 0.97))
+                        .cornerRadius(12)
                 }
-                .disabled(isAppleSignInLoading || authManager.isLoading)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Confirm Password")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.secondary)
+                    SecureField("Confirm your password", text: $confirmPassword)
+                        .padding()
+                        .background(Color(red: 0.95, green: 0.95, blue: 0.97))
+                        .cornerRadius(12)
+
+                    if !confirmPassword.isEmpty && !passwordsMatch {
+                        Text("Passwords do not match")
+                            .font(.system(size: 12))
+                            .foregroundColor(.red)
+                    }
+                }
+
+                Button {
+                    Task { await createAccountAndJoin() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if authManager.isLoading {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.8)
+                        }
+                        Text(authManager.isLoading ? "Creating account..." : "Join Family")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(isFormValid ? Color.miyaPrimary : Color.gray.opacity(0.3))
+                    .foregroundColor(.white)
+                    .cornerRadius(18)
+                }
+                .disabled(!isFormValid || authManager.isLoading)
+                .padding(.top, 12)
+
+                Button {
+                    showEmailSignupForm = false
+                } label: {
+                    Text("Back")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
             }
-            .padding(.top, 16)
         }
     }
     
@@ -578,6 +1029,9 @@ struct EnterCodeView: View {
             onboardingManager.guidedSetupStatus = details.guidedSetupStatus
             onboardingManager.invitedMemberId = details.memberId
             onboardingManager.invitedFamilyId = details.familyId
+            if firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                firstName = details.firstName
+            }
             
         } catch {
             errorMessage = error.localizedDescription
@@ -596,16 +1050,17 @@ struct EnterCodeView: View {
             let normalizedCode = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
             inviteCode = normalizedCode
             // 1. Create the user account
+            let resolvedFirstName = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
             let userId = try await authManager.signUp(
                 email: email,
                 password: password,
-                firstName: details.firstName
+                firstName: resolvedFirstName
             )
             
             // 2. 🔥 Create initial user_profile (step 2 since they've already "joined" a family via invite)
             try await dataManager.createInitialProfile(
                 userId: userId,
-                firstName: details.firstName,
+                firstName: resolvedFirstName,
                 step: 2
             )
             
@@ -616,7 +1071,7 @@ struct EnterCodeView: View {
             )
             
             // 4. Store info in onboarding manager
-            onboardingManager.firstName = details.firstName
+            onboardingManager.firstName = resolvedFirstName
             onboardingManager.email = email
             onboardingManager.currentUserId = userId
             onboardingManager.isInvitedUser = true  // 🔥 Mark as invited user
@@ -650,10 +1105,10 @@ struct EnterCodeView: View {
         do {
             let normalizedCode = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
             let userId = try await authManager.signInWithApple(idToken: idToken, nonce: nonce, fullName: fullName)
-            let firstName = fullName?.givenName ?? fullName?.familyName ?? details.firstName
-            try await dataManager.createInitialProfile(userId: userId, firstName: firstName, step: 2)
+            let resolvedFirstName = fullName?.givenName ?? fullName?.familyName ?? firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+            try await dataManager.createInitialProfile(userId: userId, firstName: resolvedFirstName, step: 2)
             try await dataManager.completeInviteRedemption(code: normalizedCode, userId: userId)
-            onboardingManager.firstName = firstName
+            onboardingManager.firstName = resolvedFirstName
             onboardingManager.currentUserId = userId
             onboardingManager.isInvitedUser = true
             onboardingManager.familyName = details.familyName
@@ -675,9 +1130,9 @@ struct EnterCodeView: View {
 
     private func onboardingTypeSummaryText(_ details: InviteDetails) -> String {
         if details.isGuidedSetup {
-            return "Guided setup — accept to get started"
+            return "Your family chose to set up your profile for you — accept to continue"
         }
-        return "Self setup — you’ll complete your profile in the next steps"
+        return "You’ll create your own profile in the next steps"
     }
     
     // MARK: - Guided setup actions (invitee)
@@ -940,45 +1395,23 @@ struct LoginView: View {
             _ = try await authManager.signInWithApple(idToken: idToken, nonce: nonce, fullName: fullName)
             dataManager.restorePersistedState()
             await MainActor.run {
+                authManager.isLoadingProfile = true
+                onboardingManager.isHydrated = false
                 dismiss()
                 onSuccess()
             }
-            await MainActor.run { authManager.isLoadingProfile = true }
-            if let profile = try await dataManager.loadUserProfile() {
-                await MainActor.run {
-                    if let firstName = profile.first_name { onboardingManager.firstName = firstName }
-                    if let lastName = profile.last_name { onboardingManager.lastName = lastName }
-                    if let dobString = profile.date_of_birth, !dobString.isEmpty {
-                        let formatter = DateFormatter()
-                        formatter.dateFormat = "yyyy-MM-dd"
-                        onboardingManager.dateOfBirth = formatter.date(from: dobString)
-                    } else { onboardingManager.dateOfBirth = nil }
-                    if let v = profile.gender { onboardingManager.gender = v }
-                    if let v = profile.ethnicity { onboardingManager.ethnicity = v }
-                    if let v = profile.smoking_status { onboardingManager.smokingStatus = v }
-                    if let v = profile.height_cm { onboardingManager.heightCm = v }
-                    if let v = profile.weight_kg { onboardingManager.weightKg = v }
-                    if let v = profile.blood_pressure_status { onboardingManager.bloodPressureStatus = v }
-                    if let v = profile.diabetes_status { onboardingManager.diabetesStatus = v }
-                    if let v = profile.has_prior_heart_attack { onboardingManager.hasPriorHeartAttack = v }
-                    if let v = profile.has_prior_stroke { onboardingManager.hasPriorStroke = v }
-                    if let v = profile.family_heart_disease_early { onboardingManager.familyHeartDiseaseEarly = v }
-                    if let v = profile.family_stroke_early { onboardingManager.familyStrokeEarly = v }
-                    if let v = profile.family_type2_diabetes { onboardingManager.familyType2Diabetes = v }
-                    if let v = profile.risk_band { onboardingManager.riskBand = v }
-                    if let v = profile.risk_points { onboardingManager.riskPoints = v }
-                    if let v = profile.optimal_vitality_target { onboardingManager.optimalVitalityTarget = v }
-                    let step = profile.onboarding_step ?? 1
-                    onboardingManager.isOnboardingComplete = profile.onboarding_complete ?? false
-                    onboardingManager.setCurrentStep(step)
-                }
-            } else {
-                await MainActor.run { onboardingManager.setCurrentStep(1) }
+            await AuthenticatedLaunchHydration.hydrateAuthenticatedUser(
+                dataManager: dataManager,
+                onboardingManager: onboardingManager
+            )
+            await MainActor.run {
+                onboardingManager.isHydrated = true
+                authManager.isLoadingProfile = false
             }
-            await onboardingManager.refreshGuidedContextFromDB(dataManager: dataManager)
-            await MainActor.run { authManager.isLoadingProfile = false }
         } catch {
             await MainActor.run {
+                authManager.isLoadingProfile = false
+                onboardingManager.isHydrated = true
                 errorMessage = error.localizedDescription
             }
         }
@@ -996,161 +1429,43 @@ struct LoginView: View {
             dataManager.restorePersistedState()
             
             #if DEBUG
-            // 2b. If demo account, enable screenshot demo so dashboard is full without real data
-            if email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == ScreenshotDemoData.demoEmail.lowercased() {
-                ScreenshotDemoData.isScreenshotModeEnabled = true
-                onboardingManager.familyName = "The Smiths"
-                onboardingManager.firstName = "Simon"
-                onboardingManager.setCurrentStep(7)
-                onboardingManager.isOnboardingComplete = true
-            }
+            // Ensure real accounts never inherit persisted demo mode.
+            ScreenshotDemoData.syncForAuthenticatedUser(email: email)
             #endif
             
-            // 3. Dismiss immediately to prevent UI freeze
+            // 3. Dismiss — set loading gate BEFORE dismiss so SwiftUI never
+            //    re-renders with isAuthenticated=true + isLoadingProfile=false.
             await MainActor.run {
+                authManager.isLoadingProfile = true
+                onboardingManager.isHydrated = false
                 isLoading = false
                 dismiss()
                 onSuccess()
             }
-            
-            // 4. 🔥 LOAD USER PROFILE FROM DATABASE IN BACKGROUND
-            // This happens AFTER dismissal so UI doesn't freeze
-            // Set loading flag to prevent onboarding flash during profile load
-            await MainActor.run {
-                authManager.isLoadingProfile = true
-            }
-            
-            if let profile = try await dataManager.loadUserProfile() {
-                print("📥 LoginView: Loading profile data into OnboardingManager (background)")
-                
-                // Populate OnboardingManager with database data
-                await MainActor.run {
-                    // Basic info
-                    if let firstName = profile.first_name {
-                        onboardingManager.firstName = firstName
-                    }
-                    if let lastName = profile.last_name {
-                        onboardingManager.lastName = lastName
-                    }
-                    
-                    // About You data
-                    if let dobString = profile.date_of_birth, !dobString.isEmpty {
-                        let formatter = DateFormatter()
-                        formatter.dateFormat = "yyyy-MM-dd"
-                        if let dob = formatter.date(from: dobString) {
-                            onboardingManager.dateOfBirth = dob
-                        } else {
-                            onboardingManager.dateOfBirth = nil
-                        }
-                    } else {
-                        onboardingManager.dateOfBirth = nil
-                    }
-                    if let gender = profile.gender {
-                        onboardingManager.gender = gender
-                    }
-                    if let ethnicity = profile.ethnicity {
-                        onboardingManager.ethnicity = ethnicity
-                    }
-                    if let smoking = profile.smoking_status {
-                        onboardingManager.smokingStatus = smoking
-                    }
-                    if let height = profile.height_cm {
-                        onboardingManager.heightCm = height
-                    }
-                    if let weight = profile.weight_kg {
-                        onboardingManager.weightKg = weight
-                    }
-                    
-                    // Heart Health data
-                    if let bpStatus = profile.blood_pressure_status {
-                        onboardingManager.bloodPressureStatus = bpStatus
-                    }
-                    if let diabStatus = profile.diabetes_status {
-                        onboardingManager.diabetesStatus = diabStatus
-                    }
-                    if let heartAttack = profile.has_prior_heart_attack {
-                        onboardingManager.hasPriorHeartAttack = heartAttack
-                    }
-                    if let stroke = profile.has_prior_stroke {
-                        onboardingManager.hasPriorStroke = stroke
-                    }
-                    
-                    // Family History data
-                    if let familyHeart = profile.family_heart_disease_early {
-                        onboardingManager.familyHeartDiseaseEarly = familyHeart
-                    }
-                    if let familyStroke = profile.family_stroke_early {
-                        onboardingManager.familyStrokeEarly = familyStroke
-                    }
-                    if let familyDiabetes = profile.family_type2_diabetes {
-                        onboardingManager.familyType2Diabetes = familyDiabetes
-                    }
-                    
-                    // Risk Results
-                    if let riskBand = profile.risk_band {
-                        onboardingManager.riskBand = riskBand
-                    }
-                    if let riskPoints = profile.risk_points {
-                        onboardingManager.riskPoints = riskPoints
-                    }
-                    if let optimalTarget = profile.optimal_vitality_target {
-                        onboardingManager.optimalVitalityTarget = optimalTarget
-                    }
-                    
-                    // 🔥 Load step from DATABASE, not UserDefaults
-                    let step = profile.onboarding_step ?? 1
-                    let isComplete = profile.onboarding_complete ?? false
-                    
-                    onboardingManager.isOnboardingComplete = isComplete
-                    onboardingManager.setCurrentStep(step)
-                    
-                    print("✅ LoginView: Profile loaded - Navigating to step \(step)")
-                }
-            } else {
-                // No profile found in database, start from step 1
-                print("ℹ️ LoginView: No profile found, starting from step 1")
-                await MainActor.run {
-                    onboardingManager.setCurrentStep(1)
-                }
-            }
-            
-            // Refresh guided context (force review screen if data is ready)
-            await onboardingManager.refreshGuidedContextFromDB(dataManager: dataManager)
-            
+
+            await AuthenticatedLaunchHydration.hydrateAuthenticatedUser(
+                dataManager: dataManager,
+                onboardingManager: onboardingManager
+            )
+
             #if DEBUG
-            // Demo account: always show dashboard with demo data (override any DB-driven state)
-            if email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == ScreenshotDemoData.demoEmail.lowercased() {
-                await MainActor.run {
-                    onboardingManager.isOnboardingComplete = true
-                    onboardingManager.familyName = "The Smiths"
-                    onboardingManager.setCurrentStep(7)
-                }
-            }
+            // Demo mode must be explicitly enabled (e.g. Try demo), never inherited by real users.
+            ScreenshotDemoData.syncForAuthenticatedUser(email: email)
             print("✅ GUIDED_INVITEE_LOGIN: memberId=\(onboardingManager.invitedMemberId ?? "nil") status=\(onboardingManager.guidedSetupStatus?.rawValue ?? "nil") currentStep=\(onboardingManager.currentStep)")
             #endif
-            
+
             print("✅ LoginView: Background profile loading complete")
-            
-            // Clear loading flag - profile is loaded, ready to route to dashboard/onboarding
+
             await MainActor.run {
+                onboardingManager.isHydrated = true
                 authManager.isLoadingProfile = false
             }
-            
+
         } catch {
-            // Only show error if we haven't dismissed yet (auth failed)
-            // If error happens during background profile load, just log it
-            if isLoading {
-                await MainActor.run {
-                    isLoading = false
-                    errorMessage = error.localizedDescription
-                    print("❌ LoginView: Login failed - \(error.localizedDescription)")
-                }
-            } else {
-                print("⚠️ LoginView: Background profile load error (non-critical) - \(error.localizedDescription)")
-                // Clear loading flag even on error
-                await MainActor.run {
-                    authManager.isLoadingProfile = false
-                }
+            await MainActor.run {
+                isLoading = false
+                errorMessage = error.localizedDescription
+                print("❌ LoginView: Login failed - \(error.localizedDescription)")
             }
         }
     }

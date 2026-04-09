@@ -16,25 +16,27 @@ enum PaywallConfig {
     struct Copy {
         static let title = "Stay ahead of your family's health."
         static let subtitle = ""
-        static let ctaButton = "Start your 14-day free trial"
-        static let priceAfterTrial = "£12.99/month after trial · Cancel anytime"
+        /// Second line on the subscribe control (under the StoreKit price line).
+        static let ctaButton = "Start 14-day free trial"
+        /// Subordinate renewal disclosure; references the price on the button without repeating the amount (3.1.2(c)).
+        static let ctaRenewalFootnote = "Auto-renewing subscription. After the trial, you’ll be charged this amount unless you cancel."
+        /// Under the CTA; must stay smaller than the main button label.
+        static let cancelAnytimeReassurance = "Cancel anytime."
         static let finePrint = ""
         static let restoreLabel = "Restore purchases"
+        /// App Store subscription offer codes only (system redemption sheet — not custom promo).
+        static let redeemOfferCodeLabel = "Redeem offer code"
         static let timelineTodayTitle = "Today: Instant access"
         static let timelineTodayDetail = "With free 14-day trial"
         static let timelineMiddleTitle = "Your family all integrated"
         static let timelineMiddleDetail = "We notify you about your trial end via email"
         static let timelineDay14Title = "Day 14: Full membership"
-        static let timelineDay14Detail = "Your account is charged £12.99/month. Cancel anytime in the 24h before."
-        static let haveACodeLabel = "Have a code?"
+        static let timelineDay14Detail = "Your account is charged the subscription price. Cancel anytime in the 24h before renewal."
     }
 
     // MARK: - Legal URLs (replace with your actual URLs before release)
     static let termsOfUseURLString = "https://miyahealth.com/terms"
     static let privacyPolicyURLString = "https://fumble.info/"
-
-    /// Valid promo code that bypasses the paywall (case-insensitive).
-    static let promoCodeBypass = "MiyaHealthFree"
 
     // MARK: - Outcome bullets (title + detail)
     struct OutcomeBullet: Identifiable {
@@ -64,4 +66,12 @@ enum PaywallConfig {
         Testimonial(quote: "We all had wearables but never really understood the data. Miya turns it into something that actually makes sense.", author: "— Daniel, father of two"),
         Testimonial(quote: "Small habits add up over time, but it's easy to miss the signals. Miya helps us stay ahead of it as a family.", author: "— Sarah, mum of three"),
     ]
+
+    // MARK: - App Review (copy into App Store Connect → App Review Information → Notes)
+
+    /// Guideline 3.1.2(c): paste into Notes for Review on resubmission.
+    static let appStoreReviewNoteGuideline312c = """
+    We updated the in-app subscription paywall per Guideline 3.1.2(c): the recurring subscription price from StoreKit is the first line on the primary control (e.g. localized price with “/ month”), in larger type than the free-trial action line below it; auto-renewal terms follow in smaller secondary text.
+    If the review references the system subscription confirmation sheet, that UI is provided by StoreKit and cannot be customized; our custom paywall reflects the hierarchy above.
+    """
 }

@@ -114,8 +114,8 @@ struct InviteCodeEntryView: View {
                         } label: {
                             Text(
                                 invite.onboardingType == .guided
-                                ? "Start guided setup"
-                                : "Start self setup"
+                                ? "Continue — your family will set up your profile"
+                                : "Continue — set up your own profile"
                             )
                             .font(.system(size: 16, weight: .semibold))
                             .frame(maxWidth: .infinity)

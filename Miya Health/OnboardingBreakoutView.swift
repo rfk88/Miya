@@ -256,7 +256,7 @@ struct Breakout1View: View {
             
             // Hidden NavigationLink
             NavigationLink(
-                destination: HeartHealthView()
+                destination: Breakout2View()
                     .environmentObject(onboardingManager)
                     .environmentObject(dataManager),
                 isActive: $navigateToNext
@@ -265,7 +265,6 @@ struct Breakout1View: View {
             }
             .hidden()
         }
-        .navigationBarBackButtonHidden(true)
         .onAppear {
             startAnimation()
         }
@@ -509,7 +508,6 @@ struct Breakout2View: View {
             }
             .hidden()
         }
-        .navigationBarBackButtonHidden(true)
         .onAppear {
             startDriftAnimation()
         }
@@ -558,11 +556,12 @@ struct Breakout3View: View {
     @EnvironmentObject var dataManager: DataManager
     
     @State private var navigateToNext: Bool = false
-    @State private var currentStage: Int = 0 // 0 = none, 1-3 = stages
-    @State private var waveProgress: Double = 0.0 // For wave animation
+    @State private var currentStage: Int = 0
+    @State private var waveProgress: Double = 0.0
     @State private var showExplanationCard: Bool = false
     @State private var showContrastCard: Bool = false
     @State private var showButton: Bool = false
+    @State private var loopTask: Task<Void, Never>?
     
     private var isGuidedInviteeAwaitingAdmin: Bool {
         onboardingManager.isInvitedUser && onboardingManager.guidedSetupStatus == .acceptedAwaitingData
@@ -572,129 +571,98 @@ struct Breakout3View: View {
         ZStack {
             Color.miyaBackground.ignoresSafeArea()
             
-            ScrollView {
-                VStack(spacing: 20) {
-                    // VERTICAL CENTERING: Push content down
-                    Spacer()
-                        .frame(minHeight: 60)
-                    
-                    // Top section (fixed)
-                    BreakoutTopSection(
-                        title: "How Miya Works",
-                        subtitle: "Calm, not reactive."
-                    )
-                    
-                    // HERO CARD: 3-stage flow with WAVE ANIMATION
-                    OnboardingCard(padding: 20) {
-                        VStack(spacing: 16) {
-                            HStack(spacing: 0) {
-                                // Stage 1: Observe
-                                FlowStageWave(
-                                    icon: "magnifyingglass",
-                                    title: "Observe",
-                                    subtitle: "patterns",
-                                    isActive: currentStage == 1,
-                                    waveIntensity: currentStage == 1 ? waveProgress : 0
-                                )
-                                
-                                // Connecting wave line
-                                WaveConnector(isActive: currentStage >= 2, progress: waveProgress)
-                                
-                                // Stage 2: Notice
-                                FlowStageWave(
-                                    icon: "bell.fill",
-                                    title: "Notice",
-                                    subtitle: "drift",
-                                    isActive: currentStage == 2,
-                                    waveIntensity: currentStage == 2 ? waveProgress : 0
-                                )
-                                
-                                // Connecting wave line
-                                WaveConnector(isActive: currentStage >= 3, progress: waveProgress)
-                                
-                                // Stage 3: Support
-                                FlowStageWave(
-                                    icon: "hands.sparkles.fill",
-                                    title: "Support",
-                                    subtitle: "action",
-                                    isActive: currentStage == 3,
-                                    waveIntensity: currentStage == 3 ? waveProgress : 0
-                                )
-                            }
+            // Content scrolls only if needed; CTA stays pinned via safeAreaInset (not at end of scroll).
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 12) {
+                BreakoutTopSection(
+                    title: "How Miya Works",
+                    subtitle: "Calm, not reactive."
+                )
+                
+                // HERO CARD: 3-stage flow with WAVE ANIMATION
+                OnboardingCard(padding: 16) {
+                    VStack(spacing: 10) {
+                        HStack(spacing: 0) {
+                            FlowStageWave(
+                                icon: "magnifyingglass",
+                                title: "Observe",
+                                subtitle: "patterns",
+                                isActive: currentStage == 1,
+                                waveIntensity: currentStage == 1 ? waveProgress : 0
+                            )
+                            
+                            WaveConnector(isActive: currentStage >= 2, progress: waveProgress)
+                            
+                            FlowStageWave(
+                                icon: "bell.fill",
+                                title: "Notice",
+                                subtitle: "drift",
+                                isActive: currentStage == 2,
+                                waveIntensity: currentStage == 2 ? waveProgress : 0
+                            )
+                            
+                            WaveConnector(isActive: currentStage >= 3, progress: waveProgress)
+                            
+                            FlowStageWave(
+                                icon: "hands.sparkles.fill",
+                                title: "Support",
+                                subtitle: "action",
+                                isActive: currentStage == 3,
+                                waveIntensity: currentStage == 3 ? waveProgress : 0
+                            )
                         }
-                        .frame(height: 140)
                     }
-                    
-                    // EXPLANATION CARD: What the system does
-                    if showExplanationCard {
-                        OnboardingCard {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("A system that quietly learns, then intervenes only when it matters.")
-                                    .font(.system(size: 15, weight: .medium))
-                                    .foregroundColor(.miyaTextPrimary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                
-                                Text("Miya watches for meaningful change over time. When something drifts, it helps the right person act — calmly.")
-                                    .font(.system(size: 15))
-                                    .foregroundColor(.miyaTextPrimary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
+                    .frame(height: 120)
+                }
+                
+                if showExplanationCard {
+                    OnboardingCard(padding: 14) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("A system that quietly learns, then intervenes only when it matters.")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.miyaTextPrimary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            
+                            Text("Miya watches for meaningful change over time. When something drifts, it helps the right person act — calmly.")
+                                .font(.system(size: 14))
+                                .foregroundColor(.miyaTextPrimary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        .transition(.opacity.combined(with: .move(edge: .top)))
                     }
-                    
-                    // CONTRAST CARD: Designed to support, not overwhelm (two-column)
-                    if showContrastCard {
-                        OnboardingCard(padding: 20) {
-                            VStack(alignment: .leading, spacing: 16) {
-                                Text("Designed to support — not overwhelm")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(.miyaTextPrimary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                
-                                HStack(alignment: .top, spacing: 20) {
-                                    // Left column: What we DON'T do (muted)
-                                    VStack(alignment: .leading, spacing: 10) {
-                                        ContrastItem(text: "Panic alerts", isPositive: false)
-                                        ContrastItem(text: "Daily nagging", isPositive: false)
-                                        ContrastItem(text: "One-off readings", isPositive: false)
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    
-                                    // Right column: What we DO (accent)
-                                    VStack(alignment: .leading, spacing: 10) {
-                                        ContrastItem(text: "Calm signals", isPositive: true)
-                                        ContrastItem(text: "Thoughtful nudges", isPositive: true)
-                                        ContrastItem(text: "Long-term patterns", isPositive: true)
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+                
+                if showContrastCard {
+                    OnboardingCard(padding: 14) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Designed to support — not overwhelm")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.miyaTextPrimary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ContrastItem(text: "Panic alerts", isPositive: false)
+                                    ContrastItem(text: "Daily nagging", isPositive: false)
+                                    ContrastItem(text: "One-off readings", isPositive: false)
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ContrastItem(text: "Calm signals", isPositive: true)
+                                    ContrastItem(text: "Thoughtful nudges", isPositive: true)
+                                    ContrastItem(text: "Long-term patterns", isPositive: true)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
-                        .transition(.opacity.combined(with: .move(edge: .top)))
                     }
-                    
-                    Spacer()
-                        .frame(minHeight: 40)
-                    
-                    // CTA Button (pinned)
-                    if showButton {
-                        Button {
-                            navigateToNext = true
-                        } label: {
-                            Text("Continue")
-                                .font(.system(size: 16, weight: .semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(Color.miyaPrimary)
-                                .foregroundColor(.white)
-                                .cornerRadius(16)
-                        }
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
                 }
                 .padding(.horizontal, 24)
-                .padding(.bottom, 32)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
             }
             .background(Color.miyaBackground)
             
@@ -707,9 +675,33 @@ struct Breakout3View: View {
             }
             .hidden()
         }
-        .navigationBarBackButtonHidden(true)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Group {
+                if showButton {
+                    Button {
+                        navigateToNext = true
+                    } label: {
+                        Text("Continue")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(Color.miyaPrimary)
+                            .foregroundColor(.white)
+                            .cornerRadius(16)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 8)
+                    .background(Color.miyaBackground)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+            }
+        }
         .onAppear {
             startFlowAnimation()
+        }
+        .onDisappear {
+            loopTask?.cancel()
+            loopTask = nil
         }
     }
     
@@ -719,12 +711,8 @@ struct Breakout3View: View {
             OnboardingCompleteView(membersCount: 0)
                 .environmentObject(onboardingManager)
                 .environmentObject(dataManager)
-        } else if onboardingManager.isInvitedUser {
-            AlertsChampionView()
-                .environmentObject(onboardingManager)
-                .environmentObject(dataManager)
         } else {
-            FamilyMembersInviteView()
+            AlertsChampionView()
                 .environmentObject(onboardingManager)
                 .environmentObject(dataManager)
         }
@@ -788,21 +776,23 @@ struct Breakout3View: View {
             }
         }
         
-        // Show button (5.5s)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.5) {
-            withAnimation(.easeInOut(duration: 0.35)) {
+        // Show button (slightly sooner so it doesn’t feel late vs. hero animation)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.7) {
+            withAnimation(.easeOut(duration: 0.22)) {
                 showButton = true
             }
         }
     }
     
     private func loopAnimation() {
-        // Subtle continuous loop
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            withAnimation(.easeInOut(duration: 0.5)) {
-                currentStage = currentStage == 3 ? 1 : currentStage + 1
+        loopTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard !Task.isCancelled else { break }
+                withAnimation(.easeInOut(duration: 0.5)) {
+                    currentStage = currentStage == 3 ? 1 : currentStage + 1
+                }
             }
-            loopAnimation()
         }
     }
 }

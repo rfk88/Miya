@@ -1,0 +1,16 @@
+App Store Guideline 3.1.2(c) — resubmission notes (paste into App Review Information or Review Notes)
+
+Summary
+- Updated the auto-renewable subscription paywall so the recurring billed amount (price and billing period from StoreKit / App Store Connect) is clearer and more conspicuous than free-trial messaging.
+- The primary button label is now “Continue” (no longer trial-first).
+- Trial terms appear in smaller, secondary text directly under the price line. “Cancel anytime” appears below the button in modest type.
+- Pricing is not hard-coded in the app; it uses StoreKit’s localized display price for the user’s storefront.
+
+Manual QA before submit (regression)
+- [ ] With a sandbox account, load paywall: price line shows correct currency/amount for region.
+- [ ] Tap Continue: system purchase sheet appears and purchase/restore flows still work.
+- [ ] Restore purchases and Redeem offer code still behave as before.
+- [ ] Loading and error states (retry) still work when the product fails to load.
+
+Screenshot
+- Attach a screenshot of the updated paywall showing the price line above the trial subtext and the Continue button.

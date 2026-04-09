@@ -1,0 +1,23 @@
+App Store Review — subscription & codes (paste into App Review Information / reply as needed)
+
+1) In-App Purchase
+- Subscription is implemented with StoreKit 2 only.
+- Product ID: com.Miya_Health.monthly (auto-renewing subscription; free trial configured in App Store Connect).
+- Paid Apps Agreement is accepted under the Account Holder; subscription group is attached to this app and the product is cleared for sale for testing/review.
+
+2) “Join with code” vs subscription (Guideline 3.1.1)
+- The “Join with code” / invite code on the sign-in screen is ONLY for joining an existing family account (invited members). It does not unlock or replace an App Store subscription.
+- “Redeem offer code” on the subscription paywall opens Apple’s system offer code redemption UI (SwiftUI offerCodeRedemption). Codes are created in App Store Connect for this subscription; there is no custom server-side promo to unlock the subscription.
+
+3) Family billing (if shown in-app)
+- Any in-app “billing owner” / family billing prompts refer to internal family hub roles, not an alternative to the App Store subscription for digital content.
+
+4) Testing
+- Please test IAP with a Sandbox Apple ID. If the subscription sheet fails to load, use a network connection and retry; the paywall includes a “Try again” / “Retry” path when the App Store does not return the product.
+- To test subscription offer codes: create sandbox offer codes in App Store Connect for com.Miya_Health.monthly, then on device (Sandbox account) use “Redeem offer code” on the paywall and enter a sandbox code.
+
+---
+
+Checklist for developers (App Store Connect — manual)
+- Under the subscription product com.Miya_Health.monthly: add a Subscription Offer, then create offer codes (including sandbox codes for QA).
+- Distribute test codes to QA; redeem from the paywall and confirm the paywall dismisses after StoreKit shows an active entitlement.

@@ -32,6 +32,12 @@ enum ArloMemberChatAPI {
         messages: [APIMessage]
     ) async throws -> Reply {
 
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled {
+            return try demoMemberOverviewReply(memberName: memberName, intent: intent)
+        }
+        #endif
+
         // 1) Build Edge Function URL (member-only)
         let urlString = "\(SupabaseConfig.supabaseURL)/functions/v1/arlo_member_chat"
         guard let url = URL(string: urlString) else {
@@ -123,4 +129,18 @@ FACTS_JSON: \(factsJSON)
         // 8) Decode
         return try JSONDecoder().decode(Reply.self, from: data)
     }
+
+    #if DEBUG
+    private static func demoMemberOverviewReply(memberName: String, intent: String?) throws -> Reply {
+        let text = ScreenshotDemoData.memberOverviewDemoReplyText(memberName: memberName, intent: intent)
+        let tuples = ScreenshotDemoData.memberOverviewDemoSuggestedPrompts(memberName: memberName)
+        let prompts = tuples.map { ["id": $0.id, "title": $0.title, "intent": $0.intent] }
+        let payload: [String: Any] = [
+            "reply": text,
+            "suggested_prompts": prompts,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [])
+        return try JSONDecoder().decode(Reply.self, from: data)
+    }
+    #endif
 }

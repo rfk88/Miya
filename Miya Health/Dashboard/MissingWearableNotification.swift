@@ -62,6 +62,7 @@ enum MessagePlatform {
 
 struct MissingWearableDetailSheet: View {
     let notification: MissingWearableNotification
+    let dataManager: DataManager
     let onDismiss: () -> Void
     let onSendMessage: (String, MessagePlatform) -> Void
     
@@ -199,6 +200,7 @@ struct MissingWearableDetailSheet: View {
                         showMessageTemplates = false
                     }
                 )
+                .environmentObject(dataManager)
             }
         }
     }
@@ -229,6 +231,7 @@ struct MissingWearableMessageSheet: View {
     let suggestedMessages: [(label: String, text: String)]
     let onSendMessage: (String, MessagePlatform) -> Void
     
+    @EnvironmentObject private var dataManager: DataManager
     @Environment(\.dismiss) private var dismiss
     @State private var selectedMessageIndex: Int = 0
     @State private var customMessage: String = ""
@@ -548,6 +551,11 @@ struct MissingWearableMessageSheet: View {
     }
     
     private func regenerateMessageWithTone(messageIndex: Int, tone: MessageTone) async {
+        guard dataManager.canUseAIThirdPartyServices() else {
+            print("ℹ️ regenerate_message (wearable): skipped — third-party AI consent off or not loaded")
+            return
+        }
+        
         await MainActor.run {
             isRegeneratingMessage = true
         }

@@ -13,6 +13,26 @@ private let authEntryValueProps: [String] = [    "Understand your family's healt
     "Build healthier habits together through family challenges and shared accountability that make routines stick."
 ]
 
+private struct FamilyIntroGate<Destination: View>: View {
+    @State private var hasSeenFamilyIntro = UserDefaults.standard.bool(forKey: "miya.hasSeenFamilyIntro")
+    let destination: Destination
+
+    var body: some View {
+        Group {
+            if hasSeenFamilyIntro {
+                destination
+            } else {
+                FamilyIntroView(onFinish: {
+                    UserDefaults.standard.set(true, forKey: "miya.hasSeenFamilyIntro")
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        hasSeenFamilyIntro = true
+                    }
+                })
+            }
+        }
+    }
+}
+
 struct AuthEntryScreen: View {
     @Binding var showingSettings: Bool
     @Binding var showingLogin: Bool
@@ -91,7 +111,7 @@ struct AuthEntryScreen: View {
                 VStack(spacing: MiyaTheme.ctaGap) {
                     // Primary - Create a new family (NavigationLink preserved)
                     NavigationLink {
-                        SuperadminOnboardingView()
+                        FamilyIntroGate(destination: SuperadminOnboardingView())
                     } label: {
                         Text("Get started")
                             .font(.system(size: 20, weight: .bold))
@@ -102,7 +122,7 @@ struct AuthEntryScreen: View {
 
                     // Secondary - Enter Code (NavigationLink preserved)
                     NavigationLink {
-                        EnterCodeView()
+                        FamilyIntroGate(destination: EnterCodeView())
                     } label: {
                         Text("Join with code")
                             .font(.system(size: 20, weight: .semibold))
@@ -177,7 +197,7 @@ struct AuthEntryScreen: View {
                 return
             }
             dataManager.restorePersistedState()
-            ScreenshotDemoData.isScreenshotModeEnabled = true
+            ScreenshotDemoData.enableDemoMode()
             onboardingManager.familyName = "The Smiths"
             onboardingManager.firstName = "Simon"
             onboardingManager.setCurrentStep(7)

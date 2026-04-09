@@ -29,6 +29,11 @@ class OnboardingManager: ObservableObject {
     /// True when current user's family_members.role is "superadmin" (family creator; sees paywall).
     @Published var isSuperAdmin: Bool = false
 
+    /// Set when a superadmin just completed the Get Started onboarding flow in this session.
+    /// Cleared on logout. Allows ContentView to show the paywall immediately without waiting
+    /// for StoreKit's entitlement check, since a brand-new superadmin can't have a subscription yet.
+    @Published var freshlyCompletedGetStarted: Bool = false
+
     // MARK: - Guided Setup Invite Status (Canonical)
     
     /// Canonical guided setup status from `family_members.guided_setup_status`.
@@ -66,7 +71,9 @@ class OnboardingManager: ObservableObject {
             invitedMemberId = rec.id.uuidString
             invitedFamilyId = rec.familyId?.uuidString
             guidedSetupStatus = parseGuidedSetupStatus(rec.guidedSetupStatus)
-            isSuperAdmin = rec.role.trimmingCharacters(in: .whitespaces).lowercased() == "superadmin"
+            let normalizedRole = rec.role.trimmingCharacters(in: .whitespaces).lowercased()
+            isSuperAdmin = normalizedRole == "superadmin"
+            isInvitedUser = normalizedRole != "superadmin"
 
             // Prefer canonical profile data from user_profiles if available; otherwise fall back to family_members.
             if let profile = try? await dataManager.loadUserProfile() {
@@ -120,6 +127,8 @@ class OnboardingManager: ObservableObject {
     
     @Published var familyName: String = ""
     @Published var familySize: String = ""
+    /// How many additional members the superadmin plans to invite (set on the count screen just before invites).
+    @Published var additionalFamilyMembersTarget: Int = 0
     
     // MARK: - Step 3: Wearables
     
@@ -157,21 +166,12 @@ class OnboardingManager: ObservableObject {
     @Published var riskPoints: Int = 0
     @Published var optimalVitalityTarget: Int = 0
     
-    // MARK: - Step 7: Champion & Alert Settings
-    
-    @Published var championName: String = ""
-    @Published var championEmail: String = ""
-    @Published var championPhone: String = ""
-    @Published var championEnabled: Bool = false
+    // MARK: - Step 7: Privacy & alert preferences
     
     // User notification preferences
     @Published var notifyInApp: Bool = true
     @Published var notifyPush: Bool = false
     @Published var notifyEmail: Bool = false
-    
-    // Champion notification preferences
-    @Published var championNotifyEmail: Bool = true
-    @Published var championNotifySms: Bool = false
     
     // Quiet hours
     @Published var quietHoursStart: Date = Calendar.current.date(from: DateComponents(hour: 22, minute: 0)) ?? Date()
@@ -187,12 +187,20 @@ class OnboardingManager: ObservableObject {
     
     @Published var invitedMembers: [InvitedFamilyMember] = []
     
-    // MARK: - Onboarding Progress
+    // MARK: - Hydration Readiness
     
+    /// True once post-login / cold-start profile hydration has finished and `currentStep`
+    /// reflects the database value. Routing guards must wait for this before acting on step state.
+    @Published var isHydrated: Bool = false
+
+    // MARK: - Onboarding Progress
+
+    private var suppressDBWrites = false
+
     @Published var currentStep: Int = 1 {
         didSet {
             persistStep(currentStep)
-            // Also save to database via DataManager
+            guard !suppressDBWrites else { return }
             Task {
                 try? await dataManager?.saveOnboardingProgress(step: currentStep, complete: isOnboardingComplete)
             }
@@ -200,7 +208,7 @@ class OnboardingManager: ObservableObject {
     }
     @Published var isOnboardingComplete: Bool = false {
         didSet {
-            // Save completion status to database
+            guard !suppressDBWrites else { return }
             Task {
                 try? await dataManager?.saveOnboardingProgress(step: currentStep, complete: isOnboardingComplete)
             }
@@ -220,9 +228,13 @@ class OnboardingManager: ObservableObject {
     
     /// Reset all onboarding data (called on logout for zero state leakage)
     func reset() {
+        // Hydration / routing readiness
+        isHydrated = false
+
         // Invited user / guided setup state
         isInvitedUser = false
         isSuperAdmin = false
+        freshlyCompletedGetStarted = false
         guidedSetupStatus = nil
         invitedMemberId = nil
         invitedFamilyId = nil
@@ -238,6 +250,7 @@ class OnboardingManager: ObservableObject {
         // Step 2: Family
         familyName = ""
         familySize = ""
+        additionalFamilyMembersTarget = 0
         
         // Step 3: Wearables
         connectedWearables = []
@@ -270,16 +283,10 @@ class OnboardingManager: ObservableObject {
         riskPoints = 0
         optimalVitalityTarget = 0
         
-        // Step 7: Champion & Alerts
-        championName = ""
-        championEmail = ""
-        championPhone = ""
-        championEnabled = false
+        // Step 7: Alerts
         notifyInApp = true
         notifyPush = false
         notifyEmail = false
-        championNotifyEmail = true
-        championNotifySms = false
         quietHoursStart = Calendar.current.date(from: DateComponents(hour: 22, minute: 0)) ?? Date()
         quietHoursEnd = Calendar.current.date(from: DateComponents(hour: 7, minute: 0)) ?? Date()
         quietHoursApplyCritical = false
@@ -291,9 +298,12 @@ class OnboardingManager: ObservableObject {
         // Step 8: Family Members
         invitedMembers = []
         
-        // Progress - reset step and clear persisted step
-        currentStep = 1
+        // Progress — suppress didSet DB writes during reset to avoid racing
+        // stale values against the Supabase signOut invalidation.
+        suppressDBWrites = true
         isOnboardingComplete = false
+        currentStep = 1
+        suppressDBWrites = false
         UserDefaults.standard.removeObject(forKey: persistedStepKey)
         
         print("✅ OnboardingManager: Reset complete (all state cleared)")

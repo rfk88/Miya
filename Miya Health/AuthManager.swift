@@ -18,6 +18,14 @@ class AuthManager: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var isAuthenticated: Bool = false
     @Published var isLoadingProfile: Bool = false  // Tracks profile/onboarding data loading after auth
+    /// True when cold-start profile/family hydration timed out; user can tap Retry to re-run.
+    @Published var needsLaunchRestoreRetry: Bool = false
+
+    init() {
+        // Until `performColdStartRestore` runs, avoid a one-frame window where the user could reach
+        // sign-up before `.task` sets loading flags (`isHydrated` defaults false → spurious Syncing gate).
+        isLoadingProfile = true
+    }
     
     // MARK: - Supabase Client
     
@@ -53,6 +61,9 @@ class AuthManager: ObservableObject {
             
             isAuthenticated = true
             UserDefaults.standard.set(false, forKey: explicitLogoutKey)
+#if DEBUG
+            ScreenshotDemoData.syncForAuthenticatedUser(email: email)
+#endif
             print("✅ AuthManager: User signed up successfully: \(user.id.uuidString)")
             
             return user.id.uuidString
@@ -84,6 +95,9 @@ class AuthManager: ObservableObject {
 
             isAuthenticated = true
             UserDefaults.standard.set(false, forKey: explicitLogoutKey)
+#if DEBUG
+            ScreenshotDemoData.syncForAuthenticatedUser(email: user.email)
+#endif
             print("✅ AuthManager: User signed in with Apple: \(user.id.uuidString)")
 
             if let name = fullName {
@@ -122,6 +136,9 @@ class AuthManager: ObservableObject {
             
             isAuthenticated = true
             UserDefaults.standard.set(false, forKey: explicitLogoutKey)
+#if DEBUG
+            ScreenshotDemoData.syncForAuthenticatedUser(email: email)
+#endif
             print("✅ AuthManager: User signed in successfully: \(session.user.id.uuidString)")
             
         } catch {
@@ -166,19 +183,28 @@ class AuthManager: ObservableObject {
     func signOut() async throws {
         isLoading = true
         defer { isLoading = false }
-        
+
+        var serverError: Error?
         do {
             try await supabase.auth.signOut()
-            isAuthenticated = false
-            UserDefaults.standard.set(true, forKey: explicitLogoutKey)
             print("✅ AuthManager: User signed out successfully")
-            
-            // Notify app to reset all state (zero leakage)
-            NotificationCenter.default.post(name: .userDidLogout, object: nil)
-            
         } catch {
-            print("❌ AuthManager: Sign out error: \(error.localizedDescription)")
-            throw AuthError.signOutFailed(error.localizedDescription)
+            print("❌ AuthManager: Sign out server error (local state cleared anyway): \(error.localizedDescription)")
+            serverError = error
+        }
+
+        // Always clear local state so the user is never stuck in a
+        // half-logged-in limbo when the network call fails.
+        isAuthenticated = false
+        needsLaunchRestoreRetry = false
+        UserDefaults.standard.set(true, forKey: explicitLogoutKey)
+#if DEBUG
+        ScreenshotDemoData.disableDemoMode()
+#endif
+        NotificationCenter.default.post(name: .userDidLogout, object: nil)
+
+        if let serverError {
+            throw AuthError.signOutFailed(serverError.localizedDescription)
         }
     }
     

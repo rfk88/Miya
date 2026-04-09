@@ -48,6 +48,7 @@ private struct SplashVideoPlayerView: UIViewRepresentable {
         context.coordinator.player = player
         context.coordinator.observeEndOfVideo(player: player)
         player.play()
+        player.rate = 1.6
         return view
     }
 

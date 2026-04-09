@@ -7,7 +7,7 @@ Miya has a **two-tier notification system**:
 1. **Server-Side Pattern Alerts** - Baseline-driven alerts based on wearable metrics (sleep, steps, HRV, resting HR, etc.)
 2. **Client-Side Trend Insights** - Dashboard-generated alerts based on vitality pillar score trends
 
-Both systems analyze health patterns and notify family caregivers about member health changes.
+Both systems analyze health patterns. **Server pattern alerts** at higher escalation levels (about one week and beyond) also notify **other accepted family members on Miya**, not only the person whose metrics changed.
 
 ---
 
@@ -40,15 +40,15 @@ Stores active and resolved pattern alert episodes.
 Queue for pending notifications to be sent via push, WhatsApp, SMS, etc.
 
 **Key Fields**:
-- `recipient_user_id` - Who receives the notification (caregiver/admin)
+- `recipient_user_id` - Who receives the row (the member themselves, another family member, or an admin depending on `payload` / notification kind)
 - `member_user_id` - Who the alert is about
 - `alert_state_id` - Links to `pattern_alert_state.id`
 - `channel` - `push`, `whatsapp`, `sms`, `email`
 - `payload` - JSONB with alert details
-- `status` - `pending`, `sent`, `failed`
+- `status` - `pending`, `sent`, `failed`, `skipped` (preferences, missing APNs config, or no push template)
 - `attempts`, `last_error`, `sent_at` - Retry tracking
 
-**Status**: ⚠️ **Queue is populated but not yet processed** - No worker/cron job currently processes `notification_queue` to send push notifications. Notifications are displayed directly from `pattern_alert_state` via the RPC.
+**Status**: The **`process_notifications`** Edge Function (`supabase/functions/process_notifications/index.ts`) processes pending rows: checks `notify_push`, quiet hours, snooze/dismiss; sends **iOS push via APNs** when configured; marks rows `sent`, `failed`, or `skipped`. Schedule a cron (or external job) to **POST** this function every 1–5 minutes with header `x-miya-admin-secret`. In-app bell items come from **`get_bell_notifications`** (typically `pending` / `sent` only). Ops checklist: `supabase/ops/notifications-environment.txt`.
 
 ---
 
@@ -433,12 +433,9 @@ let notifications = serverPatternAlerts.isEmpty ? trendNotifications : serverPat
 - **Push notifications**: `notifyPush` (default: `false`)
 - **Email notifications**: `notifyEmail` (default: `false`)
 
-### Champion Settings
+### Legacy champion columns (`user_profiles`)
 
-**Location**: `Miya Health/EditProfileView.swift:472-475`
-
-- **Champion email alerts**: `championNotifyEmail` (default: `true`)
-- **Champion SMS alerts**: `championNotifySms` (default: `false`)
+The database still has optional `champion_*` columns from an older **health-advocate** feature. The app no longer exposes that UI; completing **Privacy & Alerts** onboarding calls `saveAlertPreferences`, which clears champion flags and contact fields and disables champion notify columns.
 
 ### Quiet Hours
 
@@ -458,42 +455,22 @@ let notifications = serverPatternAlerts.isEmpty ? trendNotifications : serverPat
 
 ### Current Status
 
-⚠️ **NOT IMPLEMENTED** - The `notification_queue` table is populated but no worker/cron job processes it to send push notifications.
+**Implemented** — Worker: `supabase/functions/process_notifications/index.ts`.
 
-### What Exists
+- **Auth**: POST requires non-empty `MIYA_ADMIN_SECRET`; caller sends `x-miya-admin-secret`.
+- **Batching**: Default `batchSize` 50, default `maxAge` 72 hours (override in JSON body).
+- **Push (iOS)**: JWT auth to Apple APNs; production host by default; set **`APNS_USE_SANDBOX=true`** for sandbox tokens (common for some dev/TestFlight setups).
+- **Outcomes**: `sent` after at least one successful APNs delivery; `skipped` when push is not sent because APNs env is missing, there is no template for the kind, or user prefs/quiet hours block (see `shouldSendNotification`); `failed` / retry with `attempts` when delivery fails.
+- **Pattern alerts**: Rook pattern engine calls RPC **`miya_pattern_alert_enqueue_and_bump`**. For escalation **level ≥ 7**, it enqueues the **member** row plus one row per **other accepted family member on Miya** (same family, invite accepted), after subtracting **`pattern_alert_recipient_exclusions`** for **Self Setup** subjects (ignored for **Guided Setup**). Member payload includes **`family_notified_in_app`** for copy when no other family rows were enqueued. Early levels enqueue **only the member**. **`last_notified_level`** bumps in the same transaction.
+- **Recipient prefs**: Table **`pattern_alert_recipient_exclusions`**; writes only via **`set_pattern_alert_excluded_recipients`** (Edit profile → Notifications, collapsed section). **Guided Setup** users cannot save exclusions.
 
-1. **Queue Population**: Pattern evaluation inserts records into `notification_queue` with `status='pending'`
-2. **Queue Schema**: Table has fields for retry logic (`attempts`, `last_error`, `sent_at`)
+### Still not implemented in the worker
 
-### What's Missing
+- **WhatsApp / SMS / email** channels are logged and return failure (not production-ready).
 
-1. **Worker Function**: No Supabase Edge Function or external service processes pending notifications
-2. **Push Notification Service**: No integration with APNs (Apple Push Notification service) or FCM (Firebase Cloud Messaging)
-3. **Channel Handlers**: No code to send via WhatsApp, SMS, or email
+### Operations
 
-### Future Implementation
-
-To implement push notifications:
-
-1. **Create Worker Function**: `supabase/functions/process_notifications/index.ts`
-   - Query `notification_queue` where `status='pending'`
-   - For each notification:
-     - Check user preferences (`notifyPush`, quiet hours, etc.)
-     - Send via appropriate channel (push, WhatsApp, SMS, email)
-     - Update `status='sent'` or `status='failed'`
-     - Increment `attempts`, store `last_error` on failure
-
-2. **Set Up Cron**: Schedule worker to run every 1-5 minutes
-
-3. **Integrate Push Service**: 
-   - Register device tokens in database
-   - Use APNs for iOS or FCM for cross-platform
-   - Send push notifications with alert details
-
-4. **Channel Integrations**:
-   - **WhatsApp**: Use WhatsApp Business API
-   - **SMS**: Use Twilio, AWS SNS, or similar
-   - **Email**: Use SendGrid, AWS SES, or similar
+See **`supabase/ops/notifications-environment.txt`** for secrets, cron URL, and smoke checks.
 
 ---
 
@@ -659,9 +636,7 @@ Priority Logic:
 
 ### Pattern Evaluation
 
-- **`MIYA_PATTERN_SHADOW_MODE`**: `true` (default) or `false`
-  - `true`: Evaluate patterns but don't enqueue notifications (testing)
-  - `false`: Enable notifications (production)
+- **`MIYA_PATTERN_SHADOW_MODE`**: omit or `false` for normal enqueue; set to **`true`** only for dry-run (no `notification_queue` rows from the pattern engine).
 
 ### Thresholds
 
@@ -684,13 +659,13 @@ Priority Logic:
 
 ### Notifications Not Sending
 
-**Current Status**: Push notifications are **not implemented**. The `notification_queue` table is populated but no worker processes it.
-
-**To Enable**:
-1. Create worker function to process `notification_queue`
-2. Set up push notification service (APNs/FCM)
-3. Register device tokens
-4. Schedule cron job to run worker
+**Checklist**:
+1. Cron or scheduler **POST**s `process_notifications` with valid `x-miya-admin-secret`.
+2. Edge Function secrets: `APNS_BUNDLE_ID`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_PRIVATE_KEY` (PEM). Use **`APNS_USE_SANDBOX=true`** if tokens are sandbox.
+3. User has **`notify_push`** true and an active **`device_tokens`** row (iOS).
+4. Row is not older than worker **`maxAge`** (default 72h).
+5. Not blocked by quiet hours / snooze / dismiss; not marked **`skipped`** with reason in `last_error`.
+6. Pattern rows: **`MIYA_PATTERN_SHADOW_MODE`** must not be `true`; RPC **`miya_pattern_alert_enqueue_and_bump`** must be deployed.
 
 ### Alerts Disappearing
 
@@ -704,11 +679,9 @@ Priority Logic:
 
 ### Planned
 
-1. **Notification Queue Worker**: Process `notification_queue` to send push notifications
-2. **Push Notification Integration**: APNs/FCM setup
-3. **Multi-Channel Support**: WhatsApp, SMS, Email handlers
-4. **Quiet Hours Enforcement**: Respect user quiet hours when sending
-5. **Notification Preferences**: Honor `notifyPush`, `notifyEmail` settings
+1. **Multi-channel delivery**: WhatsApp, SMS, and email handlers (queue supports channels; worker does not send them yet)
+2. **Optional**: FCM or unified push if Android ships
+3. **Deeper observability**: Structured logging / metrics around skip reasons and APNs errors
 
 ### Potential
 
@@ -727,8 +700,8 @@ Miya's notification system has two parallel tracks:
 1. **Server Pattern Alerts**: Baseline-driven, metric-specific alerts triggered by Rook webhooks
 2. **Client Trend Insights**: Dashboard-generated alerts based on vitality score trends
 
-Both systems analyze health patterns and notify caregivers, but:
+Both systems surface health-pattern concerns to people in the family, but:
 - **Server alerts** are more granular (specific metrics like sleep minutes, HRV)
 - **Client insights** are higher-level (pillar scores like Sleep, Movement, Stress)
 
-**Current Limitation**: Notifications are displayed in-app but **not sent as push notifications** yet. The infrastructure exists (`notification_queue` table) but needs a worker function to process it.
+**Push path**: Pending rows in `notification_queue` are processed by **`process_notifications`** when scheduled with admin auth and APNs configured; the in-app bell reads from **`get_bell_notifications`** (generally `pending` / `sent` rows).

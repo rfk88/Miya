@@ -25,6 +25,7 @@ struct MiyaShareSheetView: UIViewControllerRepresentable {
 
 struct MiyaInsightChatSheet: View {
     let alertItem: FamilyNotificationItem
+    let dataManager: DataManager
     @Environment(\.dismiss) private var dismiss
     
     @State private var inputText = ""
@@ -125,6 +126,12 @@ struct MiyaInsightChatSheet: View {
     private func send() async {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        
+        guard dataManager.canUseAIThirdPartyServices() else {
+            errorText = "AI features are off. Enable third-party AI in Edit profile to use this chat."
+            return
+        }
+        
         inputText = ""
         errorText = nil
         

@@ -139,7 +139,7 @@ deviation_percent     numeric
 **Key Fields**:
 ```sql
 id                    uuid PRIMARY KEY
-recipient_user_id     uuid NOT NULL (who receives - caregiver)
+recipient_user_id     uuid NOT NULL (who receives this queue row)
 member_user_id        uuid NOT NULL (who it's about)
 alert_state_id        uuid (links to pattern_alert_state)
 channel               text (push, whatsapp, sms, email)
@@ -169,8 +169,8 @@ timezone                        text DEFAULT 'UTC'
 notify_in_app                   boolean DEFAULT true
 notify_push                     boolean DEFAULT false
 notify_email                    boolean DEFAULT false
-champion_notify_email           boolean DEFAULT true
-champion_notify_sms             boolean DEFAULT false
+champion_notify_email           boolean DEFAULT true  -- legacy; app clears on Privacy & Alerts save
+champion_notify_sms             boolean DEFAULT false -- legacy; app clears on Privacy & Alerts save
 quiet_hours_start               time (e.g., '22:00:00')
 quiet_hours_end                 time (e.g., '07:00:00')
 quiet_hours_apply_critical      boolean (DEPRECATED)
@@ -388,7 +388,7 @@ Picker("Notification Level", selection: $vm.quietHoursNotificationLevel) {
 
 3. **All notifications** (`all`)
    - Sends all notifications even during quiet hours
-   - Use case: User is a caregiver who needs to be notified 24/7
+   - Use case: Someone who wants every alert delivered even during quiet hours
    - No filtering applied
 
 ### Database Storage
@@ -662,11 +662,14 @@ order by pas.current_level desc, pas.active_since desc;
                     v                   v
 ┌─────────────────────────────────────────┐  (End)
 │ STEP 4: Enqueue Notification            │
-│ - Fetch family admin recipients         │
-│ - For each recipient:                   │
-│   └─ Insert into notification_queue     │
-│      (status='pending')                 │
-│ - Update last_notified_level            │
+│ - RPC: member row always when notifying │
+│ - Level < 7: member only                │
+│ - Level ≥ 7: member + filtered other    │
+│   accepted family on Miya (exclusions   │
+│   table for Self Setup only)            │
+│ - Payload: family_notified_in_app       │
+│ - Insert notification_queue (pending)   │
+│ - Bump last_notified_level              │
 │ - Pre-warm AI insight cache             │
 └─────────────────────────────────────────┘
                     │
@@ -905,7 +908,7 @@ order by pas.current_level desc, pas.active_since desc;
    - Default values for new users
 
 6. **`Miya Health/DataManager.swift`**
-   - Lines 1727-1770: `saveAlertPreferences()` function
+   - `saveAlertPreferences()` (clears legacy `champion_*` fields when saving Privacy & Alerts)
    - Database update logic
 
 #### Other
@@ -956,6 +959,8 @@ psql $DATABASE_URL -f migrations/20260110153000_add_get_family_pattern_alerts_rp
 ```
 
 ### 2. Deploy Edge Functions
+
+After changing **pattern escalation recipients** or **notification copy**, redeploy **`rook`** (pattern engine) and **`process_notifications`** together so level-7+ fan-out and wording stay in sync.
 
 ```bash
 # Deploy notification worker

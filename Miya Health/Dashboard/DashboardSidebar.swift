@@ -20,6 +20,7 @@ struct AccountSidebarView: View {
     let isSuperAdmin: Bool
     let onBack: () -> Void
     let onSignOut: () -> Void
+    let onDeleteAccount: () async throws -> Void
     let onManageMembers: () -> Void
     let onSaveProfile: (String) async throws -> Void
     let onSaveFamilyName: ((String) async throws -> Void)?
@@ -81,6 +82,9 @@ struct AccountSidebarView: View {
     // Contact support state
     @State private var isShowingSupport: Bool = false
     
+    // Sources state
+    @State private var isShowingSources: Bool = false
+    
     @State private var isPresentingChallengeSheet: Bool = false
 
     // Profile picture flow
@@ -93,6 +97,10 @@ struct AccountSidebarView: View {
 
     @State private var localUserName: String
     @State private var localFamilyName: String
+    @State private var showDeleteConfirmStep1: Bool = false
+    @State private var showDeleteConfirmStep2: Bool = false
+    @State private var isDeletingAccount: Bool = false
+    @State private var deleteAccountError: String?
     
     private var userInitials: String {
         initials(from: localUserName)
@@ -106,6 +114,7 @@ struct AccountSidebarView: View {
          isSyncingWearables: Bool,
          onBack: @escaping () -> Void,
          onSignOut: @escaping () -> Void,
+         onDeleteAccount: @escaping () async throws -> Void,
          onConnectWearables: @escaping () -> Void,
          onManageMembers: @escaping () -> Void,
          onSaveProfile: @escaping (String) async throws -> Void,
@@ -120,6 +129,7 @@ struct AccountSidebarView: View {
         self.isSyncingWearables = isSyncingWearables
         self.onBack = onBack
         self.onSignOut = onSignOut
+        self.onDeleteAccount = onDeleteAccount
         self.onConnectWearables = onConnectWearables
         self.onManageMembers = onManageMembers
         self.onSaveProfile = onSaveProfile
@@ -393,6 +403,14 @@ struct AccountSidebarView: View {
                         
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) {
+                                isShowingSources = true
+                            }
+                        } label: {
+                            settingRow(title: "Sources")
+                        }
+                        
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
                                 isShowingSupport = true
                             }
                         } label: {
@@ -413,6 +431,26 @@ struct AccountSidebarView: View {
                             .foregroundColor(Color.red.opacity(0.95))
                         }
                         .padding(.top, 4)
+
+                        Button(role: .destructive) {
+                            showDeleteConfirmStep1 = true
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 16, weight: .semibold))
+                                Text(isDeletingAccount ? "Deleting account..." : "Delete account")
+                                    .font(.system(size: 15, weight: .semibold))
+                            }
+                            .foregroundColor(Color.red.opacity(0.95))
+                        }
+                        .disabled(isDeletingAccount)
+                        .padding(.top, 2)
+
+                        if let deleteAccountError {
+                            Text(deleteAccountError)
+                                .font(.system(size: 12))
+                                .foregroundColor(.red.opacity(0.95))
+                        }
                     }
                 }
                 .padding(.bottom, 16)
@@ -616,6 +654,53 @@ struct AccountSidebarView: View {
                 )
             }
             
+            // SOURCES POPUP
+            if isShowingSources {
+                Color.clear
+                
+                VStack(spacing: 16) {
+                    Text("Sources")
+                        .font(.system(size: 16, weight: .semibold))
+                    
+                    Text("References used for risk methodology and wearable data integration.")
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                    
+                    VStack(spacing: 10) {
+                        sourceLinkRow(
+                            title: "WHO risk methodology reference",
+                            subtitle: "Cardiovascular risk scoring citation source.",
+                            urlString: "https://scholar.google.ae/scholar?q=Who+methodology+for+health+risk+scoring+citations&hl=en&as_sdt=0&as_vis=1&oi=scholart"
+                        )
+                        
+                        sourceLinkRow(
+                            title: "ROOK wearable data documentation",
+                            subtitle: "Wearable data integration and normalization docs.",
+                            urlString: "https://docs.tryrook.io/?_gl=1*jp87al*_gcl_au*MTg1NDQ2NDY3OS4xNzczMTI3NjY1LjIxMzUyNzI0OTkuMTc3MzIzMzI2Mi4xNzczMjMzMjYy*_ga*MTg1NTAyMTkzLjE3NjQ5MjcxOTI.*_ga_NY0QWFVL4J*czE3NzQzMzc3MzgkbzE3JGcwJHQxNzc0MzM3NzM4JGo2MCRsMCRoMA.."
+                        )
+                    }
+                    
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isShowingSources = false
+                        }
+                    } label: {
+                        Text("Close")
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: 340)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.white)
+                )
+            }
+            
         }
         .sheet(item: $activeDevice) { device in
             deviceDetailSheet(for: device)
@@ -683,6 +768,28 @@ struct AccountSidebarView: View {
                     }
                 }
             }
+        }
+        .confirmationDialog(
+            "Delete your account?",
+            isPresented: $showDeleteConfirmStep1,
+            titleVisibility: .visible
+        ) {
+            Button("Continue", role: .destructive) {
+                showDeleteConfirmStep2 = true
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This removes your profile from your family. If you're the billing owner, your family enters a 7-day grace period.")
+        }
+        .alert("Final confirmation", isPresented: $showDeleteConfirmStep2) {
+            Button("Delete account", role: .destructive) {
+                Task {
+                    await runDeleteAccount()
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Deleting your Miya account does not cancel your App Store subscription.")
         }
     }
 
@@ -783,6 +890,42 @@ struct AccountSidebarView: View {
         .buttonStyle(.plain)
     }
     
+    private func sourceLinkRow(title: String, subtitle: String, urlString: String) -> some View {
+        Button {
+            openExternalURL(urlString)
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.miyaTextPrimary)
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer()
+                Image(systemName: "arrow.up.right.square")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.miyaPrimary)
+                    .padding(.top, 2)
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.gray.opacity(0.08))
+            )
+        }
+        .buttonStyle(.plain)
+    }
+    
+    private func openExternalURL(_ urlString: String) {
+        guard let url = URL(string: urlString), UIApplication.shared.canOpenURL(url) else {
+            return
+        }
+        UIApplication.shared.open(url)
+    }
+    
     private func initials(from name: String) -> String {
         let parts = name
             .split(separator: " ")
@@ -792,6 +935,24 @@ struct AccountSidebarView: View {
         let second = parts.dropFirst().first?.first.map { String($0) } ?? ""
         
         return (first + second).uppercased()
+    }
+
+    @MainActor
+    private func runDeleteAccount() async {
+        guard !isDeletingAccount else { return }
+        isDeletingAccount = true
+        deleteAccountError = nil
+        defer { isDeletingAccount = false }
+        do {
+            try await onDeleteAccount()
+        } catch {
+            let localized = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !localized.isEmpty {
+                deleteAccountError = localized
+            } else {
+                deleteAccountError = "Couldn't delete account. Please try again."
+            }
+        }
     }
 }
 
@@ -1235,6 +1396,14 @@ private struct BellNotificationRowView: View {
             return "waveform.path.ecg"
         case .challengeInviteExpired:
             return "clock.badge.xmark"
+        case .inviteJoined:
+            return "person.badge.plus.fill"
+        case .billingOwnerLeft, .billingGraceReminder:
+            return "creditcard.trianglebadge.exclamationmark"
+        case .billingInterrupted:
+            return "xmark.shield.fill"
+        case .billingRestored:
+            return "checkmark.shield.fill"
         }
     }
     

@@ -807,7 +807,7 @@ struct RiskResultsView: View {
                     
                     VStack(alignment: .leading, spacing: 8) {
                         NextStepRow(icon: "person.2.fill", text: "Invite family members to join")
-                        NextStepRow(icon: "bell.badge.fill", text: "Set up health champions and alerts")
+                        NextStepRow(icon: "bell.badge.fill", text: "Set up privacy and alert preferences")
                         NextStepRow(icon: "chart.line.uptrend.xyaxis", text: "Start tracking your vitality score")
                     }
                 }
@@ -1001,7 +1001,7 @@ struct RiskResultsView: View {
                     Text("1) Your admin finishes your health profile.")
                     Text("2) You review it and make any changes you want.")
                     Text("3) Once approved, we’ll show your cardiovascular risk and your recommended vitality goal.")
-                    Text("4) Then you can set up your champion and notification preferences.")
+                    Text("4) Then you can set up your notification preferences.")
                 }
                 .font(.subheadline)
                 .foregroundColor(.miyaTextSecondary)

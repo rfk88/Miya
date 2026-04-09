@@ -2,6 +2,9 @@ import SwiftUI
 import Foundation
 
 struct ArloChatView: View {
+    @EnvironmentObject private var dataManager: DataManager
+    @Environment(\.dismiss) private var dismiss
+    
     struct ChatMessage: Identifiable, Equatable {
         enum Role { case user, assistant }
 
@@ -17,6 +20,8 @@ struct ArloChatView: View {
 
     let firstName: String
     let openingLine: String
+    /// Parent can close chat and push Edit Profile (e.g. when user taps Open Settings on consent sheet).
+    var onNeedAIConsentSettings: (() -> Void)? = nil
 
     @State private var messages: [ChatMessage] = []
     @State private var inputText: String = ""
@@ -32,6 +37,7 @@ struct ArloChatView: View {
     
     // ✅ NEW: Control pill visibility
     @State private var showPills: Bool = false
+    @State private var showConsentRequired: Bool = false
     
     private enum OpenerBucket: String {
         case up
@@ -266,6 +272,14 @@ struct ArloChatView: View {
             if messages.isEmpty {
                 await loadFactsAndSeedOpening()
             }
+        }
+        .sheet(isPresented: $showConsentRequired) {
+            AIThirdPartyConsentRequiredSheet(onOpenSettings: {
+                dismiss()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    onNeedAIConsentSettings?()
+                }
+            })
         }
     }
 
@@ -539,6 +553,10 @@ struct ArloChatView: View {
     // MARK: - Send (uses current messages)
     
     private func handlePillTap(_ pill: String) {
+        guard dataManager.canUseAIThirdPartyServices() else {
+            showConsentRequired = true
+            return
+        }
         showPills = false  // Hide pills immediately
         messages.append(.init(role: .user, text: pill))
         showInlineError = false
@@ -552,6 +570,11 @@ struct ArloChatView: View {
     private func send() {
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        
+        guard dataManager.canUseAIThirdPartyServices() else {
+            showConsentRequired = true
+            return
+        }
 
         showPills = false  // Hide pills when user sends message
         messages.append(.init(role: .user, text: trimmed))
@@ -638,6 +661,7 @@ private struct SuggestedPillsRow: View {
         firstName: "Josh",
         openingLine: "things look generally on track for your family right now"
     )
+    .environmentObject(DataManager())
 }
 
 private struct ChatBubble: View {

@@ -177,6 +177,21 @@ class DataManager: ObservableObject {
     /// Family members
     @Published var familyMembers: [FamilyMemberData] = []
     
+    /// Tri-state until `refreshAIThirdPartyConsentFromServer()` succeeds for this session (Apple 5.1.1(i)).
+    @Published private(set) var isAIThirdPartyConsentLoaded: Bool = false
+    /// Server `privacy_settings.ai_third_party_sharing_enabled`; meaningful only when `isAIThirdPartyConsentLoaded`.
+    @Published private(set) var isAIThirdPartySharingEnabled: Bool = false
+    /// e.g. `legacy_migration`, `onboarding_agree`, `settings_off` — used for one-time legacy transparency.
+    @Published private(set) var aiThirdPartyConsentSource: String? = nil
+    
+    /// Family AI (Arlo, insights, member chat, etc.): never true until server consent has loaded.
+    func canUseAIThirdPartyServices() -> Bool {
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled { return true }
+        #endif
+        return isAIThirdPartyConsentLoaded && isAIThirdPartySharingEnabled
+    }
+    
     /// Current family ID (set after family creation)
     @Published var currentFamilyId: String? {
         didSet {
@@ -230,6 +245,9 @@ class DataManager: ObservableObject {
                 self.currentFamilyId = nil
                 self.familyName = nil
                 self.familyMembers = []
+                self.isAIThirdPartyConsentLoaded = false
+                self.isAIThirdPartySharingEnabled = false
+                self.aiThirdPartyConsentSource = nil
             }
             
             // Persist the new user id (or clear if signed out)
@@ -253,6 +271,9 @@ class DataManager: ObservableObject {
         familyName = nil
         familyMembers = []
         guidedSetupSchemaAvailableCache = nil
+        isAIThirdPartyConsentLoaded = false
+        isAIThirdPartySharingEnabled = false
+        aiThirdPartyConsentSource = nil
         
         // Clear persisted state
         UserDefaults.standard.removeObject(forKey: "currentFamilyId")
@@ -535,6 +556,37 @@ class DataManager: ObservableObject {
         }
     }
     
+    /// Update the family tier and max_members based on how many additional members the superadmin intends to invite.
+    /// Called from AdditionalFamilyMembersCountView just before the invite screen.
+    /// - Parameter additionalCount: Number of members beyond the account holder (0–10).
+    func updateFamilyTierForAdditionalMembers(_ additionalCount: Int) async throws {
+        guard let familyId = currentFamilyId else {
+            throw DataError.invalidData("No family found — cannot update tier")
+        }
+
+        let totalHeadcount = 1 + additionalCount
+        let maxMembers = max(2, min(totalHeadcount, 15))
+        let sizeCategory: String
+        switch totalHeadcount {
+        case ...4:  sizeCategory = "twoToFour"
+        case ...8:  sizeCategory = "fourToEight"
+        default:    sizeCategory = "ninePlus"
+        }
+
+        let updateData: [String: AnyJSON] = [
+            "size_category": .string(sizeCategory),
+            "max_members": .integer(maxMembers)
+        ]
+
+        try await supabase
+            .from("families")
+            .update(updateData)
+            .eq("id", value: familyId)
+            .execute()
+
+        print("✅ DataManager: Family tier updated — \(sizeCategory) / max \(maxMembers)")
+    }
+
     /// Save connected wearable device
     /// - Parameter wearableType: Type of wearable (must match enum rawValue)
     func saveWearable(wearableType: String) async throws {
@@ -638,7 +690,7 @@ class DataManager: ObservableObject {
             }
             
             // Validate ethnicity (simplified)
-            let validEthnicities = ["White", "Asian", "Black", "Hispanic", "Other"]
+            let validEthnicities = ["White", "Asian", "Black", "Hispanic", "Other", "Prefer not to say"]
             if let ethnicity = ethnicity, !validEthnicities.contains(ethnicity) {
                 print("❌ DataManager: Validation failed - Invalid ethnicity: \(ethnicity)")
                 throw DataError.invalidData("Invalid ethnicity value: \(ethnicity)")
@@ -892,6 +944,101 @@ class DataManager: ObservableObject {
             print("❌ DataManager: Save privacy settings error: \(error.localizedDescription)")
             throw DataError.databaseError(userMessage)
         }
+    }
+    
+    /// Loads third-party AI consent from `privacy_settings` for the signed-in user.
+    func refreshAIThirdPartyConsentFromServer() async {
+        guard let userId = await currentUserId else {
+            isAIThirdPartyConsentLoaded = false
+            isAIThirdPartySharingEnabled = false
+            aiThirdPartyConsentSource = nil
+            return
+        }
+        
+        struct PrivacyAIConsentRow: Decodable {
+            let ai_third_party_sharing_enabled: Bool?
+            let ai_consent_source: String?
+        }
+        
+        do {
+            let rows: [PrivacyAIConsentRow] = try await supabase
+                .from("privacy_settings")
+                .select("ai_third_party_sharing_enabled,ai_consent_source")
+                .eq("user_id", value: userId)
+                .limit(1)
+                .execute()
+                .value
+            
+            if let row = rows.first {
+                isAIThirdPartySharingEnabled = row.ai_third_party_sharing_enabled ?? false
+                aiThirdPartyConsentSource = row.ai_consent_source
+            } else {
+                isAIThirdPartySharingEnabled = false
+                aiThirdPartyConsentSource = nil
+            }
+            isAIThirdPartyConsentLoaded = true
+        } catch {
+            print("❌ DataManager: refreshAIThirdPartyConsentFromServer failed: \(error.localizedDescription)")
+            isAIThirdPartyConsentLoaded = false
+        }
+    }
+    
+    /// Upserts AI consent columns; creates a minimal `privacy_settings` row if none exists.
+    func applyAIThirdPartyConsent(enabled: Bool, source: String) async throws {
+        guard let userId = await currentUserId else {
+            throw DataError.notAuthenticated
+        }
+        
+        let allowed = Set([
+            "legacy_migration", "onboarding_agree", "onboarding_decline",
+            "settings_on", "settings_off",
+        ])
+        guard allowed.contains(source) else {
+            throw DataError.invalidData("Invalid consent source")
+        }
+        
+        let tsFormatter = ISO8601DateFormatter()
+        tsFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let ts = tsFormatter.string(from: Date())
+        
+        struct ExistingRow: Decodable {
+            let user_id: String
+        }
+        
+        let existing: [ExistingRow] = try await supabase
+            .from("privacy_settings")
+            .select("user_id")
+            .eq("user_id", value: userId)
+            .limit(1)
+            .execute()
+            .value
+        
+        let patch: [String: AnyJSON] = [
+            "ai_third_party_sharing_enabled": .bool(enabled),
+            "ai_consent_at": .string(ts),
+            "ai_consent_source": .string(source),
+        ]
+        
+        if existing.first != nil {
+            try await supabase
+                .from("privacy_settings")
+                .update(patch)
+                .eq("user_id", value: userId)
+                .execute()
+        } else {
+            var insert: [String: AnyJSON] = [
+                "user_id": .string(userId),
+                "tier1_visibility": .string("family"),
+                "tier2_visibility": .string("meOnly"),
+            ]
+            for (k, v) in patch { insert[k] = v }
+            try await supabase
+                .from("privacy_settings")
+                .insert(insert)
+                .execute()
+        }
+        
+        await refreshAIThirdPartyConsentFromServer()
     }
     
     // MARK: - WHO Risk Functions
@@ -1706,48 +1853,11 @@ class DataManager: ObservableObject {
         }
     }
     
-    /// Save champion (health advocate) settings
-    /// - Parameters:
-    ///   - name: Champion's name
-    ///   - email: Champion's email
-    ///   - phone: Champion's phone
-    ///   - enabled: Whether champion notifications are enabled
-    func saveChampionSettings(name: String?, email: String?, phone: String?, enabled: Bool) async throws {
-        guard let userId = await currentUserId else {
-            throw DataError.notAuthenticated
-        }
-        
-        do {
-            var championData: [String: AnyJSON] = [
-                "champion_enabled": .bool(enabled)
-            ]
-            
-            if let name = name { championData["champion_name"] = .string(name) }
-            if let email = email { championData["champion_email"] = .string(email) }
-            if let phone = phone { championData["champion_phone"] = .string(phone) }
-            
-            try await supabase
-                .from("user_profiles")
-                .update(championData)
-                .eq("user_id", value: userId)
-                .execute()
-            
-            print("✅ DataManager: Champion settings saved - Enabled: \(enabled)")
-            
-        } catch {
-            let userMessage = mapDataError(error)
-            print("❌ DataManager: Save champion settings error: \(error.localizedDescription)")
-            throw DataError.databaseError(userMessage)
-        }
-    }
-    
     /// Save alert/notification preferences
     /// - Parameters:
     ///   - notifyInApp: Enable in-app notifications
     ///   - notifyPush: Enable push notifications
     ///   - notifyEmail: Enable email notifications
-    ///   - championEmail: Enable champion email alerts
-    ///   - championSms: Enable champion SMS alerts
     ///   - quietStart: Quiet hours start time (HH:mm format)
     ///   - quietEnd: Quiet hours end time (HH:mm format)
     ///   - quietApplyCritical: Apply quiet hours to critical alerts
@@ -1755,8 +1865,6 @@ class DataManager: ObservableObject {
         notifyInApp: Bool,
         notifyPush: Bool,
         notifyEmail: Bool,
-        championEmail: Bool,
-        championSms: Bool,
         quietStart: String,
         quietEnd: String,
         quietApplyCritical: Bool
@@ -1770,8 +1878,13 @@ class DataManager: ObservableObject {
                 "notify_inapp": .bool(notifyInApp),
                 "notify_push": .bool(notifyPush),
                 "notify_email": .bool(notifyEmail),
-                "champion_notify_email": .bool(championEmail),
-                "champion_notify_sms": .bool(championSms),
+                "champion_notify_email": .bool(false),
+                "champion_notify_sms": .bool(false),
+                "champion_enabled": .bool(false),
+                "champion_user_id": .null,
+                "champion_name": .null,
+                "champion_email": .null,
+                "champion_phone": .null,
                 "quiet_hours_start": .string(quietStart),
                 "quiet_hours_end": .string(quietEnd),
                 "quiet_hours_apply_critical": .bool(quietApplyCritical)
@@ -2060,7 +2173,7 @@ class DataManager: ObservableObject {
             try await checkFamilyMemberLimit(familyId: familyId)
             
             // Validate enum values
-            guard ["Partner", "Parent", "Child", "Sibling", "Grandparent", "Other"].contains(relationship) else {
+            guard MemberRelationship.allValidStoredValues.contains(relationship) else {
                 throw DataError.invalidData("Invalid relationship value")
             }
             
@@ -2156,7 +2269,11 @@ class DataManager: ObservableObject {
         do {
             // Check family member limit BEFORE creating invite
             try await checkFamilyMemberLimit(familyId: familyId)
-            
+
+            guard MemberRelationship.allValidStoredValues.contains(relationship) else {
+                throw DataError.invalidData("Invalid relationship value")
+            }
+
             // Generate unique invite code
             let inviteCode = try await generateInviteCode()
             
@@ -2915,7 +3032,52 @@ class DataManager: ObservableObject {
             throw DataError.databaseError(userMessage)
         }
     }
-    
+
+    /// User IDs excluded from receiving level-7+ pattern alerts about the current user (same-family; RLS: own rows).
+    func fetchPatternAlertExcludedRecipientIds() async throws -> [String] {
+        guard let userId = await currentUserId else {
+            throw DataError.notAuthenticated
+        }
+        struct Row: Decodable {
+            let excluded_user_id: UUID
+        }
+        do {
+            let rows: [Row] = try await supabase
+                .from("pattern_alert_recipient_exclusions")
+                .select("excluded_user_id")
+                .eq("subject_user_id", value: userId)
+                .execute()
+                .value
+            return rows.map { $0.excluded_user_id.uuidString.lowercased() }
+        } catch {
+            let userMessage = mapDataError(error)
+            print("❌ DataManager: fetchPatternAlertExcludedRecipientIds error: \(error.localizedDescription)")
+            throw DataError.databaseError(userMessage)
+        }
+    }
+
+    /// Replaces exclusions via `set_pattern_alert_excluded_recipients` (validates family + Guided Setup server-side).
+    func setPatternAlertExcludedRecipients(excludedUserIds: [String]) async throws {
+        guard await currentUserId != nil else {
+            throw DataError.notAuthenticated
+        }
+        let unique = Array(Set(excludedUserIds.map { $0.lowercased() }.filter { !$0.isEmpty }))
+        let arr = unique.map { AnyJSON.string($0) }
+        do {
+            try await supabase
+                .rpc(
+                    "set_pattern_alert_excluded_recipients",
+                    params: ["p_excluded_user_ids": AnyJSON.array(arr)]
+                )
+                .execute()
+            print("✅ DataManager: pattern alert exclusions updated (\(unique.count) excluded)")
+        } catch {
+            let userMessage = mapDataError(error)
+            print("❌ DataManager: setPatternAlertExcludedRecipients error: \(error.localizedDescription)")
+            throw DataError.databaseError(userMessage)
+        }
+    }
+
     /// Fetch a specific family member record by memberId.
     /// Used by GuidedSetupReviewView to load display info for the invited member.
     func fetchFamilyMemberRecord(memberId: String) async throws -> FamilyMemberRecord? {
@@ -3331,10 +3493,11 @@ struct UserProfileData: Codable {
     let vitality_progress_score_current: Int?
     let vitality_score_updated_at: String?
 
-    // Champion + notification preferences
+    // Legacy health-advocate columns (no longer used in UI; kept for decode)
     let champion_name: String?
     let champion_email: String?
     let champion_phone: String?
+    let champion_user_id: String?
     let champion_enabled: Bool?
     let notify_inapp: Bool?
     let notify_push: Bool?
@@ -3525,6 +3688,11 @@ struct BellNotification: Identifiable {
         case challengeCompleted(isForSelf: Bool, status: String, daysSucceeded: Int, daysEvaluated: Int)
         case careOutcome(alertStateId: String?, outcomeMessage: String)
         case challengeInviteExpired(challengeId: String?, memberUserId: String?, pillar: String)
+        case inviteJoined(memberFirstName: String)
+        case billingOwnerLeft(graceUntilISO: String?)
+        case billingGraceReminder(graceUntilISO: String?)
+        case billingInterrupted
+        case billingRestored
     }
     
     let id: String
@@ -3711,7 +3879,50 @@ extension BellNotification {
             self.kind = .challengeInviteExpired(challengeId: challengeId, memberUserId: memberUserId, pillar: pillar)
             self.title = "Challenge invite wasn't accepted"
             self.subtitle = "Consider reaching out directly."
-            
+
+        case "invite_joined":
+            let firstName = string("member_first_name") ?? "A family member"
+            self.id = row.id
+            self.createdAt = row.createdAt
+            self.memberUserId = memberId
+            self.kind = .inviteJoined(memberFirstName: firstName)
+            self.title = "\(firstName) joined your family"
+            self.subtitle = "Tap to see them on your dashboard"
+
+        case "billing_owner_left":
+            let graceUntil = string("grace_until")
+            self.id = row.id
+            self.createdAt = row.createdAt
+            self.memberUserId = memberId
+            self.kind = .billingOwnerLeft(graceUntilISO: graceUntil)
+            self.title = "Billing owner left your family plan"
+            self.subtitle = "A new billing owner is needed within 7 days."
+
+        case "billing_grace_reminder":
+            let graceUntil = string("grace_until")
+            self.id = row.id
+            self.createdAt = row.createdAt
+            self.memberUserId = memberId
+            self.kind = .billingGraceReminder(graceUntilISO: graceUntil)
+            self.title = "Billing takeover reminder"
+            self.subtitle = "Take over billing soon to avoid interruption."
+
+        case "billing_interrupted":
+            self.id = row.id
+            self.createdAt = row.createdAt
+            self.memberUserId = memberId
+            self.kind = .billingInterrupted
+            self.title = "Family access interrupted"
+            self.subtitle = "Billing is required to restore access."
+
+        case "billing_restored":
+            self.id = row.id
+            self.createdAt = row.createdAt
+            self.memberUserId = memberId
+            self.kind = .billingRestored
+            self.title = "Billing restored"
+            self.subtitle = "Your family access is active again."
+
         default:
             return nil
         }
@@ -3719,6 +3930,22 @@ extension BellNotification {
 }
 
 extension DataManager {
+    struct FamilyBillingState: Decodable {
+        let familyId: String
+        let billingStatus: String
+        let billingOwnerUserId: String?
+        let billingGraceUntil: String?
+        let role: String?
+
+        enum CodingKeys: String, CodingKey {
+            case familyId = "family_id"
+            case billingStatus = "billing_status"
+            case billingOwnerUserId = "billing_owner_user_id"
+            case billingGraceUntil = "billing_grace_until"
+            case role
+        }
+    }
+    
     /// Fetch notifications for the top-right bell, mapped from `notification_queue`
     /// via the `get_bell_notifications` RPC.
     func fetchBellNotifications(limit: Int = 25) async throws -> [BellNotification] {
@@ -3729,6 +3956,85 @@ extension DataManager {
         
         let currentUserId = await currentUserId
         return rows.compactMap { BellNotification(row: $0, currentUserId: currentUserId) }
+    }
+    
+    /// Server-truth family billing status for current user.
+    func fetchMyFamilyBillingState() async throws -> FamilyBillingState? {
+        let rows: [FamilyBillingState] = try await supabase
+            .rpc("get_my_family_billing_state")
+            .execute()
+            .value
+        return rows.first
+    }
+
+    /// Claim billing ownership for the current accepted family member.
+    func claimFamilyBillingOwnership() async throws {
+        _ = try await supabase
+            .rpc("claim_family_billing_owner")
+            .execute()
+    }
+    
+    struct PermanentAccountDeletionResult: Decodable {
+        let success: Bool
+        let stage: String
+        let message: String
+        let requiresAdminCleanup: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case success
+            case stage
+            case message
+            case requiresAdminCleanup = "requires_admin_cleanup"
+        }
+    }
+
+    /// Permanently delete current account through the Edge Function orchestrator.
+    /// This performs app-domain cleanup first, then privileged auth user deletion.
+    func deleteMyAccountPermanently() async throws -> PermanentAccountDeletionResult {
+        let session = try await supabase.auth.session
+        guard let url = URL(string: "\(SupabaseConfig.supabaseURL)/functions/v1/delete-account-permanently") else {
+            throw DataError.databaseError("Account deletion endpoint is invalid.")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(SupabaseConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.httpBody = Data("{}".utf8)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw DataError.accountDeletionFailed("Network issue while deleting account. Please try again.")
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw DataError.accountDeletionFailed("Unexpected response while deleting account.")
+        }
+
+        let decoded = try? JSONDecoder().decode(PermanentAccountDeletionResult.self, from: data)
+
+        if (200..<300).contains(http.statusCode), let decoded, decoded.success {
+            return decoded
+        }
+
+        let fallbackMessage = "Couldn't delete account. Please try again."
+        let serverMessage = decoded?.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let serverMessage, !serverMessage.isEmpty {
+            throw DataError.accountDeletionFailed(serverMessage)
+        }
+        throw DataError.accountDeletionFailed(fallbackMessage)
+    }
+
+    /// Remove current user from family, applying billing-owner transition if required.
+    func deleteMyAccountWithFamilyBilling() async throws {
+        _ = try await supabase
+            .rpc("delete_my_account_with_family_billing")
+            .execute()
     }
 }
 
@@ -3899,6 +4205,7 @@ enum DataError: LocalizedError {
     case notAuthenticated
     case invalidData(String)
     case databaseError(String)
+    case accountDeletionFailed(String)
     
     var errorDescription: String? {
         switch self {
@@ -3907,6 +4214,8 @@ enum DataError: LocalizedError {
         case .invalidData(let message):
             return message
         case .databaseError(let message):
+            return message
+        case .accountDeletionFailed(let message):
             return message
         }
     }

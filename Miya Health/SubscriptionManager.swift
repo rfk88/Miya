@@ -26,13 +26,11 @@ final class SubscriptionManager: ObservableObject {
 
     private let productIds: Set<String> = [PaywallConfig.subscriptionProductId]
 
-    private static let promoRedeemedKey = "MiyaHealthPromoRedeemed"
+    /// Legacy in-app promo bypass (removed for App Store 3.1.1). Strip any leftover keys once.
+    private static let obsoletedPromoKeyPrefix = "MiyaHealthPromoRedeemed"
 
     init() {
-        if UserDefaults.standard.bool(forKey: Self.promoRedeemedKey) {
-            hasActiveSubscription = true
-            entitlementCheckComplete = true
-        }
+        clearObsoletedPromoBypassDefaultsIfNeeded()
         transactionUpdates = Task { await listenForTransactionUpdates() }
         Task { await loadProductsAndCheckEntitlements() }
     }
@@ -41,10 +39,19 @@ final class SubscriptionManager: ObservableObject {
         transactionUpdates?.cancel()
     }
 
+    /// Removes UserDefaults used by the old non–IAP promo bypass so upgrades don’t stay “unlocked” without StoreKit.
+    private func clearObsoletedPromoBypassDefaultsIfNeeded() {
+        let d = UserDefaults.standard
+        for key in d.dictionaryRepresentation().keys where key.hasPrefix(Self.obsoletedPromoKeyPrefix) {
+            d.removeObject(forKey: key)
+        }
+    }
+
     // MARK: - Load products
     func loadProductsAndCheckEntitlements() async {
         isLoadingProducts = true
         loadError = nil
+        purchaseError = nil
         defer { isLoadingProducts = false }
 
         // Safety timeout: if StoreKit hangs (e.g. Simulator), unblock the UI after 8 seconds
@@ -78,8 +85,7 @@ final class SubscriptionManager: ObservableObject {
                 break
             }
         }
-        let promoRedeemed = UserDefaults.standard.bool(forKey: Self.promoRedeemedKey)
-        hasActiveSubscription = hasEntitlement || promoRedeemed
+        hasActiveSubscription = hasEntitlement
         entitlementCheckComplete = true
     }
 
@@ -143,20 +149,9 @@ final class SubscriptionManager: ObservableObject {
         }
     }
 
-    // MARK: - Promo code
-    func redeemPromoCode(_ code: String) -> Bool {
-        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.lowercased() == PaywallConfig.promoCodeBypass.lowercased() else {
-            return false
-        }
-        UserDefaults.standard.set(true, forKey: Self.promoRedeemedKey)
-        hasActiveSubscription = true
-        return true
-    }
-
     // MARK: - Reset (on logout)
     func reset() {
-        UserDefaults.standard.removeObject(forKey: Self.promoRedeemedKey)
+        clearObsoletedPromoBypassDefaultsIfNeeded()
         hasActiveSubscription = false
         entitlementCheckComplete = false
         subscriptionProduct = nil
@@ -171,5 +166,16 @@ final class SubscriptionManager: ObservableObject {
 
     func clearPurchaseError() {
         purchaseError = nil
+    }
+
+    /// Use on launch/resume to keep paywall decisions fresh.
+    /// If an entitlement check already completed this session, refresh silently without
+    /// resetting the UI gate (prevents "Checking subscription…" spinner on every scene-active bounce).
+    func refreshForCurrentSession() async {
+        if !entitlementCheckComplete {
+            await loadProductsAndCheckEntitlements()
+        } else {
+            await checkEntitlements()
+        }
     }
 }

@@ -4,8 +4,8 @@ Single reference for the step-by-step path from account creation through health 
 
 ## Overview
 
-- **Self-setup** = superadmin path: step 1 (account) through step 7 (alerts/champion).
-- **State:** `OnboardingManager` holds all form data (account, family, wearables, about you, heart health, family history, champion, family members).
+- **Self-setup** = superadmin path: step 1 (account) through step 7 (privacy & alerts).
+- **State:** `OnboardingManager` holds all form data (account, family, wearables, about you, heart health, family history, family members).
 - **Progress:** `user_profiles.onboarding_step` (1–7) and `user_profiles.onboarding_complete`. Written by `DataManager.saveOnboardingProgress(step:complete:)` and on step change via `OnboardingManager.currentStep` didSet.
 - **Resume:** On login, `LoginView` calls `DataManager.loadUserProfile()`, then `onboardingManager.setCurrentStep(profile.onboarding_step ?? 1)` so the user returns to the correct step.
 
@@ -19,7 +19,7 @@ Single reference for the step-by-step path from account creation through health 
 | 4 | `HeartHealthView` | bloodPressureStatus, diabetesStatus, hasPriorHeartAttack, hasPriorStroke, hasChronicKidneyDisease, hasAtrialFibrillation, hasHighCholesterol | `DataManager.saveUserProfile(...)` | `setCurrentStep(5)` after save |
 | 5 | `MedicalHistoryView` | familyHeartDiseaseEarly, familyStrokeEarly, familyType2Diabetes | `DataManager.saveUserProfile(...)` | `setCurrentStep(6)` (or branch to Breakout views / AlertsChampionView for invited) |
 | 6 | `FamilyMembersInviteView` or `AlertsChampionView` | invitedMembers (superadmin); champion/alerts (invited) | Profile and family/invite data as applicable | Navigate to step 7 (e.g. AlertsChampionView) or Breakout2View |
-| 7 | `AlertsChampionView` | championName, championEmail, championPhone, championEnabled, notifyInApp, notifyPush, notifyEmail, championNotifyEmail, championNotifySms, quietHours* | `DataManager.saveUserProfile(...)` | `completeOnboarding()` then `OnboardingCompleteView(membersCount)` or equivalent |
+| 7 | `AlertsChampionView` | notifyInApp, notifyPush, notifyEmail, quietHours*, OpenAI third-party consent | `DataManager.saveAlertPreferences(...)` (+ AI consent) | `completeOnboarding()` then `OnboardingCompleteView(membersCount)` or equivalent |
 
 Step 8 in OnboardingManager is “Family Members” (invited members list); in the UI it is covered by step 6 (FamilyMembersInviteView) and step 7. The database stores `onboarding_step` 1–7 only.
 
@@ -33,7 +33,7 @@ Step 8 in OnboardingManager is “Family Members” (invited members list); in t
 
 ## Final submission
 
-The “full” profile (all health and preference data) is not written in one shot. Each of AboutYouView (step 3), HeartHealthView (step 4), MedicalHistoryView (step 5), and AlertsChampionView (step 7) calls `DataManager.saveUserProfile(...)` with the relevant OnboardingManager fields for that step. `completeOnboarding()` sets `OnboardingManager.isOnboardingComplete = true`, which triggers `saveOnboardingProgress(step:currentStep, complete: true)`. It is called from WearableSelectionView (guided invitee after wearable connect), AlertsChampionView, or OnboardingCompleteView.
+The “full” profile (all health and preference data) is not written in one shot. Each of AboutYouView (step 3), HeartHealthView (step 4), and MedicalHistoryView (step 5) calls `DataManager.saveUserProfile(...)` with the relevant OnboardingManager fields for that step. AlertsChampionView (step 7) calls `DataManager.saveAlertPreferences(...)` (and AI third-party consent). `completeOnboarding()` sets `OnboardingManager.isOnboardingComplete = true`, which triggers `saveOnboardingProgress(step:currentStep, complete: true)`. It is called from WearableSelectionView (guided invitee after wearable connect), AlertsChampionView, or OnboardingCompleteView.
 
 ## Invited-user branch
 

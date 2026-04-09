@@ -44,6 +44,14 @@ final class EditProfileViewModel: ObservableObject {
     @Published var notifyInApp: Bool = true
     @Published var notifyPush: Bool = false
     @Published var notifyEmail: Bool = false
+    
+    /// Third-party AI (Miya AI); synced from `privacy_settings`.
+    @Published var aiThirdPartySharingEnabled: Bool = false
+
+    /// Level-7+ pattern alerts about you: other family members (Self Setup only); excluded IDs are not notified in-app.
+    @Published var showFamilyPatternRecipientSettings: Bool = false
+    @Published var patternAlertFamilyPeers: [PatternAlertFamilyPeer] = []
+    @Published var patternAlertExcludedUserIds: Set<String> = []
 
     @Published var avatarURL: String? = nil
 
@@ -55,6 +63,8 @@ final class EditProfileViewModel: ObservableObject {
     @Published var hasUnsavedChanges: Bool = false
 
     private var initialSnapshot: Snapshot? = nil
+    /// Baseline for `privacy_settings` AI flag after last `bindDirtyTracking()` (load or successful save).
+    private var baselineAiThirdPartyEnabled: Bool = false
 
     private struct Snapshot: Equatable {
         let firstName: String
@@ -70,6 +80,8 @@ final class EditProfileViewModel: ObservableObject {
         let notifyInApp: Bool
         let notifyPush: Bool
         let notifyEmail: Bool
+        let aiThirdPartySharingEnabled: Bool
+        let patternAlertExcludedUserIds: Set<String>
     }
 
     private func computeSnapshot() -> Snapshot {
@@ -86,7 +98,9 @@ final class EditProfileViewModel: ObservableObject {
             nutritionQuality: nutritionQuality,
             notifyInApp: notifyInApp,
             notifyPush: notifyPush,
-            notifyEmail: notifyEmail
+            notifyEmail: notifyEmail,
+            aiThirdPartySharingEnabled: aiThirdPartySharingEnabled,
+            patternAlertExcludedUserIds: patternAlertExcludedUserIds
         )
     }
 
@@ -100,7 +114,12 @@ final class EditProfileViewModel: ObservableObject {
 
     func bindDirtyTracking() {
         initialSnapshot = computeSnapshot()
+        baselineAiThirdPartyEnabled = aiThirdPartySharingEnabled
         updateDirtyState()
+    }
+    
+    var aiThirdPartyChangedSinceBaseline: Bool {
+        aiThirdPartySharingEnabled != baselineAiThirdPartyEnabled
     }
 
     func fieldDidChange() {
@@ -113,6 +132,12 @@ final class EditProfileViewModel: ObservableObject {
 private struct ImageForCropEdit: Identifiable {
     let id = UUID()
     let image: UIImage
+}
+
+/// Other accepted family member who may receive escalated pattern alerts about the current user.
+struct PatternAlertFamilyPeer: Identifiable, Equatable {
+    let id: String
+    let firstName: String
 }
 
 struct EditProfileView: View {
@@ -128,7 +153,7 @@ struct EditProfileView: View {
     @State private var isPhotoPickerPresented: Bool = false
 
     private let genders = ["Male", "Female"]
-    private let ethnicities = ["White", "Black", "Asian", "Hispanic", "Other"]
+    private let ethnicities = ["White", "Black", "Asian", "Hispanic", "Other", "Prefer not to say"]
     private let smokingStatuses = ["Never", "Former", "Current"]
 
     var body: some View {
@@ -143,6 +168,7 @@ struct EditProfileView: View {
                         bodyCard
                         lifestyleCard
                         notificationsCard
+                        aiThirdPartyCard
                         Spacer(minLength: 24)
                     }
                     .padding(.horizontal, 16)
@@ -302,7 +328,7 @@ struct EditProfileView: View {
     private var aboutYouCard: some View {
         Card(title: "About you") {
             VStack(spacing: 10) {
-                LabeledPicker(label: "Gender", selection: $vm.gender, options: genders)
+                LabeledPicker(label: "Biological sex", selection: $vm.gender, options: genders)
                     .onChange(of: vm.gender) { _ in vm.fieldDidChange() }
 
                 // DOB is mandatory (BUG-032); always show picker, no toggle to skip
@@ -365,11 +391,86 @@ struct EditProfileView: View {
                 Toggle("Email notifications", isOn: $vm.notifyEmail)
                     .onChange(of: vm.notifyEmail) { _ in vm.fieldDidChange() }
 
-                Text("Notification logic coming soon.")
-                    .font(.system(size: 12))
-                    .foregroundColor(.miyaTextSecondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 2)
+                if vm.showFamilyPatternRecipientSettings && !vm.patternAlertFamilyPeers.isEmpty {
+                    DisclosureGroup {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(
+                                "After about a week of the same health pattern, Miya can notify others in your family on the app. Only your family—no one outside it. You can turn this off per person below."
+                            )
+                            .font(.system(size: 12))
+                            .foregroundColor(.miyaTextSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                            ForEach(vm.patternAlertFamilyPeers) { peer in
+                                let uid = peer.id.lowercased()
+                                Toggle(
+                                    "\(peer.firstName): notify about my patterns",
+                                    isOn: Binding(
+                                        get: { !vm.patternAlertExcludedUserIds.contains(uid) },
+                                        set: { receives in
+                                            if receives {
+                                                vm.patternAlertExcludedUserIds.remove(uid)
+                                            } else {
+                                                vm.patternAlertExcludedUserIds.insert(uid)
+                                            }
+                                            vm.fieldDidChange()
+                                        }
+                                    )
+                                )
+                            }
+                        }
+                        .padding(.top, 4)
+                    } label: {
+                        Text("Who can get alerts about my health patterns")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.miyaTextPrimary)
+                    }
+                    .padding(.top, 4)
+                }
+            }
+        }
+    }
+    
+    @State private var showOpenAIExplainerEditProfile: Bool = false
+    
+    private var aiThirdPartyCard: some View {
+        Card(title: "AI features") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 8) {
+                    Text("Allow optional features that use Miya AI (chat, insights, message suggestions).")
+                        .font(.system(size: 14))
+                        .foregroundColor(.miyaTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button {
+                        showOpenAIExplainerEditProfile = true
+                    } label: {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundColor(.miyaPrimary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Learn how Miya AI is used")
+                }
+                Toggle("Share limited data with Miya AI", isOn: $vm.aiThirdPartySharingEnabled)
+                    .tint(.miyaPrimary)
+                    .onChange(of: vm.aiThirdPartySharingEnabled) { _ in vm.fieldDidChange() }
+            }
+        }
+        .sheet(isPresented: $showOpenAIExplainerEditProfile) {
+            NavigationStack {
+                ScrollView {
+                    MiyaAIDataSharingExplainerContent()
+                        .padding(24)
+                }
+                .background(Color.miyaBackground.ignoresSafeArea())
+                .navigationTitle("Miya AI")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showOpenAIExplainerEditProfile = false }
+                    }
+                }
             }
         }
     }
@@ -414,7 +515,10 @@ struct EditProfileView: View {
             let profile = try await dataManager.loadUserProfile()
             // Don't overwrite if the user started typing while we were fetching.
             guard !vm.hasUnsavedChanges, let p = profile else {
+                await dataManager.refreshAIThirdPartyConsentFromServer()
+                vm.aiThirdPartySharingEnabled = dataManager.isAIThirdPartySharingEnabled
                 vm.bindDirtyTracking()
+                await loadPatternRecipientPreferences()
                 return
             }
 
@@ -434,6 +538,9 @@ struct EditProfileView: View {
             vm.notifyPush = p.notify_push ?? onboardingManager.notifyPush
             vm.notifyEmail = p.notify_email ?? onboardingManager.notifyEmail
 
+            await dataManager.refreshAIThirdPartyConsentFromServer()
+            vm.aiThirdPartySharingEnabled = dataManager.isAIThirdPartySharingEnabled
+
             if let dobString = p.date_of_birth, let dob = parseYmd(dobString) {
                 vm.dateOfBirth = dob
                 vm.hasDateOfBirth = true
@@ -447,6 +554,48 @@ struct EditProfileView: View {
             // Cache data is already displayed — just surface the error non-destructively.
             vm.saveState = .failure(error.localizedDescription)
             vm.bindDirtyTracking()
+        }
+
+        await loadPatternRecipientPreferences()
+    }
+
+    /// Loads optional per-member pattern-alert exclusions (Self Setup only).
+    private func loadPatternRecipientPreferences() async {
+        vm.showFamilyPatternRecipientSettings = false
+        vm.patternAlertFamilyPeers = []
+        vm.patternAlertExcludedUserIds = []
+
+        guard let myRow = try? await dataManager.fetchMyFamilyMemberRecord() else { return }
+        if myRow.onboardingType == "Guided Setup" { return }
+
+        guard let selfId = await dataManager.currentUserIdString else { return }
+        let familyId = myRow.familyId?.uuidString ?? dataManager.currentFamilyId
+        guard let familyId else { return }
+
+        vm.showFamilyPatternRecipientSettings = true
+
+        do {
+            let members = try await dataManager.fetchFamilyMembers(familyId: familyId)
+            let others = members.filter { m in
+                m.inviteStatus.lowercased() == "accepted"
+                    && m.userId != nil
+                    && m.userId!.uuidString.lowercased() != selfId.lowercased()
+            }
+            .sorted { $0.firstName.localizedCaseInsensitiveCompare($1.firstName) == .orderedAscending }
+
+            vm.patternAlertFamilyPeers = others.map {
+                PatternAlertFamilyPeer(id: $0.userId!.uuidString.lowercased(), firstName: $0.firstName)
+            }
+            if vm.patternAlertFamilyPeers.isEmpty {
+                vm.showFamilyPatternRecipientSettings = false
+            }
+            let excluded = try await dataManager.fetchPatternAlertExcludedRecipientIds()
+            vm.patternAlertExcludedUserIds = Set(excluded.map { $0.lowercased() })
+            vm.bindDirtyTracking()
+        } catch {
+            vm.showFamilyPatternRecipientSettings = false
+            vm.patternAlertFamilyPeers = []
+            vm.patternAlertExcludedUserIds = []
         }
     }
 
@@ -505,6 +654,19 @@ struct EditProfileView: View {
                 "notify_email": .bool(vm.notifyEmail)
             ]
             try await dataManager.updateUserProfile(notificationPayload)
+
+            if vm.showFamilyPatternRecipientSettings, !vm.patternAlertFamilyPeers.isEmpty {
+                try await dataManager.setPatternAlertExcludedRecipients(
+                    excludedUserIds: Array(vm.patternAlertExcludedUserIds)
+                )
+            }
+
+            if vm.aiThirdPartyChangedSinceBaseline {
+                try await dataManager.applyAIThirdPartyConsent(
+                    enabled: vm.aiThirdPartySharingEnabled,
+                    source: vm.aiThirdPartySharingEnabled ? "settings_on" : "settings_off"
+                )
+            }
 
             // 3) Recalculate WHO risk using updated profile fields + fixed health_conditions
             let conditions = (try? await dataManager.fetchMyHealthConditions()) ?? []

@@ -7,13 +7,17 @@
 
 import RookSDK
 import HealthKit
+import MessageUI
 import SwiftUI
 import UIKit
+import UserNotifications
 
 // MARK: - STEP 1: SUPERADMIN ONBOARDING (EMAIL + PASSWORD)
 
 struct SuperadminOnboardingView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.onboardingBackBehavior) private var onboardingBackBehavior
+    @Environment(\.onboardingResumeStepBack) private var onboardingResumeStepBack
     
     // Access the managers from the environment
     @EnvironmentObject var authManager: AuthManager
@@ -32,6 +36,9 @@ struct SuperadminOnboardingView: View {
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
     @State private var isAppleSignInLoading: Bool = false
+    @State private var showEmailSignupForm: Bool = false
+    /// Inline hint when user taps Apple/Email before entering name (no alert).
+    @State private var authNameInlineHint: String?
 
     private let totalSteps: Int = 7
     private let currentStep: Int = 1
@@ -41,8 +48,7 @@ struct SuperadminOnboardingView: View {
     }
     
     private var isFormValid: Bool {
-        guard !firstName.trimmingCharacters(in: .whitespaces).isEmpty,
-              !lastName.trimmingCharacters(in: .whitespaces).isEmpty,
+        guard !firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !email.isEmpty,
               !password.isEmpty,
               !confirmPassword.isEmpty else { return false }
@@ -75,17 +81,13 @@ struct SuperadminOnboardingView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 
-                // Form
+                // Name-first auth choice, then email form if selected
                 VStack(spacing: 16) {
-                    // Names row
-                    HStack(spacing: 12) {
-                    // First Name
                     VStack(alignment: .leading, spacing: 6) {
-                            Text("First name")
+                        Text("Name")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(.miyaTextPrimary)
-                        
-                            TextField("First", text: $firstName)
+                        TextField("Your name", text: $firstName)
                             .textInputAutocapitalization(.words)
                             .autocorrectionDisabled(true)
                             .padding(.horizontal, 12)
@@ -96,16 +98,62 @@ struct SuperadminOnboardingView: View {
                                 RoundedRectangle(cornerRadius: 12)
                                     .stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1)
                             )
+                    }
+
+                    if !showEmailSignupForm {
+                        let nameMissing = firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        let appleBlocked = isAppleSignInLoading || authManager.isLoading
+
+                        ZStack {
+                            SignInWithAppleButtonView { idToken, nonce, fullName in
+                                await handleAppleSignIn(idToken: idToken, nonce: nonce, fullName: fullName)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .frame(height: MiyaTheme.buttonH)
+                            .disabled(appleBlocked)
+
+                            if nameMissing && !appleBlocked {
+                                Color.clear
+                                    .contentShape(RoundedRectangle(cornerRadius: MiyaTheme.radius, style: .continuous))
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: MiyaTheme.buttonH)
+                                    .onTapGesture {
+                                        authNameInlineHint = "Please add your first name above before using Sign in with Apple."
+                                    }
+                            }
                         }
-                        
-                        // Last Name
+
+                        Button {
+                            if nameMissing {
+                                authNameInlineHint = "Please add your first name above before signing up with email."
+                            } else {
+                                showEmailSignupForm = true
+                            }
+                        } label: {
+                            Text("Sign up with Email")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: MiyaTheme.buttonH)
+                                .background(Color.miyaPrimary)
+                                .cornerRadius(MiyaTheme.radius)
+                        }
+
+                        if let hint = authNameInlineHint {
+                            Text(hint)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.red)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    } else {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Last name")
+                            Text("Email address")
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundColor(.miyaTextPrimary)
-                            
-                            TextField("Last", text: $lastName)
-                                .textInputAutocapitalization(.words)
+                            TextField("your.email@example.com", text: $email)
+                                .keyboardType(.emailAddress)
+                                .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled(true)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 10)
@@ -116,77 +164,49 @@ struct SuperadminOnboardingView: View {
                                         .stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1)
                                 )
                         }
-                    }
-                    
-                    // Email
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Email address")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-                        
-                        TextField("your.email@example.com", text: $email)
-                            .keyboardType(.emailAddress)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .background(Color.white)
-                            .cornerRadius(12)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1)
-                            )
-                    }
-                    
-                    // Password
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Create password")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-                        
-                        SecureField("Min. 8 characters", text: $password)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .background(Color.white)
-                            .cornerRadius(12)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1)
-                            )
-                    }
-                    
-                    // Confirm password + match tag
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Confirm password")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-                        
-                        SecureField("Retype your password", text: $confirmPassword)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .background(Color.white)
-                            .cornerRadius(12)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1)
-                            )
-                        
-                        if !password.isEmpty || !confirmPassword.isEmpty {
-                            HStack(spacing: 6) {
-                                Image(systemName: passwordsMatch ? "checkmark.circle.fill" : "xmark.octagon.fill")
-                                    .font(.system(size: 12, weight: .bold))
-                                
-                                Text(passwordsMatch ? "Passwords match" : "Passwords don't match")
-                                    .font(.system(size: 12, weight: .medium))
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Create password")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.miyaTextPrimary)
+                            SecureField("Min. 8 characters", text: $password)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(Color.white)
+                                .cornerRadius(12)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1)
+                                )
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Confirm password")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.miyaTextPrimary)
+                            SecureField("Retype your password", text: $confirmPassword)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(Color.white)
+                                .cornerRadius(12)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1)
+                                )
+
+                            if !password.isEmpty || !confirmPassword.isEmpty {
+                                HStack(spacing: 6) {
+                                    Image(systemName: passwordsMatch ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                                        .font(.system(size: 12, weight: .bold))
+                                    Text(passwordsMatch ? "Passwords match" : "Passwords don't match")
+                                        .font(.system(size: 12, weight: .medium))
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background((passwordsMatch ? Color.green : Color.red).opacity(0.12))
+                                .foregroundColor(passwordsMatch ? .green : .red)
+                                .cornerRadius(999)
                             }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(
-                                (passwordsMatch ? Color.green : Color.red)
-                                    .opacity(0.12)
-                            )
-                            .foregroundColor(passwordsMatch ? .green : .red)
-                            .cornerRadius(999)
                         }
                     }
                 }
@@ -205,7 +225,17 @@ struct SuperadminOnboardingView: View {
                 // Buttons
                 HStack(spacing: 12) {
                     Button {
-                        dismiss()
+                        hideKeyboard()
+                        if showEmailSignupForm {
+                            showEmailSignupForm = false
+                        } else {
+                            OnboardingBackAction.perform(
+                                behavior: onboardingBackBehavior,
+                                resumeStepBack: onboardingResumeStepBack,
+                                dismiss: dismiss,
+                                hideKeyboardFirst: false
+                            )
+                        }
                     } label: {
                         Text("Back")
                             .font(.system(size: 15, weight: .medium))
@@ -220,10 +250,12 @@ struct SuperadminOnboardingView: View {
                     }
                     .disabled(authManager.isLoading)
 
+                    if showEmailSignupForm {
                     Button {
                         print("🟢 Continue button tapped!")
                         print("🟢 isFormValid: \(isFormValid)")
                         print("🟢 isLoading: \(authManager.isLoading)")
+                        hideKeyboard()
                         Task {
                             await signUp()
                         }
@@ -244,24 +276,9 @@ struct SuperadminOnboardingView: View {
                         .cornerRadius(16)
                     }
                     .disabled(!isFormValid || authManager.isLoading)
+                    }
                 }
                 .padding(.bottom, 8)
-                
-                // Or sign in with Apple
-                VStack(spacing: 12) {
-                    HStack {
-                        Rectangle().fill(Color.miyaBackground).frame(height: 1)
-                        Text("Or sign in with Apple")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.secondary)
-                        Rectangle().fill(Color.miyaBackground).frame(height: 1)
-                    }
-                    SignInWithAppleButtonView { idToken, nonce, fullName in
-                        await handleAppleSignIn(idToken: idToken, nonce: nonce, fullName: fullName)
-                    }
-                    .disabled(isAppleSignInLoading || authManager.isLoading)
-                }
-                .padding(.bottom, 16)
                 
                 // Hidden NavigationLink for programmatic navigation
                 NavigationLink(
@@ -283,10 +300,15 @@ struct SuperadminOnboardingView: View {
             Text(errorMessage)
         }
         .onAppear {
+            onboardingManager.setCurrentStep(1)
             print("📱 SuperadminOnboardingView appeared")
             print("📱 isFormValid: \(isFormValid)")
         }
         .onChange(of: firstName) { _ in
+            if !firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                authNameInlineHint = nil
+                showError = false
+            }
             print("📝 Form valid: \(isFormValid), firstName: '\(firstName)', email: '\(email)', password length: \(password.count)")
         }
         .onChange(of: email) { _ in
@@ -352,7 +374,7 @@ struct SuperadminOnboardingView: View {
         defer { isAppleSignInLoading = false }
         do {
             let userId = try await authManager.signInWithApple(idToken: idToken, nonce: nonce, fullName: fullName)
-            let first = fullName?.givenName ?? fullName?.familyName ?? "User"
+            let first = fullName?.givenName ?? fullName?.familyName ?? firstName.trimmingCharacters(in: .whitespacesAndNewlines)
             let last = fullName?.familyName ?? ""
             try await dataManager.createInitialProfile(userId: userId, firstName: first, step: 1)
             onboardingManager.currentUserId = userId
@@ -383,7 +405,6 @@ struct FamilySetupView: View {
     @EnvironmentObject var onboardingManager: OnboardingManager
     
     @State private var familyName: String = ""
-    @State private var selectedFamilySize: FamilySizeOption? = nil
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
     @State private var navigateToNextStep: Bool = false
@@ -392,7 +413,7 @@ struct FamilySetupView: View {
     private let currentStep: Int = 2
     
     private var isFormValid: Bool {
-        !familyName.trimmingCharacters(in: .whitespaces).isEmpty && selectedFamilySize != nil
+        !familyName.trimmingCharacters(in: .whitespaces).isEmpty
     }
     
     var body: some View {
@@ -405,17 +426,16 @@ struct FamilySetupView: View {
                         .padding(.top, 16)
                     
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Build your health team")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.miyaTextPrimary)
+                        Text("Set up your family")
+                            .font(.system(size: 24, weight: .bold))
+                            .foregroundColor(.miyaTextPrimary)
+                        Text("Miya is built for families. Anyone in your household can connect a wearable—you’ll choose who to invite next, and you can always add more family members later.")
+                            .font(.system(size: 15))
+                            .foregroundColor(.miyaTextSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     
-                    Text("Let's set up your family's health journey.")
-                        .font(.system(size: 15))
-                        .foregroundColor(.miyaTextSecondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                
-                VStack(alignment: .leading, spacing: 20) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("What should we call your family?")
                             .font(.system(size: 14, weight: .semibold))
@@ -432,101 +452,25 @@ struct FamilySetupView: View {
                             )
                     }
                     
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("How many people are in your family?")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-                        
-                        VStack(spacing: 10) {
-                            FamilySizeOptionCard(
-                                title: "2–4 family members",
-                                subtitle: "Small but mighty crew.",
-                                option: .twoToFour,
-                                selectedOption: $selectedFamilySize
-                            )
-                            
-                            FamilySizeOptionCard(
-                                title: "4–8 family members",
-                                subtitle: "A busy, full house.",
-                                option: .fourToEight,
-                                selectedOption: $selectedFamilySize
-                            )
-                            
-                            FamilySizeOptionCard(
-                                title: "9+ family members",
-                                subtitle: "Big family, big impact.",
-                                option: .ninePlus,
-                                selectedOption: $selectedFamilySize
-                            )
-                        }
-                    }
-                }
-                
-                // Error message
-                if showError {
-                    Text(errorMessage)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.red)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(8)
-                }
-                
-                HStack(spacing: 12) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Text("Back")
-                            .font(.system(size: 15, weight: .medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.clear)
-                            .foregroundColor(.miyaTextSecondary)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .stroke(Color.miyaBackground, lineWidth: 1)
-                            )
-                    }
-                    .disabled(dataManager.isLoading)
-                    
-                    Button {
-                        Task {
-                            await saveFamily()
-                        }
-                    } label: {
-                        HStack(spacing: 8) {
-                            if dataManager.isLoading {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.8)
-                            }
-                            Text(dataManager.isLoading ? "Saving..." : "Continue")
-                            .font(.system(size: 16, weight: .semibold))
-                        }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                        .background(isFormValid && !dataManager.isLoading ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
-                            .foregroundColor(.white)
-                            .cornerRadius(16)
-                    }
-                    .disabled(!isFormValid || dataManager.isLoading)
-                }
-                .padding(.bottom, 16)
-                
-                // Hidden NavigationLink for programmatic navigation
-                NavigationLink(
-                    destination: WearableSelectionView(),
-                    isActive: $navigateToNextStep
-                ) {
-                    EmptyView()
-                }
-                .hidden()
+                    NavigationLink(destination: WearableSelectionView(), isActive: $navigateToNextStep) { EmptyView() }
+                        .hidden()
                 }
                 .padding(.horizontal, 24)
-                .padding(.bottom, 24)
+                .padding(.bottom, 8)
             }
             .scrollDismissesKeyboard(.interactively)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                OnboardingCTABar(
+                    onBack: { hideKeyboard(); dismiss() },
+                    backDisabled: dataManager.isLoading,
+                    onContinue: { hideKeyboard(); Task { await saveFamily() } },
+                    continueLabel: dataManager.isLoading ? "Saving..." : "Continue",
+                    continueLoading: dataManager.isLoading,
+                    continueDisabled: !isFormValid,
+                    showError: showError,
+                    errorMessage: errorMessage
+                )
+            }
         }
         .alert("Error", isPresented: $showError) {
             Button("OK", role: .cancel) { }
@@ -534,32 +478,25 @@ struct FamilySetupView: View {
             Text(errorMessage)
         }
         .onAppear {
-            // Step 2: Family Setup
             onboardingManager.setCurrentStep(2)
         }
     }
     
     private func saveFamily() async {
-        guard let familySize = selectedFamilySize else { return }
-        
         showError = false
         errorMessage = ""
         
         do {
-            // Save to OnboardingManager
             onboardingManager.familyName = familyName
-            onboardingManager.familySize = familySize.rawValue
+            onboardingManager.familySize = "twoToFour"
             
-            // Save to database
             try await dataManager.saveFamily(
                 name: familyName,
-                size: familySize.rawValue,
+                size: "twoToFour",
                 firstName: onboardingManager.firstName
             )
             
-            // Navigate to next step
             navigateToNextStep = true
-            
         } catch {
             errorMessage = error.localizedDescription
             showError = true
@@ -575,12 +512,204 @@ struct FamilySetupView: View {
     }
 }
 
+// MARK: - STEP 2b: ADDITIONAL FAMILY MEMBERS COUNT
+
+struct AdditionalFamilyMembersCountView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.onboardingBackBehavior) private var onboardingBackBehavior
+    @Environment(\.onboardingResumeStepBack) private var onboardingResumeStepBack
+    @EnvironmentObject var dataManager: DataManager
+    @EnvironmentObject var onboardingManager: OnboardingManager
+
+    @State private var memberCount: Int = 1
+    @State private var isLoading: Bool = false
+    @State private var showError: Bool = false
+    @State private var errorMessage: String = ""
+    @State private var navigateToInvites: Bool = false
+    @State private var navigateToComplete: Bool = false
+
+    var body: some View {
+        ZStack {
+            Color.miyaBackground.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 24) {
+                        OnboardingProgressBar(currentStep: 7, totalSteps: 7)
+                            .padding(.top, 16)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Invite your family")
+                                .font(.system(size: 24, weight: .bold))
+                                .foregroundColor(.miyaTextPrimary)
+                            Text("How many other family members do you want to invite now? Each person can connect their own wearable. You can skip for now and add people anytime from your dashboard.")
+                                .font(.system(size: 15))
+                                .foregroundColor(.miyaTextSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        // Big visual count picker
+                        VStack(spacing: 12) {
+                            HStack(spacing: 40) {
+                                Button {
+                                    if memberCount > 0 { memberCount -= 1 }
+                                } label: {
+                                    Image(systemName: "minus.circle.fill")
+                                        .font(.system(size: 44))
+                                        .foregroundColor(memberCount > 0 ? .miyaPrimary : .miyaTextSecondary.opacity(0.25))
+                                }
+                                .disabled(memberCount == 0)
+
+                                Text("\(memberCount)")
+                                    .font(.system(size: 72, weight: .bold))
+                                    .foregroundColor(.miyaTextPrimary)
+                                    .frame(minWidth: 80)
+                                    .multilineTextAlignment(.center)
+
+                                Button {
+                                    if memberCount < 10 { memberCount += 1 }
+                                } label: {
+                                    Image(systemName: "plus.circle.fill")
+                                        .font(.system(size: 44))
+                                        .foregroundColor(memberCount < 10 ? .miyaPrimary : .miyaTextSecondary.opacity(0.25))
+                                }
+                                .disabled(memberCount == 10)
+                            }
+
+                            Text(countLabel)
+                                .font(.system(size: 14))
+                                .foregroundColor(.miyaTextSecondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(.vertical, 28)
+                        .frame(maxWidth: .infinity)
+                        .background(RoundedRectangle(cornerRadius: 20).fill(Color.white))
+
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 16)
+                }
+
+                // Fixed bottom buttons
+                VStack(spacing: 0) {
+                    if showError {
+                        Text(errorMessage)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.red)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.red.opacity(0.1))
+                            .cornerRadius(8)
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, 8)
+                    }
+
+                    HStack(spacing: 12) {
+                        Button {
+                            OnboardingBackAction.perform(
+                                behavior: onboardingBackBehavior,
+                                resumeStepBack: onboardingResumeStepBack,
+                                dismiss: dismiss,
+                                hideKeyboardFirst: false
+                            )
+                        } label: {
+                            Text("Back")
+                                .font(.system(size: 15, weight: .medium))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Color.clear)
+                                .foregroundColor(.miyaTextSecondary)
+                                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.miyaBackground, lineWidth: 1))
+                        }
+                        .disabled(isLoading)
+
+                        Button {
+                            Task { await saveMemberCount() }
+                        } label: {
+                            HStack(spacing: 8) {
+                                if isLoading {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        .scaleEffect(0.8)
+                                }
+                                Text(isLoading ? "Saving..." : "Continue")
+                                    .font(.system(size: 16, weight: .semibold))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(isLoading ? Color.miyaPrimary.opacity(0.5) : Color.miyaPrimary)
+                            .foregroundColor(.white)
+                            .cornerRadius(16)
+                        }
+                        .disabled(isLoading)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 24)
+                }
+
+                NavigationLink(destination: FamilyMembersInviteView(), isActive: $navigateToInvites) { EmptyView() }
+                    .hidden()
+                NavigationLink(
+                    destination: OnboardingCompleteView(membersCount: onboardingManager.invitedMembers.count)
+                        .environmentObject(onboardingManager)
+                        .environmentObject(dataManager),
+                    isActive: $navigateToComplete
+                ) { EmptyView() }
+                    .hidden()
+            }
+        }
+        .navigationBarBackButtonHidden(false)
+        .onAppear {
+            onboardingManager.setCurrentStep(8)
+        }
+    }
+
+    private var countLabel: String {
+        switch memberCount {
+        case 0: return "Just you for now — you can invite members later."
+        case 1: return "1 additional member"
+        default: return "\(memberCount) additional members"
+        }
+    }
+
+    private func saveMemberCount() async {
+        showError = false
+        isLoading = true
+        defer { isLoading = false }
+
+        onboardingManager.additionalFamilyMembersTarget = memberCount
+
+        do {
+            try await dataManager.updateFamilyTierForAdditionalMembers(memberCount)
+            if memberCount == 0 {
+                navigateToComplete = true
+            } else {
+                navigateToInvites = true
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+            showError = true
+        }
+    }
+}
+
+#Preview("Step: Additional member count") {
+    NavigationStack {
+        AdditionalFamilyMembersCountView()
+            .environmentObject(DataManager())
+            .environmentObject(OnboardingManager())
+    }
+}
+
 enum FamilySizeOption: String {
     case twoToFour
     case fourToEight
     case ninePlus
 }
 
+// Note: FamilySizeOptionCard retained for any legacy usage; no longer shown in onboarding flow.
 struct FamilySizeOptionCard: View {
     let title: String
     let subtitle: String
@@ -715,6 +844,8 @@ enum WearableType: String, CaseIterable, Identifiable {
 
 struct WearableSelectionView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.onboardingBackBehavior) private var onboardingBackBehavior
+    @Environment(\.onboardingResumeStepBack) private var onboardingResumeStepBack
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var dataManager: DataManager
     @EnvironmentObject var onboardingManager: OnboardingManager
@@ -842,7 +973,12 @@ struct WearableSelectionView: View {
                 HStack(spacing: 12) {
                     if !isReconnectMode {
                         Button {
-                            dismiss()
+                            OnboardingBackAction.perform(
+                                behavior: onboardingBackBehavior,
+                                resumeStepBack: onboardingResumeStepBack,
+                                dismiss: dismiss,
+                                hideKeyboardFirst: false
+                            )
                         } label: {
                             Text("Back")
                                 .font(.system(size: 15, weight: .medium))
@@ -1452,6 +1588,7 @@ enum Ethnicity: String, CaseIterable, Identifiable {
     case black = "Black"
     case hispanic = "Hispanic"
     case other = "Other"
+    case preferNotToSay = "Prefer not to say"
     
     var id: String { rawValue }
 }
@@ -1553,77 +1690,81 @@ struct AboutYouView: View {
         return true
     }
     
+    private var nutritionDescription: String {
+        switch Int(nutritionQuality) {
+        case 1: return "1/5 — mostly fast food or processed meals, rarely cooking at home"
+        case 2: return "2/5 — frequent eating out, occasional junk food, inconsistent meals"
+        case 3: return "3/5 — mix of home cooking and convenience food, some healthy choices"
+        case 4: return "4/5 — mostly home-cooked, balanced meals with occasional treats"
+        case 5: return "5/5 — consistently healthy, whole-food diet, minimal processed food"
+        default: return ""
+        }
+    }
+    
     var body: some View {
         ZStack {
             Color.miyaBackground.ignoresSafeArea()
             
-            VStack(spacing: 24) {
-                // Progress
-                OnboardingProgressBar(currentStep: currentStep, totalSteps: totalSteps)
-                    .padding(.top, 16)
-                
-                // Title + subtitle
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("About you")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.miyaTextPrimary)
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Progress
+                    OnboardingProgressBar(currentStep: currentStep, totalSteps: totalSteps)
+                        .padding(.top, 16)
                     
-                    Text("Tell us about yourself. Your data is private and secure.")
-                        .font(.system(size: 15))
-                        .foregroundColor(.miyaTextSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                
-                // FORM
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
+                    // Title + subtitle
+                    VStack(alignment: .leading, spacing: 8) {
+                        OnboardingPersonBadge(
+                            firstName: onboardingManager.firstName,
+                            lastName: onboardingManager.lastName
+                        )
+                        Text("About you")
+                            .font(.system(size: 24, weight: .bold))
+                            .foregroundColor(.miyaTextPrimary)
                         
-                        // Biological Sex
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("What is your sex? *")
+                        Text("Tell us about yourself. Your data is private and secure.")
+                            .font(.system(size: 15))
+                            .foregroundColor(.miyaTextSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    
+                    // FORM
+                    VStack(alignment: .leading, spacing: 18) {
+
+                        // Biological sex
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Biological sex *")
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundColor(.miyaTextPrimary)
-                            
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Biological sex affects cardiovascular risk calculations.")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                                Text("We use this for medical accuracy, not identity.")
-                                    .font(.system(size: 11, weight: .light))
-                                    .foregroundColor(.secondary)
-                                    .italic()
-                            }
-                            .padding(.bottom, 4)
-                            
-                            Menu {
+
+                            HStack(spacing: 10) {
                                 ForEach(Gender.allCases) { gender in
-                                    Button(gender.rawValue) {
+                                    Button {
                                         selectedGender = gender
+                                    } label: {
+                                        HStack {
+                                            Text(gender.rawValue)
+                                                .font(.system(size: 14))
+                                                .foregroundColor(.miyaTextPrimary)
+                                            Spacer()
+                                            if selectedGender == gender {
+                                                Image(systemName: "checkmark")
+                                                    .foregroundColor(.miyaPrimary)
+                                            }
+                                        }
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 10)
+                                        .background(selectedGender == gender ? Color.miyaPrimary.opacity(0.1) : Color.white)
+                                        .cornerRadius(12)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(selectedGender == gender ? Color.miyaPrimary : Color.miyaBackground.opacity(0.8), lineWidth: 1)
+                                        )
                                     }
                                 }
-                            } label: {
-                                HStack {
-                                    Text(selectedGender?.rawValue ?? "Select gender")
-                                        .foregroundColor(
-                                            selectedGender == nil ? .miyaTextSecondary : .miyaTextPrimary
-                                        )
-                                    Spacer()
-                                    Image(systemName: "chevron.down")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(.miyaTextSecondary)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .background(Color.white)
-                                .cornerRadius(12)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1)
-                                )
                             }
                         }
-                        
+
                         // Date of Birth
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Date of birth *")
@@ -1645,38 +1786,40 @@ struct AboutYouView: View {
                                     .stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1)
                             )
                         }
-                        
+
                         // Ethnicity
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 8) {
                             Text("Ethnicity *")
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundColor(.miyaTextPrimary)
-                            
-                            Menu {
+
+                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                                 ForEach(Ethnicity.allCases) { ethnicity in
-                                    Button(ethnicity.rawValue) {
+                                    Button {
                                         selectedEthnicity = ethnicity
+                                    } label: {
+                                        HStack {
+                                            Text(ethnicity.rawValue)
+                                                .font(.system(size: 13))
+                                                .foregroundColor(.miyaTextPrimary)
+                                                .multilineTextAlignment(.leading)
+                                            Spacer()
+                                            if selectedEthnicity == ethnicity {
+                                                Image(systemName: "checkmark")
+                                                    .font(.system(size: 12))
+                                                    .foregroundColor(.miyaPrimary)
+                                            }
+                                        }
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 10)
+                                        .background(selectedEthnicity == ethnicity ? Color.miyaPrimary.opacity(0.1) : Color.white)
+                                        .cornerRadius(12)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(selectedEthnicity == ethnicity ? Color.miyaPrimary : Color.miyaBackground.opacity(0.8), lineWidth: 1)
+                                        )
                                     }
                                 }
-                            } label: {
-                                HStack {
-                                    Text(selectedEthnicity?.rawValue ?? "Select ethnicity")
-                                        .foregroundColor(
-                                            selectedEthnicity == nil ? .miyaTextSecondary : .miyaTextPrimary
-                                        )
-                                    Spacer()
-                                    Image(systemName: "chevron.down")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(.miyaTextSecondary)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .background(Color.white)
-                                .cornerRadius(12)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1)
-                                )
                             }
                         }
                         
@@ -1792,6 +1935,25 @@ struct AboutYouView: View {
                             }
                         }
                         
+                        // Scroll-cue: appears between height and weight when height is entered but form incomplete
+                        let heightStarted = useImperial
+                            ? !heightFeet.trimmingCharacters(in: .whitespaces).isEmpty
+                            : !heightCm.trimmingCharacters(in: .whitespaces).isEmpty
+                        if heightStarted && !isFormValid {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.down.circle")
+                                    .foregroundColor(.miyaPrimary)
+                                Text("Keep going — fill in weight and nutrition below to continue.")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.miyaTextSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.miyaPrimary.opacity(0.06))
+                            .cornerRadius(8)
+                        }
+
                         // Weight
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Weight *")
@@ -1841,100 +2003,61 @@ struct AboutYouView: View {
                         
                         // Nutrition quality
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Nutrition quality (1–5)")
+                            Text("Nutrition quality")
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundColor(.miyaTextPrimary)
                             
+                            Text("How would you describe your typical diet?")
+                                .font(.system(size: 12))
+                                .foregroundColor(.miyaTextSecondary)
+                            
                             HStack {
-                                Text("Low")
+                                Text("Poor")
                                     .font(.system(size: 12))
                                     .foregroundColor(.miyaTextSecondary)
                                 Slider(value: $nutritionQuality, in: 1...5, step: 1)
-                                Text("High")
+                                Text("Excellent")
                                     .font(.system(size: 12))
                                     .foregroundColor(.miyaTextSecondary)
                             }
                             
-                            Text("You rated: \(Int(nutritionQuality)) / 5")
-                                .font(.system(size: 12))
-                                .foregroundColor(.miyaTextSecondary)
+                            Text(nutritionDescription)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.miyaTextPrimary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.miyaPrimary.opacity(0.07))
+                                .cornerRadius(8)
                         }
-                    }
-                    .padding(.vertical, 4)
-                }
-                .background(Color.miyaBackground)
-                
-                // Error message
-                if showError {
-                    Text(errorMessage)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.red)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(8)
-                }
-                
-                // Buttons
-                HStack(spacing: 12) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Text("Back")
-                            .font(.system(size: 15, weight: .medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.clear)
-                            .foregroundColor(.miyaTextSecondary)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .stroke(Color.miyaBackground, lineWidth: 1)
-                            )
-                    }
-                    .disabled(dataManager.isLoading)
-                    
-                    Button {
-                        Task {
-                            await saveProfile()
-                        }
-                    } label: {
-                        HStack(spacing: 8) {
-                            if dataManager.isLoading {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.8)
-                            }
-                            Text(dataManager.isLoading ? "Saving..." : "Continue")
-                            .font(.system(size: 16, weight: .semibold))
-                        }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                        .background(isFormValid && !dataManager.isLoading ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
-                            .foregroundColor(.white)
-                            .cornerRadius(16)
-                    }
-                    .disabled(!isFormValid || dataManager.isLoading)
-                }
-                .padding(.bottom, 16)
-                
-                // Hidden NavigationLink for programmatic navigation
-                NavigationLink(
-                    destination: Group {
-                        if showBreakouts {
-                            Breakout1View()
+
+                        NavigationLink(
+                            destination: HeartHealthView()
                                 .environmentObject(onboardingManager)
-                                .environmentObject(dataManager)
-                        } else {
-                            HeartHealthView()
+                                .environmentObject(dataManager),
+                            isActive: $navigateToNextStep
+                        ) {
+                            EmptyView()
                         }
-                    },
-                    isActive: $navigateToNextStep
-                ) {
-                    EmptyView()
+                        .hidden()
+                    }
                 }
-                .hidden()
+                .padding(.horizontal, 24)
+                .padding(.bottom, 8)
             }
-            .padding(.horizontal, 24)
+            .scrollDismissesKeyboard(.interactively)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                OnboardingCTABar(
+                    onBack: { hideKeyboard(); dismiss() },
+                    backDisabled: dataManager.isLoading,
+                    onContinue: { hideKeyboard(); Task { await saveProfile() } },
+                    continueLabel: dataManager.isLoading ? "Saving..." : "Continue",
+                    continueLoading: dataManager.isLoading,
+                    continueDisabled: !isFormValid,
+                    showError: showError,
+                    errorMessage: errorMessage
+                )
+            }
         }
         .alert("Error", isPresented: $showError) {
             Button("OK", role: .cancel) { }
@@ -1944,6 +2067,13 @@ struct AboutYouView: View {
         .onAppear {
             // Step 3: About You
             onboardingManager.setCurrentStep(3)
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { hideKeyboard() }
+                    .font(.system(size: 17, weight: .semibold))
+            }
         }
     }
     
@@ -2073,309 +2203,199 @@ struct HeartHealthView: View {
     @State private var diabetesStatus: DiabetesStatus? = nil
     @State private var hasPriorHeartAttack: Bool = false
     @State private var hasPriorStroke: Bool = false
-    @State private var noPriorEvents: Bool = false  // "None of the above"
     
     // Medical conditions
     @State private var hasChronicKidneyDisease: Bool = false
     @State private var hasAtrialFibrillation: Bool = false
     @State private var hasHighCholesterol: Bool = false
-    @State private var noMedicalConditions: Bool = false  // "None of the above"
     
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
     @State private var navigateToNextStep: Bool = false
     
     var body: some View {
+        content
+            .alert("Error", isPresented: $showError) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(errorMessage)
+            }
+            .onAppear {
+                // Step 4: Heart Health
+                onboardingManager.setCurrentStep(4)
+            }
+    }
+
+    private var content: some View {
         ZStack {
             Color.miyaBackground.ignoresSafeArea()
             
-            VStack(spacing: 24) {
-                // Progress
-                OnboardingProgressBar(currentStep: currentStep, totalSteps: totalSteps)
-                    .padding(.top, 16)
-                
-                // Title + subtitle
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Heart health")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.miyaTextPrimary)
-                    
-                    Text("This helps us understand your cardiovascular health. Answer as best you can.")
-                        .font(.system(size: 15))
-                        .foregroundColor(.miyaTextSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            ScrollView {
+                VStack(spacing: 24) {
+                    OnboardingProgressBar(currentStep: currentStep, totalSteps: totalSteps)
+                        .padding(.top, 16)
+                    headerSection
+                    formSections
+                    nextStepLink
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
-                        
-                        // Blood Pressure Status
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("What is your blood pressure status?")
-                                .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-                            
-                            Text("High blood pressure (hypertension) often has no symptoms. If you're unsure, select 'never checked' and we'll remind you to get it tested.")
-                                .font(.system(size: 13))
-                                .foregroundColor(.miyaTextSecondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            
-                            VStack(spacing: 8) {
-                                ForEach(BloodPressureStatus.allCases) { status in
-                                    Button {
-                                        bloodPressureStatus = status
-                                    } label: {
-                                        HStack {
-                                            Text(status.displayText)
-                                                .font(.system(size: 14))
-                                                .foregroundColor(.miyaTextPrimary)
-                                            Spacer()
-                                            if bloodPressureStatus == status {
-                                                Image(systemName: "checkmark")
-                                                    .foregroundColor(.miyaPrimary)
-                                            }
-                                        }
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 10)
-                                        .background(bloodPressureStatus == status ? Color.miyaPrimary.opacity(0.1) : Color.white)
-                                        .cornerRadius(10)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .stroke(bloodPressureStatus == status ? Color.miyaPrimary : Color.gray.opacity(0.3), lineWidth: 1)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // Diabetes Status
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Do you have diabetes or pre-diabetes?")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.miyaTextPrimary)
-                            
-                            Text("Diabetes and pre-diabetes significantly affect cardiovascular health. Knowing your status helps us provide better guidance.")
-                                .font(.system(size: 13))
-                                .foregroundColor(.miyaTextSecondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            
-                            VStack(spacing: 8) {
-                                ForEach(DiabetesStatus.allCases) { status in
-                                    Button {
-                                        diabetesStatus = status
-                                    } label: {
-                                        HStack {
-                                            Text(status.displayText)
-                                                .font(.system(size: 14))
-                                                .foregroundColor(.miyaTextPrimary)
-                                            Spacer()
-                                            if diabetesStatus == status {
-                                                Image(systemName: "checkmark")
-                                                    .foregroundColor(.miyaPrimary)
-                                            }
-                                        }
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 10)
-                                        .background(diabetesStatus == status ? Color.miyaPrimary.opacity(0.1) : Color.white)
-                                        .cornerRadius(10)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .stroke(diabetesStatus == status ? Color.miyaPrimary : Color.gray.opacity(0.3), lineWidth: 1)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // Prior Cardiovascular Events
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Medical History")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.miyaTextPrimary)
-                            
-                            Text("Have you ever had any of the following? (Check all that apply)")
-                                .font(.system(size: 13))
-                                .foregroundColor(.miyaTextSecondary)
-                            
-                            VStack(spacing: 8) {
-                        SelectableConditionRow(
-                                    title: "Heart attack",
-                                    isSelected: Binding(
-                                        get: { hasPriorHeartAttack },
-                                        set: { newValue in
-                                            hasPriorHeartAttack = newValue
-                                            if newValue { noPriorEvents = false }
-                                        }
-                                    )
-                        )
-                        
-                        SelectableConditionRow(
-                                    title: "Stroke",
-                                    isSelected: Binding(
-                                        get: { hasPriorStroke },
-                                        set: { newValue in
-                                            hasPriorStroke = newValue
-                                            if newValue { noPriorEvents = false }
-                                        }
-                                    )
-                        )
-                        
-                        SelectableConditionRow(
-                                    title: "None of the above",
-                                    isSelected: Binding(
-                                        get: { noPriorEvents },
-                                        set: { newValue in
-                                            noPriorEvents = newValue
-                                            if newValue {
-                                                hasPriorHeartAttack = false
-                                                hasPriorStroke = false
-                                            }
-                                        }
-                                    ),
-                                    isDisabled: hasPriorHeartAttack || hasPriorStroke
-                                )
-                            }
-                        }
-                        
-                        // Other Medical Conditions
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Other Conditions")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.miyaTextPrimary)
-                            
-                            Text("Do you have any of these conditions? (Check all that apply)")
-                                .font(.system(size: 13))
-                                .foregroundColor(.miyaTextSecondary)
-                            
-                            VStack(spacing: 8) {
-                        SelectableConditionRow(
-                                    title: "Chronic kidney disease",
-                                    isSelected: Binding(
-                                        get: { hasChronicKidneyDisease },
-                                        set: { newValue in
-                                            hasChronicKidneyDisease = newValue
-                                            if newValue { noMedicalConditions = false }
-                                        }
-                                    )
-                        )
-                        
-                        SelectableConditionRow(
-                                    title: "Atrial fibrillation (irregular heartbeat)",
-                                    isSelected: Binding(
-                                        get: { hasAtrialFibrillation },
-                                        set: { newValue in
-                                            hasAtrialFibrillation = newValue
-                                            if newValue { noMedicalConditions = false }
-                                        }
-                                    )
-                                )
-                                
-                                SelectableConditionRow(
-                                    title: "High cholesterol (diagnosed by doctor)",
-                                    isSelected: Binding(
-                                        get: { hasHighCholesterol },
-                                        set: { newValue in
-                                            hasHighCholesterol = newValue
-                                            if newValue { noMedicalConditions = false }
-                                        }
-                                    )
-                                )
-                                
-                                SelectableConditionRow(
-                                    title: "None of the above",
-                                    isSelected: Binding(
-                                        get: { noMedicalConditions },
-                                        set: { newValue in
-                                            noMedicalConditions = newValue
-                                            if newValue {
-                                                hasChronicKidneyDisease = false
-                                                hasAtrialFibrillation = false
-                                                hasHighCholesterol = false
-                                            }
-                                        }
-                                    ),
-                                    isDisabled: hasChronicKidneyDisease || hasAtrialFibrillation || hasHighCholesterol
-                                )
-                            }
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-                .background(Color.miyaBackground)
-                
-                // Error message
-                if showError {
-                    Text(errorMessage)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.red)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(8)
-                }
-                
-                // Buttons
-                HStack(spacing: 12) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Text("Back")
-                            .font(.system(size: 15, weight: .medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.clear)
-                            .foregroundColor(.miyaTextSecondary)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .stroke(Color.miyaBackground, lineWidth: 1)
-                            )
-                    }
-                    .disabled(dataManager.isLoading)
-                    
-                    Button {
-                        Task {
-                            await saveHeartHealth()
-                        }
-                    } label: {
-                        HStack(spacing: 8) {
-                            if dataManager.isLoading {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.8)
-                            }
-                            Text(dataManager.isLoading ? "Saving..." : "Continue")
-                            .font(.system(size: 16, weight: .semibold))
-                        }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                        .background(!dataManager.isLoading ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
-                            .foregroundColor(.white)
-                            .cornerRadius(16)
-                    }
-                    .disabled(dataManager.isLoading)
-                }
-                .padding(.bottom, 16)
-                
-                // Hidden NavigationLink for programmatic navigation
-                NavigationLink(
-                    destination: MedicalHistoryView(),
-                    isActive: $navigateToNextStep
-                ) {
-                    EmptyView()
-                }
-                .hidden()
+                .padding(.horizontal, 24)
+                .padding(.bottom, 8)
             }
-            .padding(.horizontal, 24)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                OnboardingCTABar(
+                    onBack: { dismiss() },
+                    backDisabled: dataManager.isLoading,
+                    onContinue: { Task { await saveHeartHealth() } },
+                    continueLabel: dataManager.isLoading ? "Saving..." : "Continue",
+                    continueLoading: dataManager.isLoading,
+                    continueDisabled: bloodPressureStatus == nil || diabetesStatus == nil,
+                    showError: showError,
+                    errorMessage: errorMessage
+                )
+            }
         }
-        .alert("Error", isPresented: $showError) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(errorMessage)
+    }
+
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            OnboardingPersonBadge(
+                firstName: onboardingManager.firstName,
+                lastName: onboardingManager.lastName
+            )
+            Text("Heart health")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundColor(.miyaTextPrimary)
+
+            Text("This helps us understand your cardiovascular health. Answer as best you can.")
+                .font(.system(size: 15))
+                .foregroundColor(.miyaTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .onAppear {
-            // Step 4: Heart Health
-            onboardingManager.setCurrentStep(4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var formSections: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            bloodPressureSection
+            diabetesSection
+            historySection
+            otherConditionsSection
+        }
+    }
+
+    private var bloodPressureSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("What is your blood pressure status?")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.miyaTextPrimary)
+
+            Text("High blood pressure (hypertension) often has no symptoms. If you're unsure, select 'never checked' and we'll remind you to get it tested.")
+                .font(.system(size: 13))
+                .foregroundColor(.miyaTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(spacing: 8) {
+                ForEach(BloodPressureStatus.allCases) { status in
+                    statusButton(
+                        label: status.displayText,
+                        selected: bloodPressureStatus == status
+                    ) {
+                        bloodPressureStatus = status
+                    }
+                }
+            }
+        }
+    }
+
+    private var diabetesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Do you have diabetes or pre-diabetes?")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.miyaTextPrimary)
+
+            Text("Diabetes and pre-diabetes significantly affect cardiovascular health. Knowing your status helps us provide better guidance.")
+                .font(.system(size: 13))
+                .foregroundColor(.miyaTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(spacing: 8) {
+                ForEach(DiabetesStatus.allCases) { status in
+                    statusButton(
+                        label: status.displayText,
+                        selected: diabetesStatus == status
+                    ) {
+                        diabetesStatus = status
+                    }
+                }
+            }
+        }
+    }
+
+    private var historySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Medical History")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.miyaTextPrimary)
+
+            Text("Have you ever had any of the following?")
+                .font(.system(size: 13))
+                .foregroundColor(.miyaTextSecondary)
+
+            VStack(spacing: 8) {
+                ConditionToggleRow(title: "Heart attack", isOn: $hasPriorHeartAttack)
+                ConditionToggleRow(title: "Stroke", isOn: $hasPriorStroke)
+            }
+        }
+    }
+
+    private var otherConditionsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Other Conditions")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.miyaTextPrimary)
+
+            Text("Do you have any of these conditions?")
+                .font(.system(size: 13))
+                .foregroundColor(.miyaTextSecondary)
+
+            VStack(spacing: 8) {
+                ConditionToggleRow(title: "Chronic kidney disease", isOn: $hasChronicKidneyDisease)
+                ConditionToggleRow(title: "Atrial fibrillation (irregular heartbeat)", isOn: $hasAtrialFibrillation)
+                ConditionToggleRow(title: "High cholesterol (diagnosed by doctor)", isOn: $hasHighCholesterol)
+            }
+        }
+    }
+
+    private var nextStepLink: some View {
+        NavigationLink(
+            destination: MedicalHistoryView(),
+            isActive: $navigateToNextStep
+        ) {
+            EmptyView()
+        }
+        .hidden()
+    }
+
+    private func statusButton(label: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(label)
+                    .font(.system(size: 14))
+                    .foregroundColor(.miyaTextPrimary)
+                Spacer()
+                if selected {
+                    Image(systemName: "checkmark")
+                        .foregroundColor(.miyaPrimary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(selected ? Color.miyaPrimary.opacity(0.1) : Color.white)
+            .cornerRadius(10)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(selected ? Color.miyaPrimary : Color.gray.opacity(0.3), lineWidth: 1)
+            )
         }
     }
     
@@ -2507,25 +2527,29 @@ struct MedicalHistoryView: View {
         ZStack {
             Color.miyaBackground.ignoresSafeArea()
             
-            VStack(spacing: 24) {
-                // Progress
-                OnboardingProgressBar(currentStep: currentStep, totalSteps: totalSteps)
-                    .padding(.top, 16)
-                
-                // Title + subtitle
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Family Health History")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.miyaTextPrimary)
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Progress
+                    OnboardingProgressBar(currentStep: currentStep, totalSteps: totalSteps)
+                        .padding(.top, 16)
                     
-                    Text("Heart disease often runs in families. Understanding your family's health helps us assess your risk.")
-                        .font(.system(size: 15))
-                        .foregroundColor(.miyaTextSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                
-                ScrollView {
+                    // Title + subtitle
+                    VStack(alignment: .leading, spacing: 8) {
+                        OnboardingPersonBadge(
+                            firstName: onboardingManager.firstName,
+                            lastName: onboardingManager.lastName
+                        )
+                        Text("Family Health History")
+                            .font(.system(size: 24, weight: .bold))
+                            .foregroundColor(.miyaTextPrimary)
+                        
+                        Text("Heart disease often runs in families. Understanding your family's health helps us assess your risk.")
+                            .font(.system(size: 15))
+                            .foregroundColor(.miyaTextSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    
                     VStack(alignment: .leading, spacing: 16) {
                         Text("Do any of your parents or siblings have a history of the following? Think about your mother, father, brothers, and sisters.")
                             .font(.system(size: 14, weight: .medium))
@@ -2538,162 +2562,71 @@ struct MedicalHistoryView: View {
                             .italic()
                             .padding(.bottom, 4)
                         
-                        SelectableConditionRow(
+                        ConditionToggleRow(
                             title: "Heart disease (heart attack, bypass surgery) before age 60",
-                            isSelected: Binding(
-                                get: { familyHeartDiseaseEarly },
-                                set: { newValue in
-                                    if !isUnsure {
-                                        familyHeartDiseaseEarly = newValue
-                                        // If selecting any option, clear "unsure"
-                                        if newValue {
-                                            isUnsure = false
-                                        }
-                                    }
-                                }
-                            ),
-                            isDisabled: isUnsure
+                            isOn: $familyHeartDiseaseEarly
                         )
                         
-                        SelectableConditionRow(
+                        ConditionToggleRow(
                             title: "Stroke before age 60",
-                            isSelected: Binding(
-                                get: { familyStrokeEarly },
-                                set: { newValue in
-                                    if !isUnsure {
-                                        familyStrokeEarly = newValue
-                                        // If selecting any option, clear "unsure"
-                                        if newValue {
-                                            isUnsure = false
-                                        }
-                                    }
-                                }
-                            ),
-                            isDisabled: isUnsure
+                            isOn: $familyStrokeEarly
                         )
                         
-                        SelectableConditionRow(
+                        ConditionToggleRow(
                             title: "Type 2 diabetes (at any age)",
-                            isSelected: Binding(
-                                get: { familyType2Diabetes },
-                                set: { newValue in
-                                    if !isUnsure {
-                                        familyType2Diabetes = newValue
-                                        // If selecting any option, clear "unsure"
-                                        if newValue {
-                                            isUnsure = false
-                                        }
-                                    }
-                                }
-                            ),
-                            isDisabled: isUnsure
+                            isOn: $familyType2Diabetes
                         )
                         
                         Divider()
                             .padding(.vertical, 8)
                         
-                        SelectableConditionRow(
-                            title: "Not sure / None of these",
-                            isSelected: Binding(
-                                get: { isUnsure },
-                                set: { newValue in
-                                    isUnsure = newValue
-                                    // If selecting "unsure", clear all other selections
-                                    if newValue {
-                                        familyHeartDiseaseEarly = false
-                                        familyStrokeEarly = false
-                                        familyType2Diabetes = false
-                                    }
-                                }
-                            ),
-                            isDisabled: familyHeartDiseaseEarly || familyStrokeEarly || familyType2Diabetes
+                        ConditionToggleRow(
+                            title: "Not sure / I don't know my family history",
+                            isOn: $isUnsure
                         )
                     }
-                    .padding(.vertical, 4)
-                }
-                .background(Color.miyaBackground)
-                
-                // Error message
-                if showError {
-                    Text(errorMessage)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.red)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(8)
-                }
-                
-                // Buttons
-                HStack(spacing: 12) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Text("Back")
-                            .font(.system(size: 15, weight: .medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.clear)
-                            .foregroundColor(.miyaTextSecondary)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .stroke(Color.miyaBackground, lineWidth: 1)
-                            )
-                    }
-                    .disabled(dataManager.isLoading)
-                    
-                    Button {
-                        Task {
-                            await saveMedicalHistory()
-                        }
-                    } label: {
-                        HStack(spacing: 8) {
-                            if dataManager.isLoading {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.8)
+
+                    // Hidden NavigationLink - goes to Breakout 1 (self-onboarding) or next step based on user type
+                    NavigationLink(
+                        destination: Group {
+                            if showBreakouts {
+                                Breakout1View()
+                                    .environmentObject(onboardingManager)
+                                    .environmentObject(dataManager)
+                            } else if isGuidedInviteeAwaitingAdmin {
+                                OnboardingCompleteView(membersCount: 0)
+                                    .environmentObject(onboardingManager)
+                                    .environmentObject(dataManager)
+                            } else if onboardingManager.isInvitedUser {
+                                AlertsChampionView()
+                                    .environmentObject(onboardingManager)
+                                    .environmentObject(dataManager)
+                            } else {
+                                AlertsChampionView()
+                                    .environmentObject(onboardingManager)
+                                    .environmentObject(dataManager)
                             }
-                            Text(dataManager.isLoading ? "Saving..." : "Continue")
-                            .font(.system(size: 16, weight: .semibold))
-                        }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                        .background(!dataManager.isLoading ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
-                            .foregroundColor(.white)
-                            .cornerRadius(16)
+                        },
+                        isActive: $navigateToNextStep
+                    ) {
+                        EmptyView()
                     }
-                    .disabled(dataManager.isLoading)
+                    .hidden()
                 }
-                .padding(.bottom, 16)
-                
-                // Hidden NavigationLink - goes to Breakout 2 (self-onboarding) or next step based on user type
-                NavigationLink(
-                    destination: Group {
-                        if showBreakouts {
-                            Breakout2View()
-                                .environmentObject(onboardingManager)
-                                .environmentObject(dataManager)
-                        } else if isGuidedInviteeAwaitingAdmin {
-                            OnboardingCompleteView(membersCount: 0)
-                                .environmentObject(onboardingManager)
-                                .environmentObject(dataManager)
-                        } else if onboardingManager.isInvitedUser {
-                            AlertsChampionView()
-                                .environmentObject(onboardingManager)
-                                .environmentObject(dataManager)
-                        } else {
-                            FamilyMembersInviteView()
-                                .environmentObject(onboardingManager)
-                                .environmentObject(dataManager)
-                        }
-                    },
-                    isActive: $navigateToNextStep
-                ) {
-                    EmptyView()
-                }
-                .hidden()
+                .padding(.horizontal, 24)
+                .padding(.bottom, 8)
             }
-            .padding(.horizontal, 24)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                OnboardingCTABar(
+                    onBack: { dismiss() },
+                    backDisabled: dataManager.isLoading,
+                    onContinue: { Task { await saveMedicalHistory() } },
+                    continueLabel: dataManager.isLoading ? "Saving..." : "Continue",
+                    continueLoading: dataManager.isLoading,
+                    showError: showError,
+                    errorMessage: errorMessage
+                )
+            }
         }
         .alert("Error", isPresented: $showError) {
             Button("OK", role: .cancel) { }
@@ -2772,6 +2705,50 @@ struct MedicalHistoryView: View {
         }
     }
 }
+// Name label shown above screen titles to anchor personal health data entry
+struct OnboardingPersonBadge: View {
+    let firstName: String
+    let lastName: String
+
+    private var fullName: String {
+        [firstName, lastName].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    var body: some View {
+        if !firstName.isEmpty {
+            Text(fullName)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.miyaTextSecondary)
+        }
+    }
+}
+
+// Reusable toggle row for conditions (used in onboarding)
+struct ConditionToggleRow: View {
+    let title: String
+    @Binding var isOn: Bool
+    
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            Text(title)
+                .font(.system(size: 14))
+                .foregroundColor(.miyaTextPrimary)
+                .multilineTextAlignment(.leading)
+        }
+        .toggleStyle(SwitchToggleStyle(tint: .miyaPrimary))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color.white)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(isOn ? Color.miyaPrimary : Color.miyaBackground.opacity(0.9), lineWidth: isOn ? 1.5 : 1)
+        )
+    }
+}
+
 // Reusable selectable row for conditions
 struct SelectableConditionRow: View {
     let title: String
@@ -2835,176 +2812,430 @@ struct AlertsChampionView: View {
     private let totalSteps: Int = 7
     private let currentStep: Int = 7  // Final step
     
-    @State private var navigateToNextStep: Bool = false
-    
+    @State private var navigateToInviteSetup: Bool = false
+    @State private var navigateToComplete: Bool = false
+    @State private var showPushDeniedAlert: Bool = false
+    @State private var showPushEnabledConfirmation: Bool = false
+    @State private var isSaving: Bool = false
+    @State private var showError: Bool = false
+    @State private var errorMessage: String = ""
+    @State private var allowOpenAIThirdParty: Bool = false
+    @State private var showOpenAIThirdPartyExplainer: Bool = false
+    @State private var showAIReminderSheet: Bool = false
+    @State private var showAIBenefitsSheet: Bool = false
+    /// True when benefits sheet is dismissed after a button already ran save/navigation.
+    @State private var aiBenefitsDismissSkipFollowUpSave: Bool = false
+    /// Avoid presenting benefits after reminder dismiss when user chose Turn on (state batching).
+    @State private var skipBenefitsAfterReminderDismiss: Bool = false
+
     var body: some View {
         ZStack {
             Color.miyaBackground.ignoresSafeArea()
-            
-            VStack(spacing: 24) {
-                // Progress
-                OnboardingProgressBar(currentStep: currentStep, totalSteps: totalSteps)
-                    .padding(.top, 16)
-                
-                // Title + subtitle
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Privacy & Alerts")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.miyaTextPrimary)
-                    
-                    Text("You'll have full control over your health data once your family joins.")
-                        .font(.system(size: 15))
-                        .foregroundColor(.miyaTextSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        
-                        // Control What They See
-                        PrivacyFeatureCard(
-                            icon: "eye.circle.fill",
-                            iconColor: .blue,
-                            title: "Control What They See",
-                            description: "Choose which family members can view your vitality scores, sleep patterns, stress levels, and medical data."
-                        )
-                        
-                        // Choose Your Champion
-                        PrivacyFeatureCard(
-                            icon: "heart.circle.fill",
-                            iconColor: .red,
-                            title: "Choose Your Champion",
-                            description: "Select one trusted family member who always sees your data and receives critical alerts on your behalf."
-                        )
-                        
-                        // Smart Alert Timing
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack(spacing: 12) {
-                                Image(systemName: "bell.circle.fill")
-                                    .font(.system(size: 32))
-                                    .foregroundColor(.orange)
-                                
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Smart Alert Timing")
-                                        .font(.system(size: 16, weight: .semibold))
-                                        .foregroundColor(.miyaTextPrimary)
-                                    
-                                    Text("Decide who gets notified and when")
-                                        .font(.system(size: 14))
-                                        .foregroundColor(.miyaTextSecondary)
-                                }
-                            }
-                            
-                            VStack(alignment: .leading, spacing: 8) {
-                                AlertTimingRow(
-                                    day: "7",
-                                    severity: "Gentle",
-                                    description: "Private reminder just for you",
-                                    color: .green
-                                )
-                                
-                                AlertTimingRow(
-                                    day: "14",
-                                    severity: "Moderate",
-                                    description: "Choose who to notify from your family",
-                                    color: .orange
-                                )
-                                
-                                AlertTimingRow(
-                                    day: "21",
-                                    severity: "Critical",
-                                    description: "Alert you and your champion",
-                                    color: .red
-                                )
-                            }
-                            .padding(12)
-                            .background(Color.white)
-                            .cornerRadius(12)
-                        }
-                        .padding(16)
-                        .background(Color.miyaPrimary.opacity(0.05))
-                        .cornerRadius(16)
-                        
-                        // Per-Metric Privacy
-                        PrivacyFeatureCard(
-                            icon: "slider.horizontal.3",
-                            iconColor: .purple,
-                            title: "Customize Per Metric",
-                            description: "Set different privacy rules for sleep, movement, stress, and medical data. For example: hide stress from parents but share with your partner."
-                        )
-                        
-                        // Info Banner
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "info.circle.fill")
-                                    .foregroundColor(.miyaPrimary)
-                                Text("Configure Later")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundColor(.miyaTextPrimary)
-                            }
-                            
-                            Text("You can set up these preferences from your dashboard once family members accept your invites.")
-                                .font(.system(size: 13))
-                                .foregroundColor(.miyaTextSecondary)
-                        }
-                        .padding(12)
-                        .background(Color.miyaPrimary.opacity(0.1))
-                        .cornerRadius(12)
-                    }
-                    .padding(.vertical, 4)
-                }
-                .background(Color.miyaBackground)
-                
+            content
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
-                
-                // Buttons
-                HStack(spacing: 12) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Text("Back")
-                            .font(.system(size: 15, weight: .medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.clear)
-                            .foregroundColor(.miyaTextSecondary)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .stroke(Color.miyaBackground, lineWidth: 1)
-                            )
-                    }
-                    
-                    Button {
-                        navigateToNextStep = true
-                    } label: {
-                        Text("Finish Setup")
-                            .font(.system(size: 16, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.miyaPrimary)
-                            .foregroundColor(.white)
-                            .cornerRadius(16)
-                    }
-                }
-                .padding(.bottom, 16)
-                
-                // Hidden NavigationLink - goes to Onboarding Complete
-                NavigationLink(
-                    destination: OnboardingCompleteView(membersCount: onboardingManager.invitedMembers.count)
-                        .environmentObject(onboardingManager)
-                        .environmentObject(dataManager),
-                    isActive: $navigateToNextStep
-                ) {
-                    EmptyView()
-                }
-                .hidden()
+                Button("Done") { hideKeyboard() }
+                    .font(.system(size: 17, weight: .semibold))
             }
-            .padding(.horizontal, 24)
         }
         .onAppear {
-            // Step 7: Privacy & Alerts Preview (Final Step)
-            onboardingManager.setCurrentStep(7)
+            onboardingManager.setCurrentStep(onboardingManager.isInvitedUser ? 6 : 7)
+        }
+        .onChange(of: onboardingManager.notifyPush) { _, isEnabled in
+            guard isEnabled else { return }
+            requestPushAuthorizationFromPrivacyStep()
+        }
+        .alert("Push Notifications Blocked", isPresented: $showPushDeniedAlert) {
+            Button("Not now", role: .cancel) {
+                onboardingManager.notifyPush = false
+            }
+            Button("Open Settings") {
+                onboardingManager.notifyPush = false
+                guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                if UIApplication.shared.canOpenURL(url) {
+                    UIApplication.shared.open(url)
+                }
+            }
+        } message: {
+            Text("Notifications were previously turned off for Miya on this device. Apple requires you to re-enable them in Settings > Miya > Notifications.")
+        }
+        .overlay(alignment: .top) {
+            if showPushEnabledConfirmation {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    Text("Push notifications enabled")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.miyaTextPrimary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 4)
+                .padding(.top, 12)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.easeOut(duration: 0.3), value: showPushEnabledConfirmation)
+            }
+        }
+        .sheet(isPresented: $showAIReminderSheet, onDismiss: {
+            if skipBenefitsAfterReminderDismiss {
+                skipBenefitsAfterReminderDismiss = false
+                return
+            }
+            if !allowOpenAIThirdParty {
+                DispatchQueue.main.async {
+                    showAIBenefitsSheet = true
+                }
+            }
+        }) {
+            OnboardingAIReminderSheet(
+                onTurnOn: {
+                    skipBenefitsAfterReminderDismiss = true
+                    allowOpenAIThirdParty = true
+                    showAIReminderSheet = false
+                    Task { await saveAlertPreferencesAndContinue() }
+                },
+                onNoThanks: {
+                    showAIReminderSheet = false
+                }
+            )
+        }
+        .sheet(isPresented: $showAIBenefitsSheet, onDismiss: {
+            if aiBenefitsDismissSkipFollowUpSave {
+                aiBenefitsDismissSkipFollowUpSave = false
+                return
+            }
+            if !allowOpenAIThirdParty {
+                Task { await saveAlertPreferencesAndContinue() }
+            }
+        }) {
+            OnboardingAIBenefitsSheet(
+                onTurnOnAndContinue: {
+                    allowOpenAIThirdParty = true
+                    aiBenefitsDismissSkipFollowUpSave = true
+                    showAIBenefitsSheet = false
+                    Task { await saveAlertPreferencesAndContinue() }
+                },
+                onContinueWithoutAI: {
+                    aiBenefitsDismissSkipFollowUpSave = true
+                    showAIBenefitsSheet = false
+                    Task { await saveAlertPreferencesAndContinue() }
+                }
+            )
+        }
+    }
+
+    private var content: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                OnboardingProgressBar(currentStep: currentStep, totalSteps: totalSteps)
+                    .padding(.top, 16)
+
+                headerSection
+                cardsSection
+                navigationLinks
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 8)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            OnboardingCTABar(
+                onBack: { hideKeyboard(); dismiss() },
+                backDisabled: isSaving,
+                onContinue: { Task { await handlePrivacyAlertsContinueTapped() } },
+                continueLabel: isSaving ? "Saving…" : (onboardingManager.isInvitedUser ? "Finish Setup" : "Continue"),
+                continueLoading: isSaving,
+                showError: showError,
+                errorMessage: errorMessage
+            )
+        }
+    }
+
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Privacy & Alerts")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundColor(.miyaTextPrimary)
+
+            Text("Set the essentials now so you can invite family with confidence. You can fine-tune detailed sharing rules from your dashboard later.")
+                .font(.system(size: 15))
+                .foregroundColor(.miyaTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var cardsSection: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            notificationCard
+            smartAlertTimingCard
+            openAIThirdPartyCard
+            infoBanner
+        }
+    }
+    
+    private var openAIThirdPartyCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Text("Optional AI features (Miya AI)")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.miyaTextPrimary)
+                Spacer()
+                Button {
+                    showOpenAIThirdPartyExplainer = true
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundColor(.miyaPrimary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Learn how Miya AI is used")
+            }
+            Text("Miya can use Miya AI for family chat, insights, and message suggestions. You stay in control — leave this off if you prefer.")
+                .font(.system(size: 13))
+                .foregroundColor(.miyaTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Toggle(isOn: $allowOpenAIThirdParty) {
+                Text("I agree to share limited data with Miya AI for these features")
+                    .font(.system(size: 14))
+                    .foregroundColor(.miyaTextPrimary)
+            }
+            .tint(.miyaPrimary)
+        }
+        .padding(16)
+        .background(Color.white)
+        .cornerRadius(16)
+        .shadow(color: .black.opacity(0.03), radius: 8, x: 0, y: 2)
+        .sheet(isPresented: $showOpenAIThirdPartyExplainer) {
+            NavigationStack {
+                ScrollView {
+                    MiyaAIDataSharingExplainerContent()
+                        .padding(24)
+                }
+                .background(Color.miyaBackground.ignoresSafeArea())
+                .navigationTitle("Miya AI")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showOpenAIThirdPartyExplainer = false }
+                    }
+                }
+            }
+        }
+    }
+
+    private var notificationCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("How should Miya notify you?")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.miyaTextPrimary)
+            Text("Pick the channels you want right now.")
+                .font(.system(size: 13))
+                .foregroundColor(.miyaTextSecondary)
+
+            VStack(spacing: 8) {
+                NotificationToggleRow(title: "In-app notifications", isOn: $onboardingManager.notifyInApp)
+                NotificationToggleRow(title: "Push notifications", isOn: $onboardingManager.notifyPush)
+                NotificationToggleRow(title: "Email notifications", isOn: $onboardingManager.notifyEmail)
+            }
+        }
+        .padding(16)
+        .background(Color.white)
+        .cornerRadius(16)
+        .shadow(color: .black.opacity(0.03), radius: 8, x: 0, y: 2)
+    }
+
+    private var smartAlertTimingCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: "bell.circle.fill")
+                    .font(.system(size: 32))
+                    .foregroundColor(.orange)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Smart Alert Timing")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.miyaTextPrimary)
+
+                    Text("How pattern alerts escalate over time")
+                        .font(.system(size: 14))
+                        .foregroundColor(.miyaTextSecondary)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                AlertTimingRow(
+                    day: "7",
+                    severity: "Gentle",
+                    description: "Private reminder just for you",
+                    color: .green
+                )
+
+                AlertTimingRow(
+                    day: "14",
+                    severity: "Moderate",
+                    description: "Other family members on Miya are notified too",
+                    color: .orange
+                )
+
+                AlertTimingRow(
+                    day: "21",
+                    severity: "Critical",
+                    description: "Everyone in your family on Miya is notified",
+                    color: .red
+                )
+            }
+            .padding(12)
+            .background(Color.white)
+            .cornerRadius(12)
+        }
+        .padding(16)
+        .background(Color.miyaPrimary.opacity(0.05))
+        .cornerRadius(16)
+    }
+
+    private var infoBanner: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle.fill")
+                    .foregroundColor(.miyaPrimary)
+                Text("Fine-tune later")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.miyaTextPrimary)
+            }
+
+            Text("Detailed per-person and per-metric privacy controls are available from your dashboard anytime.")
+                .font(.system(size: 13))
+                .foregroundColor(.miyaTextSecondary)
+        }
+        .padding(12)
+        .background(Color.miyaPrimary.opacity(0.1))
+        .cornerRadius(12)
+    }
+
+    private var navigationLinks: some View {
+        Group {
+            NavigationLink(
+                destination: AdditionalFamilyMembersCountView()
+                    .environmentObject(onboardingManager)
+                    .environmentObject(dataManager),
+                isActive: $navigateToInviteSetup
+            ) {
+                EmptyView()
+            }
+            .hidden()
+
+            NavigationLink(
+                destination: OnboardingCompleteView(membersCount: onboardingManager.invitedMembers.count)
+                    .environmentObject(onboardingManager)
+                    .environmentObject(dataManager),
+                isActive: $navigateToComplete
+            ) {
+                EmptyView()
+            }
+            .hidden()
+        }
+    }
+
+    @MainActor
+    private func handlePrivacyAlertsContinueTapped() async {
+        if allowOpenAIThirdParty {
+            await saveAlertPreferencesAndContinue()
+        } else {
+            showAIReminderSheet = true
+        }
+    }
+
+    private func saveAlertPreferencesAndContinue() async {
+        hideKeyboard()
+        showError = false
+        isSaving = true
+        defer { isSaving = false }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+
+        do {
+            try await dataManager.saveAlertPreferences(
+                notifyInApp: onboardingManager.notifyInApp,
+                notifyPush: onboardingManager.notifyPush,
+                notifyEmail: onboardingManager.notifyEmail,
+                quietStart: formatter.string(from: onboardingManager.quietHoursStart),
+                quietEnd: formatter.string(from: onboardingManager.quietHoursEnd),
+                quietApplyCritical: onboardingManager.quietHoursApplyCritical
+            )
+            try await dataManager.applyAIThirdPartyConsent(
+                enabled: allowOpenAIThirdParty,
+                source: allowOpenAIThirdParty ? "onboarding_agree" : "onboarding_decline"
+            )
+        } catch {
+            showError = true
+            errorMessage = "Couldn't save your preferences. Please try again."
+            return
+        }
+
+        if onboardingManager.isInvitedUser {
+            navigateToComplete = true
+        } else {
+            navigateToInviteSetup = true
+        }
+    }
+
+    private func requestPushAuthorizationFromPrivacyStep() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            let status = settings.authorizationStatus
+#if DEBUG
+            let label: String
+            switch status {
+            case .notDetermined: label = "notDetermined"
+            case .denied:        label = "denied"
+            case .authorized:    label = "authorized"
+            case .provisional:   label = "provisional"
+            case .ephemeral:     label = "ephemeral"
+            @unknown default:    label = "unknown"
+            }
+            print("🔔 PushAuth: current status = \(label)")
+#endif
+            switch status {
+            case .authorized, .provisional, .ephemeral:
+                DispatchQueue.main.async {
+                    UIApplication.shared.registerForRemoteNotifications()
+                    showPushEnabledConfirmation = true
+                    hidePushConfirmationAfterDelay()
+                }
+            case .notDetermined:
+                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+                    DispatchQueue.main.async {
+                        if granted {
+                            UIApplication.shared.registerForRemoteNotifications()
+                            showPushEnabledConfirmation = true
+                            hidePushConfirmationAfterDelay()
+                        } else {
+                            onboardingManager.notifyPush = false
+                            showPushDeniedAlert = true
+                        }
+                    }
+                }
+            case .denied:
+                DispatchQueue.main.async {
+                    onboardingManager.notifyPush = false
+                    showPushDeniedAlert = true
+                }
+            @unknown default:
+                DispatchQueue.main.async {
+                    onboardingManager.notifyPush = false
+                }
+            }
+        }
+    }
+
+    private func hidePushConfirmationAfterDelay() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            withAnimation { showPushEnabledConfirmation = false }
         }
     }
 }
@@ -3146,6 +3377,8 @@ enum Tier2SharingOption: String {
 
 struct WellbeingPrivacyView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.onboardingBackBehavior) private var onboardingBackBehavior
+    @Environment(\.onboardingResumeStepBack) private var onboardingResumeStepBack
     @EnvironmentObject var dataManager: DataManager
     @EnvironmentObject var onboardingManager: OnboardingManager
     
@@ -3158,7 +3391,13 @@ struct WellbeingPrivacyView: View {
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
     @State private var navigateToNextStep: Bool = false
-    
+    @State private var allowOpenAIThirdParty: Bool = false
+    @State private var showOpenAIThirdPartyExplainerWB: Bool = false
+    @State private var showAIReminderSheetWB: Bool = false
+    @State private var showAIBenefitsSheetWB: Bool = false
+    @State private var aiBenefitsDismissSkipFollowUpSaveWB: Bool = false
+    @State private var skipBenefitsAfterReminderDismissWB: Bool = false
+
     var body: some View {
         ZStack {
             Color.miyaBackground.ignoresSafeArea()
@@ -3279,10 +3518,53 @@ struct WellbeingPrivacyView: View {
                             }
                             .buttonStyle(.plain)
                         }
+                        
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(alignment: .top, spacing: 10) {
+                                Text("Optional AI (Miya AI)")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundColor(.miyaTextPrimary)
+                                Spacer()
+                                Button {
+                                    showOpenAIThirdPartyExplainerWB = true
+                                } label: {
+                                    Image(systemName: "info.circle")
+                                        .font(.system(size: 17, weight: .medium))
+                                        .foregroundColor(.miyaPrimary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            Text("Turn on only if you want Miya to use Miya AI for insights and chat.")
+                                .font(.system(size: 13))
+                                .foregroundColor(.miyaTextSecondary)
+                            Toggle(isOn: $allowOpenAIThirdParty) {
+                                Text("I agree to share limited data with Miya AI")
+                                    .font(.system(size: 14))
+                            }
+                            .tint(.miyaPrimary)
+                        }
+                        .padding(.vertical, 8)
                     }
                     .padding(.vertical, 4)
                 }
+                .scrollDismissesKeyboard(.interactively)
                 .background(Color.miyaBackground)
+                .sheet(isPresented: $showOpenAIThirdPartyExplainerWB) {
+                    NavigationStack {
+                        ScrollView {
+                            MiyaAIDataSharingExplainerContent()
+                                .padding(24)
+                        }
+                        .background(Color.miyaBackground.ignoresSafeArea())
+                        .navigationTitle("Miya AI")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { showOpenAIThirdPartyExplainerWB = false }
+                            }
+                        }
+                    }
+                }
                 
                 // Error message
                 if showError {
@@ -3298,7 +3580,12 @@ struct WellbeingPrivacyView: View {
                 // Buttons
                 HStack(spacing: 12) {
                     Button {
-                        dismiss()
+                        OnboardingBackAction.perform(
+                            behavior: onboardingBackBehavior,
+                            resumeStepBack: onboardingResumeStepBack,
+                            dismiss: dismiss,
+                            hideKeyboardFirst: false
+                        )
                     } label: {
                         Text("Back")
                             .font(.system(size: 15, weight: .medium))
@@ -3315,7 +3602,7 @@ struct WellbeingPrivacyView: View {
                     
                     Button {
                         Task {
-                            await savePrivacySettings()
+                            await handleWellbeingPrivacyContinueTapped()
                         }
                     } label: {
                         HStack(spacing: 8) {
@@ -3353,9 +3640,64 @@ struct WellbeingPrivacyView: View {
         } message: {
             Text(errorMessage)
         }
+        .sheet(isPresented: $showAIReminderSheetWB, onDismiss: {
+            if skipBenefitsAfterReminderDismissWB {
+                skipBenefitsAfterReminderDismissWB = false
+                return
+            }
+            if !allowOpenAIThirdParty {
+                DispatchQueue.main.async {
+                    showAIBenefitsSheetWB = true
+                }
+            }
+        }) {
+            OnboardingAIReminderSheet(
+                onTurnOn: {
+                    skipBenefitsAfterReminderDismissWB = true
+                    allowOpenAIThirdParty = true
+                    showAIReminderSheetWB = false
+                    Task { await savePrivacySettings() }
+                },
+                onNoThanks: {
+                    showAIReminderSheetWB = false
+                }
+            )
+        }
+        .sheet(isPresented: $showAIBenefitsSheetWB, onDismiss: {
+            if aiBenefitsDismissSkipFollowUpSaveWB {
+                aiBenefitsDismissSkipFollowUpSaveWB = false
+                return
+            }
+            if !allowOpenAIThirdParty {
+                Task { await savePrivacySettings() }
+            }
+        }) {
+            OnboardingAIBenefitsSheet(
+                onTurnOnAndContinue: {
+                    allowOpenAIThirdParty = true
+                    aiBenefitsDismissSkipFollowUpSaveWB = true
+                    showAIBenefitsSheetWB = false
+                    Task { await savePrivacySettings() }
+                },
+                onContinueWithoutAI: {
+                    aiBenefitsDismissSkipFollowUpSaveWB = true
+                    showAIBenefitsSheetWB = false
+                    Task { await savePrivacySettings() }
+                }
+            )
+        }
         .onAppear {
             // Step 6: Wellbeing Privacy
             onboardingManager.setCurrentStep(6)
+        }
+    }
+
+    @MainActor
+    private func handleWellbeingPrivacyContinueTapped() async {
+        if allowOpenAIThirdParty {
+            await savePrivacySettings()
+        } else {
+            showAIReminderSheetWB = true
         }
     }
     
@@ -3372,6 +3714,10 @@ struct WellbeingPrivacyView: View {
             try await dataManager.savePrivacySettings(
                 tier1Visibility: tier1Option.rawValue,
                 tier2Visibility: tier2Option.rawValue
+            )
+            try await dataManager.applyAIThirdPartyConsent(
+                enabled: allowOpenAIThirdParty,
+                source: allowOpenAIThirdParty ? "onboarding_agree" : "onboarding_decline"
             )
             
             // Navigate to next step
@@ -3412,15 +3758,59 @@ struct PrivacyOptionPill: View {
 }
 // MARK: - INVITE FAMILY MEMBERS (ONE BY ONE)
 
+enum RelationshipGroup { case family, supportNetwork }
+enum RelationshipDirection { case upward, downward, lateral }
+
 enum MemberRelationship: String, CaseIterable, Identifiable {
-    case partner = "Partner"
-    case parent = "Parent"
-    case child = "Child"
-    case sibling = "Sibling"
+    case partner     = "Partner"
+    case parent      = "Parent"
+    case child       = "Child"
+    case sibling     = "Sibling"
     case grandparent = "Grandparent"
-    case other = "Other"
-    
+    case grandchild  = "Grandchild"
+    case other       = "Other"   // UI-only sentinel — never stored directly in the DB
+
     var id: String { rawValue }
+
+    var group: RelationshipGroup {
+        switch self {
+        case .other: return .supportNetwork
+        default:     return .family
+        }
+    }
+
+    var direction: RelationshipDirection {
+        switch self {
+        case .parent, .grandparent: return .upward
+        case .child, .grandchild:   return .downward
+        default:                    return .lateral
+        }
+    }
+
+    /// All raw values that may legally appear in the family_members.relationship column.
+    /// Excludes the .other sentinel (never stored directly), includes legacy "Other" for
+    /// backward compatibility, and includes all MemberRelationshipOtherType sub-type values.
+    static var allValidStoredValues: Set<String> {
+        let coreValues = Self.allCases
+            .filter { $0 != .other }
+            .map(\.rawValue)
+        let subValues = MemberRelationshipOtherType.allCases.map(\.rawValue)
+        return Set(coreValues + subValues + ["Other"])
+    }
+}
+
+/// Sub-type shown when the user picks "Other" in the relationship picker.
+/// The selected sub-type's rawValue is what actually gets written to the DB.
+enum MemberRelationshipOtherType: String, CaseIterable, Identifiable {
+    case friend         = "Friend"
+    case familyFriend   = "Family Friend"
+    case carer          = "Carer"
+    case extendedFamily = "Extended Family"
+    case preferNotToSay = "Prefer not to say"
+
+    var id: String { rawValue }
+    var group: RelationshipGroup { .supportNetwork }
+    var direction: RelationshipDirection { .lateral }
 }
 
 enum MemberOnboardingType: String, Identifiable {
@@ -3438,111 +3828,193 @@ struct InvitedMember: Identifiable {
     let inviteCode: String
 }
 
+/// Per-slot state for FamilyMembersInviteView. Each slot represents one family member the admin intends to invite.
+struct MemberSlot: Identifiable {
+    let id = UUID()
+    var firstName: String = ""
+    var selectedRelationship: MemberRelationship? = nil
+    var selectedOtherType: MemberRelationshipOtherType? = nil
+    var selectedOnboardingType: MemberOnboardingType? = nil
+    var inviteCode: String? = nil
+
+    var isInviteGenerated: Bool { inviteCode != nil }
+    var canGenerate: Bool {
+        !firstName.trimmingCharacters(in: .whitespaces).isEmpty &&
+        selectedRelationship != nil &&
+        selectedOnboardingType != nil &&
+        (selectedRelationship != .other || selectedOtherType != nil)
+    }
+
+    /// The string that gets written to family_members.relationship.
+    /// When the user picks "Other" + a sub-type, this returns the sub-type rawValue (e.g. "Friend"),
+    /// never the sentinel string "Other".
+    var effectiveRelationshipRawValue: String {
+        if selectedRelationship == .other, let sub = selectedOtherType {
+            return sub.rawValue
+        }
+        return selectedRelationship?.rawValue ?? ""
+    }
+}
+
+private enum InviteNameField: Hashable {
+    case slot(Int)
+}
+
 struct FamilyMembersInviteView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.onboardingBackBehavior) private var onboardingBackBehavior
+    @Environment(\.onboardingResumeStepBack) private var onboardingResumeStepBack
     @EnvironmentObject var dataManager: DataManager
     @EnvironmentObject var onboardingManager: OnboardingManager
 
     /// When true, this view is presented from the Dashboard/Sidebar (not during onboarding).
-    /// In that context we must NOT mutate onboarding step/routing, and we should dismiss back to Dashboard after showing a code.
     let isPresentedFromDashboard: Bool
-    
+
     init(isPresentedFromDashboard: Bool = false) {
         self.isPresentedFromDashboard = isPresentedFromDashboard
     }
-    
-    // Current in-progress member
-    @State private var firstName: String = ""
-    @State private var selectedRelationship: MemberRelationship? = nil
-    @State private var selectedOnboardingType: MemberOnboardingType? = nil
-    
-    // List of invited members
-    @State private var invitedMembers: [InvitedMember] = []
-    
-    // Invite popup
-    @State private var showInviteSheet: Bool = false
-    @State private var currentInviteCode: String = ""
-    @State private var currentInviteName: String = ""
-    
-    // Guided Setup options sheet
-    @State private var showGuidedOptionsSheet: Bool = false
-    @State private var currentMemberId: String = ""  // For "Fill out now" flow
-    @State private var navigateToGuidedDataEntry: Bool = false
-    @State private var pendingGuidedMember: InvitedMember? = nil  // Member awaiting guided data entry
-    
-    // Navigation to completion
-    @State private var navigateToComplete: Bool = false
-    @State private var showError: Bool = false
-    @State private var errorMessage: String = ""
-    
-    private var memberIndex: Int {
-        invitedMembers.count + 1
+
+    @State private var slots: [MemberSlot] = []
+    @State private var showInviteSheet = false
+    @State private var currentInviteCode = ""
+    @State private var currentInviteName = ""
+    @State private var showSkipAlert = false
+    @State private var skipAlertSlotName = ""
+    @State private var skipAlertSlotIndex: Int = 0
+    @State private var shouldScrollToSkippedSlot = false
+    @State private var navigateToComplete = false
+    @State private var showError = false
+    @State private var errorMessage = ""
+    @State private var generatingSlotIndex: Int? = nil
+    @FocusState private var focusedNameField: InviteNameField?
+    @State private var removeSlotIndex: Int?
+    @State private var showRemoveConfirm = false
+
+    // MARK: - Helpers
+
+    private var anyInviteGenerated: Bool { slots.contains { $0.isInviteGenerated } }
+    private var firstUnfilledIndex: Int? { slots.indices.first { !slots[$0].isInviteGenerated } }
+    private var finishButtonLabel: String { anyInviteGenerated ? "Finish" : "Skip for now" }
+
+    private var youDisplayName: String {
+        let n = onboardingManager.firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return n.isEmpty ? "You" : n
     }
-    
-    private var canGenerateInvite: Bool {
-        !firstName.trimmingCharacters(in: .whitespaces).isEmpty &&
-        selectedRelationship != nil &&
-        selectedOnboardingType != nil
+
+    private var familyDisplayLine: String {
+        let fam = dataManager.familyName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if fam.isEmpty {
+            return "Your household includes \(youDisplayName). Invite anyone else who should be part of your family health circle."
+        }
+        return "\(fam) · \(youDisplayName) is already set up. Invite others below."
     }
     
     var body: some View {
+        baseLayout
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        focusedNameField = nil
+                    }
+                    .font(.system(size: 17, weight: .semibold))
+                }
+            }
+            .sheet(isPresented: $showInviteSheet) {
+                InviteCodeSheet(name: currentInviteName, code: currentInviteCode) {
+                    if isPresentedFromDashboard { dismiss() }
+                }
+            }
+            .alert("Error", isPresented: $showError) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(errorMessage)
+            }
+            .alert("What about \(skipAlertSlotName)?", isPresented: $showSkipAlert) {
+                Button("Edit") { shouldScrollToSkippedSlot = true }
+                Button("Skip", role: .destructive) { navigateToComplete = true }
+            } message: {
+                Text("You haven't generated an invite code for this person yet.")
+            }
+            .alert("Remove this invite?", isPresented: $showRemoveConfirm) {
+                Button("Cancel", role: .cancel) { removeSlotIndex = nil }
+                Button("Remove", role: .destructive) {
+                    if let i = removeSlotIndex {
+                        removeSlot(at: i)
+                    }
+                    removeSlotIndex = nil
+                }
+            } message: {
+                Text("You’ll lose what you entered for this person. You can add another invite later.")
+            }
+            .onAppear {
+                if !isPresentedFromDashboard { onboardingManager.setCurrentStep(6) }
+                Task { await loadExistingInvites() }
+            }
+    }
+
+    private var baseLayout: some View {
         ZStack {
             Color.miyaBackground.ignoresSafeArea()
-            
-            VStack(spacing: 24) {
-                
-                // Title
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Build your health team")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.miyaTextPrimary)
-                    
-                    // You can later replace this with the real family name from Step 2
-                    Text("Create profiles for your family.")
-                        .font(.system(size: 15))
-                        .foregroundColor(.miyaTextSecondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 16)
-                
-                // Already invited members (if any)
-                if !invitedMembers.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Members added")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-                        
-                        ForEach(invitedMembers) { member in
-                            HStack {
-                                Text(member.firstName)
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundColor(.miyaTextPrimary)
-                                
-                                Text("• \(member.relationship.rawValue)")
-                                    .font(.system(size: 13))
-                                    .foregroundColor(.miyaTextSecondary)
-                                
-                                Text("• \(member.onboardingType == .guided ? "Guided" : "Self")")
-                                    .font(.system(size: 13))
-                                    .foregroundColor(.miyaTextSecondary)
-                                
-                                Spacer()
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 24) {
+                        Color.clear.frame(height: 0).id("top")
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Invite your family")
+                                .font(.system(size: 24, weight: .bold))
+                                .foregroundColor(.miyaTextPrimary)
+                            Text("Create an invite for each person. They’ll use the same app flow you just completed—each family member can connect a wearable to share their health picture with the family.")
+                                .font(.system(size: 15))
+                                .foregroundColor(.miyaTextSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 16)
+
+                        // Family baseline
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Your family so far")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.miyaTextPrimary)
+                            Text(familyDisplayLine)
+                                .font(.system(size: 14))
+                                .foregroundColor(.miyaTextSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.9)))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1))
+
+                        if showError {
+                            HStack(spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.red)
+                                Text(errorMessage)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(.red)
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(Color.white)
-                            )
+                            .background(Color.red.opacity(0.1))
+                            .cornerRadius(8)
                         }
-                        
-                        // New: Add another member button right under the list
+
+                        // Slot cards
+                        ForEach(slots.indices, id: \.self) { index in
+                            slotCard(index: index)
+                                .id(index)
+                        }
+
+                        // Add another invite
                         Button {
-                            resetCurrentMemberForm()
+                            slots.append(MemberSlot())
                         } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: "plus.circle.fill")
-                                Text("Add another member")
+                                Text("Add another person to invite")
                                     .font(.system(size: 14, weight: .semibold))
                             }
                             .padding(.vertical, 10)
@@ -3550,72 +4022,205 @@ struct FamilyMembersInviteView: View {
                             .background(Color.white)
                             .foregroundColor(.miyaPrimary)
                             .cornerRadius(12)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.miyaPrimary.opacity(0.2), lineWidth: 1)
-                            )
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.miyaPrimary.opacity(0.2), lineWidth: 1))
                         }
                         .buttonStyle(.plain)
-                        .padding(.top, 4)
+
+                        Spacer(minLength: 16)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 8)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    inviteBottomBar
+                }
+                .onChange(of: shouldScrollToSkippedSlot) { triggered in
+                    guard triggered else { return }
+                    withAnimation { proxy.scrollTo(skipAlertSlotIndex, anchor: .top) }
+                    shouldScrollToSkippedSlot = false
+                }
+            }
+        }
+    }
+
+    // MARK: - Bottom bar (keyboard-safe via safeAreaInset)
+
+    @ViewBuilder
+    private var inviteBottomBar: some View {
+        VStack(spacing: 0) {
+            Divider().opacity(0.4)
+
+            if isPresentedFromDashboard {
+                Button { dismiss() } label: {
+                    Text("Close")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.miyaPrimary)
+                        .foregroundColor(.white)
+                        .cornerRadius(16)
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
+            } else {
+                HStack(spacing: 12) {
+                    Button {
+                        focusedNameField = nil
+                        OnboardingBackAction.perform(
+                            behavior: onboardingBackBehavior,
+                            resumeStepBack: onboardingResumeStepBack,
+                            dismiss: dismiss,
+                            hideKeyboardFirst: false
+                        )
+                    } label: {
+                        Text("Back")
+                            .font(.system(size: 15, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.clear)
+                            .foregroundColor(.miyaTextSecondary)
+                            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.miyaBackground, lineWidth: 1))
+                    }
+
+                    Button {
+                        focusedNameField = nil
+                        handleFinish()
+                    } label: {
+                        Text(finishButtonLabel)
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.miyaPrimary)
+                            .foregroundColor(.white)
+                            .cornerRadius(16)
                     }
                 }
-                
-                // Error message (if any)
-                if showError {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.red)
-                        Text(errorMessage)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.red)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.red.opacity(0.1))
-                    .cornerRadius(8)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
+
+                NavigationLink(
+                    destination: OnboardingCompleteView(membersCount: onboardingManager.invitedMembers.count)
+                        .environmentObject(onboardingManager)
+                        .environmentObject(dataManager),
+                    isActive: $navigateToComplete
+                ) {
+                    EmptyView()
                 }
-                
-                // Current member form
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Member \(memberIndex)")
-                        .font(.system(size: 15, weight: .semibold))
+                .hidden()
+            }
+        }
+        .background(Color.miyaBackground)
+    }
+
+    // MARK: - Slot card
+
+    private func inviteCardTitle(for index: Int) -> String {
+        "Person to invite \(index + 1)"
+    }
+
+    @ViewBuilder
+    private func slotCard(index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text(inviteCardTitle(for: index))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.miyaTextPrimary)
+                Spacer()
+                if slots[index].isInviteGenerated {
+                    Label("Invited", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.green)
+                } else if canRemoveSlot(at: index) {
+                    Button {
+                        requestRemoveSlot(at: index)
+                    } label: {
+                        Text("Cancel")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.miyaTextSecondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if slots[index].isInviteGenerated {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(slots[index].firstName)
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.miyaTextPrimary)
-                    
-                    // Name
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Name")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-                        
-                        TextField("First name", text: $firstName)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .background(Color.white)
-                            .cornerRadius(12)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1)
-                            )
+                    HStack(spacing: 8) {
+                        Text(slots[index].inviteCode ?? "")
+                            .font(.system(size: 18, weight: .bold, design: .monospaced))
+                            .foregroundColor(.miyaPrimary)
+                        Spacer()
+                        Button {
+                            currentInviteCode = slots[index].inviteCode ?? ""
+                            currentInviteName = slots[index].firstName
+                            showInviteSheet = true
+                        } label: {
+                            Text("Share")
+                                .font(.system(size: 13, weight: .semibold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color.miyaPrimary.opacity(0.1))
+                                .foregroundColor(.miyaPrimary)
+                                .cornerRadius(8)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    
-                    // Relationship
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Relationship")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-                        
+                }
+            } else {
+                // Name
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Their name")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.miyaTextPrimary)
+                    TextField("Their name", text: $slots[index].firstName)
+                        .focused($focusedNameField, equals: .slot(index))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color.white)
+                        .cornerRadius(12)
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1))
+                }
+
+                // Relationship
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Relationship")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.miyaTextPrimary)
+                    Menu {
+                        ForEach(MemberRelationship.allCases) { relation in
+                            Button(relation.rawValue) {
+                                slots[index].selectedRelationship = relation
+                                slots[index].selectedOtherType = nil
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text(slots[index].selectedRelationship?.rawValue ?? "Select relationship")
+                                .foregroundColor(slots[index].selectedRelationship == nil ? .miyaTextSecondary : .miyaTextPrimary)
+                            Spacer()
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.miyaTextSecondary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color.white)
+                        .cornerRadius(12)
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1))
+                    }
+
+                    if slots[index].selectedRelationship == .other {
                         Menu {
-                            ForEach(MemberRelationship.allCases) { relation in
-                                Button(relation.rawValue) {
-                                    selectedRelationship = relation
-                                }
+                            ForEach(MemberRelationshipOtherType.allCases) { subType in
+                                Button(subType.rawValue) { slots[index].selectedOtherType = subType }
                             }
                         } label: {
                             HStack {
-                                Text(selectedRelationship?.rawValue ?? "Select relationship")
-                                    .foregroundColor(
-                                        selectedRelationship == nil ? .miyaTextSecondary : .miyaTextPrimary
-                                    )
+                                Text(slots[index].selectedOtherType?.rawValue ?? "Tell us a bit more")
+                                    .foregroundColor(slots[index].selectedOtherType == nil ? .miyaTextSecondary : .miyaTextPrimary)
                                 Spacer()
                                 Image(systemName: "chevron.down")
                                     .font(.system(size: 12, weight: .semibold))
@@ -3625,270 +4230,211 @@ struct FamilyMembersInviteView: View {
                             .padding(.vertical, 10)
                             .background(Color.white)
                             .cornerRadius(12)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1)
-                            )
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.miyaBackground.opacity(0.8), lineWidth: 1))
                         }
                     }
-                    
-                    // Onboarding type
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Onboarding type")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-                        
-                        VStack(spacing: 10) {
-                            OnboardingTypeCard(
-                                title: "Guided setup",
-                                subtitle: "You guide them",
-                                type: .guided,
-                                isEnabled: true,
-                                selectedType: $selectedOnboardingType
-                            )
-                            
-                            OnboardingTypeCard(
-                                title: "Self setup",
-                                subtitle: "They set up alone",
-                                type: .selfSetup,
-                                isEnabled: true,
-                                selectedType: $selectedOnboardingType
-                            )
-                        }
+                }
+
+                // Who creates their profile (stored values unchanged: Guided Setup / Self Setup)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Who creates their profile")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.miyaTextPrimary)
+                    VStack(spacing: 10) {
+                        OnboardingTypeCard(
+                            title: "Set it up for them",
+                            subtitle: "You’ll create their profile in a few steps. Best for parents or family members who aren’t tech-savvy.",
+                            type: .guided,
+                            isEnabled: true,
+                            selectedType: $slots[index].selectedOnboardingType
+                        )
+                        OnboardingTypeCard(
+                            title: "They’ll set it up themselves",
+                            subtitle: "We’ll send them a link so they can create their own profile.",
+                            type: .selfSetup,
+                            isEnabled: true,
+                            selectedType: $slots[index].selectedOnboardingType
+                        )
                     }
-                    
-                    // Generate invite code
-                    Button {
-                        // Simplified: always "fill out later" (hide fill-out-now UX for now)
-                        generateInviteCode(fillOutNow: false)
-                    } label: {
-                        HStack(spacing: 8) {
-                            if dataManager.isLoading {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.8)
-                            }
-                            Text(dataManager.isLoading ? "Generating..." : "Generate invite code")
+                    Text("They’ll answer the same health questions you just completed for yourself.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.miyaTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                // Generate button
+                Button {
+                    Task { await generateInviteForSlot(at: index) }
+                } label: {
+                    HStack(spacing: 8) {
+                        if generatingSlotIndex == index {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.8)
+                        }
+                        Text(generatingSlotIndex == index ? "Generating..." : "Generate invite code")
                             .font(.system(size: 15, weight: .semibold))
-                        }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                        .background(canGenerateInvite && !dataManager.isLoading ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
-                            .foregroundColor(.white)
-                            .cornerRadius(16)
                     }
-                    .disabled(!canGenerateInvite || dataManager.isLoading)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(slots[index].canGenerate && generatingSlotIndex == nil
+                                ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
+                    .foregroundColor(.white)
+                    .cornerRadius(16)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 16)
-                .background(
-                    RoundedRectangle(cornerRadius: 20)
-                        .fill(Color.white)
-                )
-                
-                Spacer()
-                
-                // Bottom actions: Back + Finish onboarding
-                if isPresentedFromDashboard {
-                    // Dashboard context: do not advance onboarding flow. Just close.
-                    Button {
-                        dismiss()
-                    } label: {
-                        Text("Close")
-                            .font(.system(size: 16, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.miyaPrimary)
-                            .foregroundColor(.white)
-                            .cornerRadius(16)
-                    }
-                    .padding(.bottom, 16)
-                } else {
-                    HStack(spacing: 12) {
-                        Button {
-                            dismiss()
-                        } label: {
-                            Text("Back")
-                                .font(.system(size: 15, weight: .medium))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(Color.clear)
-                                .foregroundColor(.miyaTextSecondary)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .stroke(Color.miyaBackground, lineWidth: 1)
-                                )
-                        }
-                        
-                        Button {
-                            // Navigate to the onboarding completion summary
-                            navigateToComplete = true
-                        } label: {
-                            Text(invitedMembers.isEmpty ? "Skip for now" : "Finish")
-                                .font(.system(size: 16, weight: .semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(Color.miyaPrimary)
-                                .foregroundColor(.white)
-                                .cornerRadius(16)
-                        }
-                    }
-                    .padding(.bottom, 16)
-                    
-                    // Hidden NavigationLink - goes to Alerts & Champion setup
-                    NavigationLink(
-                        destination: AlertsChampionView(),
-                        isActive: $navigateToComplete
-                    ) {
-                        EmptyView()
-                    }
-                    .hidden()
-                }
-            }
-            .padding(.horizontal, 24)
-        }
-        // Invite popup
-        .sheet(isPresented: $showInviteSheet) {
-            InviteCodeSheet(
-                name: currentInviteName,
-                code: currentInviteCode
-            ) {
-                // Done tapped
-                if isPresentedFromDashboard {
-                    // Dashboard context: return to Dashboard immediately after showing code.
-                    dismiss()
-                } else {
-                    // Onboarding context: clear form for the next member.
-                    resetCurrentMemberForm()
-                }
+                .disabled(!slots[index].canGenerate || generatingSlotIndex != nil)
             }
         }
-        .alert("Error", isPresented: $showError) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(errorMessage)
-        }
-        .onAppear {
-            if !isPresentedFromDashboard {
-                onboardingManager.setCurrentStep(6)
-            }
-            Task {
-                await loadExistingInvites()
-            }
-        }
-        // (Fill-out-now hidden for now; keep code for future re-enable)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 16)
+        .background(RoundedRectangle(cornerRadius: 20).fill(Color.white))
     }
-    
-    private func generateInviteCode(fillOutNow: Bool) {
-        Task {
-            await generateInviteCodeAsync(fillOutNow: fillOutNow)
+
+    // MARK: - Actions
+
+    private func canRemoveSlot(at index: Int) -> Bool {
+        guard slots.indices.contains(index), !slots[index].isInviteGenerated else { return false }
+        return slots.count > 1
+    }
+
+    private func requestRemoveSlot(at index: Int) {
+        guard canRemoveSlot(at: index) else { return }
+        let slot = slots[index]
+        let hasContent =
+            !slot.firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || slot.selectedRelationship != nil
+            || slot.selectedOnboardingType != nil
+            || slot.selectedOtherType != nil
+        if hasContent {
+            removeSlotIndex = index
+            showRemoveConfirm = true
+        } else {
+            removeSlot(at: index)
         }
     }
-    
-    private func generateInviteCodeAsync(fillOutNow: Bool) async {
-        guard let relationship = selectedRelationship,
-              let onboardingType = selectedOnboardingType
+
+    private func removeSlot(at index: Int) {
+        guard slots.indices.contains(index), !slots[index].isInviteGenerated, slots.count > 1 else { return }
+        focusedNameField = nil
+        slots.remove(at: index)
+    }
+
+    private func handleFinish() {
+        guard anyInviteGenerated, let unfilledIndex = firstUnfilledIndex else {
+            navigateToComplete = true
+            return
+        }
+        let name = slots[unfilledIndex].firstName.trimmingCharacters(in: .whitespaces)
+        skipAlertSlotName = name.isEmpty ? inviteCardTitle(for: unfilledIndex) : name
+        skipAlertSlotIndex = unfilledIndex
+        showSkipAlert = true
+    }
+
+    private func generateInviteForSlot(at index: Int) async {
+        let slot = slots[index]
+        guard slot.selectedRelationship != nil,
+              let onboardingType = slot.selectedOnboardingType,
+              !slot.firstName.trimmingCharacters(in: .whitespaces).isEmpty,
+              !slot.effectiveRelationshipRawValue.isEmpty
         else { return }
-        
+
+        generatingSlotIndex = index
         showError = false
         errorMessage = ""
-        
+
         do {
-            // Determine the initial guided setup status
             let guidedStatus: GuidedSetupStatus? = onboardingType == .guided ? .pendingAcceptance : nil
-            
-            // Save to database and get invite code + member ID
-            let (inviteCode, memberId) = try await dataManager.saveFamilyMemberInviteWithId(
-                firstName: firstName.trimmingCharacters(in: .whitespaces),
-                relationship: relationship.rawValue,
+            let (inviteCode, _) = try await dataManager.saveFamilyMemberInviteWithId(
+                firstName: slot.firstName.trimmingCharacters(in: .whitespaces),
+                relationship: slot.effectiveRelationshipRawValue,
                 onboardingType: onboardingType.rawValue,
                 guidedSetupStatus: guidedStatus
             )
-            
-            // Save to list
-            let member = InvitedMember(
-                firstName: firstName.trimmingCharacters(in: .whitespaces),
-                relationship: relationship,
-                onboardingType: onboardingType,
-                inviteCode: inviteCode
-            )
-            invitedMembers.append(member)
-            
-            // Save to OnboardingManager
+            slots[index].inviteCode = inviteCode
+
             if !isPresentedFromDashboard {
                 onboardingManager.invitedMembers.append(InvitedFamilyMember(
-                    firstName: member.firstName,
-                    relationship: relationship.rawValue,
+                    firstName: slot.firstName.trimmingCharacters(in: .whitespaces),
+                    relationship: slot.effectiveRelationshipRawValue,
                     onboardingType: onboardingType.rawValue,
                     inviteCode: inviteCode
                 ))
             }
-            
-            if fillOutNow && onboardingType == .guided {
-                // Navigate to guided data entry flow
-                currentMemberId = memberId
-                pendingGuidedMember = member
-                navigateToGuidedDataEntry = true
-            } else {
-                // Show invite code popup
-                currentInviteName = member.firstName
-                currentInviteCode = member.inviteCode
-                showInviteSheet = true
-            }
-            
-            // Reset form for next member
-            resetCurrentMemberForm()
-            
+            currentInviteName = slot.firstName
+            currentInviteCode = inviteCode
+            showInviteSheet = true
         } catch {
             errorMessage = error.localizedDescription
             showError = true
         }
+        generatingSlotIndex = nil
     }
-    
+
     private func loadExistingInvites() async {
         guard let familyId = dataManager.currentFamilyId else {
-            print("⚠️ FamilyMembersInviteView: currentFamilyId is nil, cannot load existing invites")
+            print("⚠️ FamilyMembersInviteView: currentFamilyId is nil")
+            initializeEmptySlots()
             return
         }
-        
-        print("📥 FamilyMembersInviteView: Loading existing invites for family \(familyId)")
-        
+
         do {
             let records = try await dataManager.fetchPendingFamilyInvites(familyId: familyId)
-            print("✅ FamilyMembersInviteView: Fetched \(records.count) pending invites")
-            
-            let mapped: [InvitedMember] = records.compactMap { rec in
+            let mapped: [MemberSlot] = records.compactMap { rec in
                 guard let relStr = rec.relationship,
-                      let rel = MemberRelationship(rawValue: relStr),
                       let onboardingStr = rec.onboardingType,
                       let onboarding = MemberOnboardingType(rawValue: onboardingStr),
-                      let code = rec.inviteCode else {
-                    print("⚠️ FamilyMembersInviteView: Skipping record \(rec.id) - missing data")
-                    return nil
+                      let code = rec.inviteCode else { return nil }
+
+                // Try to resolve the stored relationship string back to our enum cases.
+                // Sub-type values (e.g. "Friend", "Family Friend") are not MemberRelationship cases,
+                // so we fall back to MemberRelationshipOtherType and reconstruct .other + subType.
+                var resolvedRelationship: MemberRelationship?
+                var resolvedOtherType: MemberRelationshipOtherType?
+                if let rel = MemberRelationship(rawValue: relStr) {
+                    resolvedRelationship = rel
+                } else if let sub = MemberRelationshipOtherType(rawValue: relStr) {
+                    resolvedRelationship = .other
+                    resolvedOtherType = sub
+                } else {
+                    return nil  // unknown value — safe to drop
                 }
-                return InvitedMember(
-                    firstName: rec.firstName,
-                    relationship: rel,
-                    onboardingType: onboarding,
-                    inviteCode: code
-                )
+
+                var slot = MemberSlot()
+                slot.firstName = rec.firstName
+                slot.selectedRelationship = resolvedRelationship
+                slot.selectedOtherType = resolvedOtherType
+                slot.selectedOnboardingType = onboarding
+                slot.inviteCode = code
+                return slot
             }
-            
-            await MainActor.run {
-                invitedMembers = mapped
-                print("✅ FamilyMembersInviteView: Displaying \(invitedMembers.count) invited members")
+
+            let target = onboardingManager.additionalFamilyMembersTarget > 0
+                ? max(onboardingManager.additionalFamilyMembersTarget, mapped.count)
+                : max(3, mapped.count)
+            var newSlots = mapped
+            while newSlots.count < target { newSlots.append(MemberSlot()) }
+            slots = newSlots
+
+            if !isPresentedFromDashboard {
+                onboardingManager.invitedMembers = mapped.map {
+                    InvitedFamilyMember(firstName: $0.firstName,
+                                        relationship: $0.effectiveRelationshipRawValue,
+                                        onboardingType: $0.selectedOnboardingType?.rawValue ?? "",
+                                        inviteCode: $0.inviteCode ?? "")
+                }
             }
+            print("✅ FamilyMembersInviteView: \(mapped.count) existing invites, \(slots.count) total slots")
         } catch {
-            print("❌ FamilyMembersInviteView: Failed to load existing invites: \(error.localizedDescription)")
+            print("❌ FamilyMembersInviteView: \(error.localizedDescription)")
+            initializeEmptySlots()
         }
     }
-    
-    private func resetCurrentMemberForm() {
-        firstName = ""
-        selectedRelationship = nil
-        selectedOnboardingType = nil
+
+    private func initializeEmptySlots() {
+        let count = onboardingManager.additionalFamilyMembersTarget > 0
+            ? onboardingManager.additionalFamilyMembersTarget : 3
+        slots = (0..<count).map { _ in MemberSlot() }
     }
-    
 }
 
 // Card for Guided/Self setup selection
@@ -3949,37 +4495,46 @@ struct OnboardingTypeCard: View {
 
 // Popup sheet showing the generated invite code
 struct InviteCodeSheet: View {
-    @Environment(\.dismiss) private var dismiss   // <-- Add dismiss environment
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     let name: String
     let code: String
     let onDone: () -> Void
     
+    @State private var showMessageComposer = false
+    @State private var showShareSheet = false
+    @State private var unavailableAlert: InviteShareAlertType? = nil
+
+    private var inviteMessage: String {
+        "Join my family on Miya Health. Use this invite code: \(code). Download Miya Health from the App Store, then enter the code to join."
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
-                Text("Invitation for \(name)")
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundColor(.miyaTextPrimary)
-                    .multilineTextAlignment(.center)
-                    .padding(.top, 24)
-                
-                Text("Share this code to invite \(name.lowercased()) to join your family.")
-                    .font(.system(size: 15))
-                    .foregroundColor(.miyaTextSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-                
+                // Header
+                VStack(spacing: 6) {
+                    Text("Invite sent to \(name)")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundColor(.miyaTextPrimary)
+                        .multilineTextAlignment(.center)
+                    Text("It's as easy as 1-2-3")
+                        .font(.system(size: 15))
+                        .foregroundColor(.miyaTextSecondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, 24)
+                .padding(.horizontal, 24)
+
                 // Code block
-                VStack(spacing: 8) {
+                VStack(spacing: 6) {
                     Text(code)
                         .font(.system(size: 28, weight: .bold, design: .monospaced))
                         .foregroundColor(.miyaPrimary)
-                    
-                    Text("Enter this code in the Miya app to join your family.")
+                    Text("Share this code with \(name)")
                         .font(.system(size: 13))
                         .foregroundColor(.miyaTextSecondary)
                         .multilineTextAlignment(.center)
-                        .padding(.horizontal, 16)
                 }
                 .padding(.vertical, 16)
                 .padding(.horizontal, 20)
@@ -3987,18 +4542,53 @@ struct InviteCodeSheet: View {
                     RoundedRectangle(cornerRadius: 20)
                         .fill(Color.white)
                 )
-                
+
+                // 1-2-3 steps
+                VStack(alignment: .leading, spacing: 14) {
+                    InviteStep(number: "1", text: "Send \(name) this code")
+                    InviteStep(number: "2", text: "They download Miya and enter it")
+                    InviteStep(number: "3", text: "They set up their profile — you'll be notified when they join")
+                }
+                .padding(.horizontal, 28)
+
+                // Share actions
                 VStack(spacing: 12) {
-                    Text("Share via:")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.miyaTextPrimary)
-                    
                     Button {
-                        print("Share via email tapped")
+                        sendTextInvite()
                     } label: {
                         HStack {
-                            Image(systemName: "envelope")
-                            Text("Email link")
+                            Image(systemName: "message.fill")
+                            Text("Text")
+                        }
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.miyaPrimary.opacity(0.08))
+                        .foregroundColor(.miyaPrimary)
+                        .cornerRadius(14)
+                    }
+                    
+                    Button {
+                        sendWhatsAppInvite()
+                    } label: {
+                        HStack {
+                            Image(systemName: "message.circle.fill")
+                            Text("WhatsApp")
+                        }
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.miyaPrimary.opacity(0.08))
+                        .foregroundColor(.miyaPrimary)
+                        .cornerRadius(14)
+                    }
+                    
+                    Button {
+                        showShareSheet = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("Share invite")
                         }
                         .font(.system(size: 15, weight: .semibold))
                         .frame(maxWidth: .infinity)
@@ -4009,12 +4599,12 @@ struct InviteCodeSheet: View {
                     }
                 }
                 .padding(.horizontal, 24)
-                
+
                 Spacer()
-                
+
                 Button {
-                    onDone()     // reset form in parent
-                    dismiss()    // dismiss the sheet
+                    onDone()
+                    dismiss()
                 } label: {
                     Text("Done")
                         .font(.system(size: 16, weight: .semibold))
@@ -4027,6 +4617,126 @@ struct InviteCodeSheet: View {
                         .padding(.bottom, 24)
                 }
             }
+        }
+        .sheet(isPresented: $showMessageComposer) {
+            MessageComposerView(body: inviteMessage)
+        }
+        .sheet(isPresented: $showShareSheet) {
+            ActivityShareSheet(activityItems: [inviteMessage])
+        }
+        .alert(item: $unavailableAlert) { alertType in
+            Alert(
+                title: Text(alertType.title),
+                message: Text(alertType.message),
+                primaryButton: .default(Text("Share another way")) {
+                    showShareSheet = true
+                },
+                secondaryButton: .cancel(Text("Not now"))
+            )
+        }
+    }
+    
+    private func sendTextInvite() {
+        guard MFMessageComposeViewController.canSendText() else {
+            unavailableAlert = .textUnavailable
+            return
+        }
+        showMessageComposer = true
+    }
+    
+    private func sendWhatsAppInvite() {
+        let encoded = inviteMessage.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        guard let url = URL(string: "whatsapp://send?text=\(encoded)") else {
+            unavailableAlert = .whatsAppUnavailable
+            return
+        }
+        
+        openURL(url) { accepted in
+            if !accepted {
+                unavailableAlert = .whatsAppUnavailable
+            }
+        }
+    }
+}
+
+/// A single numbered step row used inside InviteCodeSheet.
+private struct InviteStep: View {
+    let number: String
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(number)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(.miyaPrimary)
+                .frame(width: 22, height: 22)
+                .background(Color.miyaPrimary.opacity(0.1))
+                .clipShape(Circle())
+            Text(text)
+                .font(.system(size: 14))
+                .foregroundColor(.miyaTextPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private enum InviteShareAlertType: String, Identifiable {
+    case textUnavailable
+    case whatsAppUnavailable
+    
+    var id: String { rawValue }
+    
+    var title: String {
+        switch self {
+        case .textUnavailable:
+            return "Text isn't available"
+        case .whatsAppUnavailable:
+            return "WhatsApp isn't available"
+        }
+    }
+    
+    var message: String {
+        switch self {
+        case .textUnavailable:
+            return "This device can't send text messages right now. You can still share the invite using another option."
+        case .whatsAppUnavailable:
+            return "WhatsApp isn't installed on this device. You can still share the invite using another option."
+        }
+    }
+}
+
+private struct ActivityShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+    
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) { }
+}
+
+private struct MessageComposerView: UIViewControllerRepresentable {
+    let body: String
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+    
+    func makeUIViewController(context: Context) -> MFMessageComposeViewController {
+        let composer = MFMessageComposeViewController()
+        composer.body = body
+        composer.messageComposeDelegate = context.coordinator
+        return composer
+    }
+    
+    func updateUIViewController(_ uiViewController: MFMessageComposeViewController, context: Context) { }
+    
+    final class Coordinator: NSObject, MFMessageComposeViewControllerDelegate {
+        func messageComposeViewController(
+            _ controller: MFMessageComposeViewController,
+            didFinishWith result: MessageComposeResult
+        ) {
+            controller.dismiss(animated: true)
         }
     }
 }
@@ -4055,11 +4765,11 @@ struct GuidedSetupOptionsSheet: View {
                     .font(.system(size: 40))
                     .foregroundColor(.miyaPrimary)
                 
-                Text("Guided Setup for \(memberName)")
+                Text("Set up \(memberName)’s profile")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundColor(.miyaTextPrimary)
                 
-                Text("You've chosen to guide \(memberName)'s setup. When would you like to fill out their health information?")
+                Text("You’re creating their health profile for them. When would you like to fill it in?")
                     .font(.system(size: 15))
                     .foregroundColor(.miyaTextSecondary)
                     .multilineTextAlignment(.center)
@@ -4153,7 +4863,7 @@ struct PendingGuidedSetupsView: View {
                     
                     Spacer()
                     
-                    Text("Pending Guided Setups")
+                    Text("Family profiles to complete")
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundColor(.miyaTextPrimary)
                     
@@ -4180,7 +4890,7 @@ struct PendingGuidedSetupsView: View {
                         Text("All caught up!")
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundColor(.miyaTextPrimary)
-                        Text("No family members waiting for guided setup")
+                        Text("No family members waiting for you to finish their profile.")
                             .font(.system(size: 14))
                             .foregroundColor(.miyaTextSecondary)
                     }
@@ -4314,7 +5024,7 @@ struct GuidedSetupAcceptancePrompt: View {
                     .font(.system(size: 22, weight: .bold))
                     .foregroundColor(.miyaTextPrimary)
                 
-                Text("Your family member has chosen Guided Setup for you. This means they'll fill out your health information on your behalf.")
+                Text("Your family member chose to set up your profile for you—they’ll walk through the same health questions you would, on your behalf.")
                     .font(.system(size: 15))
                     .foregroundColor(.miyaTextSecondary)
                     .multilineTextAlignment(.center)
@@ -4328,10 +5038,10 @@ struct GuidedSetupAcceptancePrompt: View {
                 Button(action: onAcceptGuidedSetup) {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Accept Guided Setup")
+                            Text("Yes, set it up for me")
                                 .font(.system(size: 16, weight: .semibold))
                                 .foregroundColor(.white)
-                            Text("Let them fill out your health info")
+                            Text("They’ll create your profile for you")
                                 .font(.system(size: 13))
                                 .foregroundColor(.white.opacity(0.8))
                         }
@@ -4350,10 +5060,10 @@ struct GuidedSetupAcceptancePrompt: View {
                 Button(action: onFillMyself) {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("I'll fill it out myself")
+                            Text("I’ll set it up myself")
                                 .font(.system(size: 16, weight: .semibold))
                                 .foregroundColor(.miyaTextPrimary)
-                            Text("Complete your own health profile")
+                            Text("We’ll send you through the same steps on your phone")
                                 .font(.system(size: 13))
                                 .foregroundColor(.miyaTextSecondary)
                         }
@@ -4493,7 +5203,7 @@ struct GuidedSetupReviewView: View {
                         
                         // About You Section
                         reviewSection(title: "About You", icon: "person.fill") {
-                            reviewRow("Gender", value: data.aboutYou.gender)
+                            reviewRow("Biological sex", value: data.aboutYou.gender)
                             reviewRow("Date of Birth", value: data.aboutYou.dateOfBirth)
                             reviewRow("Height", value: "\(Int(data.aboutYou.heightCm)) cm")
                             reviewRow("Weight", value: "\(Int(data.aboutYou.weightKg)) kg")
@@ -4820,49 +5530,49 @@ struct GuidedHealthDataEntryFlow: View {
         ZStack {
             Color.miyaBackground.ignoresSafeArea()
             
-            VStack(spacing: 24) {
-                // Progress header
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Button(action: handleBack) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundColor(.miyaTextPrimary)
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Progress header
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Button(action: { hideKeyboard(); handleBack() }) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundColor(.miyaTextPrimary)
+                            }
+                            Spacer()
+                            Text("Step \(currentStep) of \(totalSteps)")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.miyaTextSecondary)
                         }
-                        Spacer()
-                        Text("Step \(currentStep) of \(totalSteps)")
-                            .font(.system(size: 14, weight: .medium))
+                        
+                        // Progress bar
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Capsule()
+                                    .fill(Color.miyaBackground.opacity(0.9))
+                                    .frame(height: 6)
+                                Capsule()
+                                    .fill(Color.miyaPrimary)
+                                    .frame(width: geo.size.width * CGFloat(currentStep) / CGFloat(totalSteps), height: 6)
+                            }
+                        }
+                        .frame(height: 6)
+                    }
+                    .padding(.top, 16)
+                    
+                    // Title
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Health profile for \(memberName)")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundColor(.miyaTextPrimary)
+                        Text(stepSubtitle)
+                            .font(.system(size: 15))
                             .foregroundColor(.miyaTextSecondary)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     
-                    // Progress bar
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule()
-                                .fill(Color.miyaBackground.opacity(0.9))
-                                .frame(height: 6)
-                            Capsule()
-                                .fill(Color.miyaPrimary)
-                                .frame(width: geo.size.width * CGFloat(currentStep) / CGFloat(totalSteps), height: 6)
-                        }
-                    }
-                    .frame(height: 6)
-                }
-                .padding(.top, 16)
-                
-                // Title
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Guided Setup for \(memberName)")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundColor(.miyaTextPrimary)
-                    Text(stepSubtitle)
-                        .font(.system(size: 15))
-                        .foregroundColor(.miyaTextSecondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                
-                // Step content
-                ScrollView {
+                    // Step content
                     switch currentStep {
                     case 1:
                         aboutYouStepContent
@@ -4874,41 +5584,29 @@ struct GuidedHealthDataEntryFlow: View {
                         EmptyView()
                     }
                 }
-                
-                // Error message
-                if showError {
-                    Text(errorMessage)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.red)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(8)
-                }
-                
-                // Continue button
-                Button(action: handleContinue) {
-                    HStack {
-                        if isLoading {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.8)
-                        }
-                        Text(currentStep == totalSteps ? "Save" : "Continue")
-                            .font(.system(size: 16, weight: .semibold))
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(canContinue ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
-                    .foregroundColor(.white)
-                    .cornerRadius(16)
-                }
-                .disabled(!canContinue || isLoading)
-                .padding(.bottom, 16)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 8)
             }
-            .padding(.horizontal, 24)
+            .scrollDismissesKeyboard(.interactively)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                OnboardingCTABar(
+                    onContinue: { hideKeyboard(); handleContinue() },
+                    continueLabel: currentStep == totalSteps ? "Save" : "Continue",
+                    continueLoading: isLoading,
+                    continueDisabled: !canContinue,
+                    showError: showError,
+                    errorMessage: errorMessage
+                )
+            }
         }
         .navigationBarHidden(true)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { hideKeyboard() }
+                    .font(.system(size: 17, weight: .semibold))
+            }
+        }
         .alert("Error", isPresented: $showError) {
             Button("OK", role: .cancel) { }
         } message: {
@@ -4946,9 +5644,9 @@ struct GuidedHealthDataEntryFlow: View {
     
     private var aboutYouStepContent: some View {
         VStack(alignment: .leading, spacing: 20) {
-            // Gender
+            // Biological sex
             VStack(alignment: .leading, spacing: 8) {
-                Text("Gender")
+                Text("Biological sex")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.miyaTextPrimary)
                 
@@ -5013,28 +5711,33 @@ struct GuidedHealthDataEntryFlow: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.miyaTextPrimary)
                 
-                Menu {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                     ForEach(Ethnicity.allCases) { ethnicity in
-                        Button(ethnicity.rawValue) {
+                        Button {
                             selectedEthnicity = ethnicity
+                        } label: {
+                            HStack {
+                                Text(ethnicity.rawValue)
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.miyaTextPrimary)
+                                    .multilineTextAlignment(.leading)
+                                Spacer()
+                                if selectedEthnicity == ethnicity {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.miyaPrimary)
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 10)
+                            .background(selectedEthnicity == ethnicity ? Color.miyaPrimary.opacity(0.1) : Color.white)
+                            .cornerRadius(12)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(selectedEthnicity == ethnicity ? Color.miyaPrimary : Color.miyaBackground.opacity(0.8), lineWidth: 1)
+                            )
                         }
                     }
-                } label: {
-                    HStack {
-                        Text(selectedEthnicity?.rawValue ?? "Select ethnicity")
-                            .foregroundColor(selectedEthnicity == nil ? .miyaTextSecondary : .miyaTextPrimary)
-                        Spacer()
-                        Image(systemName: "chevron.down")
-                            .foregroundColor(.miyaTextSecondary)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Color.white)
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.miyaBackground, lineWidth: 1)
-                    )
                 }
             }
             
@@ -5443,12 +6146,16 @@ struct GuidedHealthDataEntryFlow: View {
 
 struct OnboardingCompleteView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.onboardingBackBehavior) private var onboardingBackBehavior
+    @Environment(\.onboardingResumeStepBack) private var onboardingResumeStepBack
     @EnvironmentObject var onboardingManager: OnboardingManager
     @EnvironmentObject var dataManager: DataManager
-    
+    @EnvironmentObject var authManager: AuthManager
+    @EnvironmentObject var subscriptionManager: SubscriptionManager
+
     let membersCount: Int
     
-    @State private var navigateToDashboard: Bool = false
+    @State private var navigateToLanding: Bool = false
     
     var body: some View {
         ZStack {
@@ -5514,7 +6221,7 @@ struct OnboardingCompleteView: View {
                 // Buttons
                 VStack(spacing: 10) {
                     Button {
-                        navigateToDashboard = true
+                        navigateToLanding = true
                     } label: {
                         Text("Launch my dashboard")
                             .font(.system(size: 16, weight: .semibold))
@@ -5526,7 +6233,12 @@ struct OnboardingCompleteView: View {
                     }
                     
                     Button {
-                        dismiss()
+                        OnboardingBackAction.perform(
+                            behavior: onboardingBackBehavior,
+                            resumeStepBack: onboardingResumeStepBack,
+                            dismiss: dismiss,
+                            hideKeyboardFirst: false
+                        )
                     } label: {
                         Text("Back")
                             .font(.system(size: 14, weight: .medium))
@@ -5537,19 +6249,30 @@ struct OnboardingCompleteView: View {
                 .padding(.bottom, 24)
             }
             
-            // Navigation to Dashboard
+            // Route through LandingView so paywall logic is never bypassed.
             NavigationLink(
-                destination: DashboardView(familyName: onboardingManager.familyName.isEmpty ? "Miya" : onboardingManager.familyName),
-                isActive: $navigateToDashboard
+                destination: LandingView()
+                    .environmentObject(onboardingManager)
+                    .environmentObject(dataManager)
+                    .environmentObject(authManager)
+                    .environmentObject(subscriptionManager),
+                isActive: $navigateToLanding
             ) {
                 EmptyView()
             }
             .hidden()
         }
         .onAppear {
-            // Mark onboarding as complete
+            // For the standard Get Started (non-invited) superadmin path, eagerly mark
+            // isSuperAdmin so LandingView routes correctly without waiting for the DB round-trip.
+            // This also sets the fresh-flag so ContentView shows the paywall immediately
+            // without blocking on the StoreKit entitlement check.
+            if !onboardingManager.isInvitedUser {
+                onboardingManager.isSuperAdmin = true
+                onboardingManager.freshlyCompletedGetStarted = true
+            }
             onboardingManager.completeOnboarding()
-            print("✅ OnboardingCompleteView: Onboarding marked as complete")
+            print("✅ OnboardingCompleteView: Onboarding marked as complete (superadmin=\(!onboardingManager.isInvitedUser), freshlyCompletedGetStarted=\(onboardingManager.freshlyCompletedGetStarted))")
             Task {
                 await onboardingManager.refreshGuidedContextFromDB(dataManager: dataManager)
             }

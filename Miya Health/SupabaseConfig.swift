@@ -40,7 +40,8 @@ enum SupabaseConfig {
             supabaseURL: url,
             supabaseKey: supabaseAnonKey,
             options: SupabaseClientOptions(
-                auth: .init(storageKey: "miya-auth-token")
+                auth: .init(storageKey: "miya-auth-token"),
+                global: MiyaSupabaseHTTP.globalOptions
             )
         )
     }()

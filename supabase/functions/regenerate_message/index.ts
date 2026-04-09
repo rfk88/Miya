@@ -1,6 +1,11 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  AI_CONSENT_DENIED_JSON,
+  isAIThirdPartySharingEnabledForUser,
+} from "../_shared/ai_third_party_consent.ts";
 
-const corsHeaders = {
+const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST,OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey",
@@ -13,13 +18,34 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+const TONE_INSTRUCTIONS: Record<string, string> = {
+  "Warm & caring":
+    "Warm and compassionate. Sound like a caring friend or family member. Lead with empathy, use gentle language, avoid pressure.",
+  Motivating:
+    "Encouraging and upbeat without being pushy. Celebrate effort and possibility. No guilt, no shame.",
+  "Direct & friendly":
+    "Clear and concise, still kind. Short sentences. No coldness, no blame.",
+};
+
+const BASE_FAMILY_SAFE_RULES = `
+Family-safe rules (always):
+- Never shame, blame, or mock anyone for their health.
+- Do not add new medical claims, numbers, dates, or diagnoses that were not in the original.
+- Do not remove or alter specific facts that were in the original (names, numbers, dates, scores).
+- Keep the same core intent: you're still sending the same message, just rephrased.
+- Plain, natural English suitable for SMS or WhatsApp.
+- Output ONLY the rewritten message text — no quotes, no preamble, no labels.`.trim();
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  if (req.method !== "POST") {
+    return jsonResponse({ error: "Use POST" }, 405);
+  }
+
   try {
-    // Auth check
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
     if (!supabaseUrl || !anonKey) {
@@ -41,11 +67,22 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "Unauthorized" }, 401);
     }
 
-    // Get request body
-    const body = await req.json();
-    const { original_message, tone, member_name } = body;
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!serviceRoleKey) {
+      return jsonResponse({ error: "Server misconfigured" }, 500);
+    }
+    const admin = createClient(supabaseUrl, serviceRoleKey);
+    const regenConsentOk = await isAIThirdPartySharingEnabledForUser(admin, userData.user.id);
+    if (!regenConsentOk) {
+      return jsonResponse({ ...AI_CONSENT_DENIED_JSON }, 403);
+    }
 
-    if (!original_message || !tone) {
+    const body = await req.json().catch(() => null);
+    const original_message = body?.original_message;
+    const tone = body?.tone;
+    const member_name = body?.member_name;
+
+    if (original_message == null || tone == null) {
       return jsonResponse({ error: "Missing required fields" }, 400);
     }
 
@@ -53,66 +90,70 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "tone must be a string" }, 400);
     }
 
-    const toneInstructions: Record<string, string> = {
-      "Warm & caring": "Use warm, compassionate language. Show empathy and care. Make it feel like a close friend reaching out.",
-      "Motivating": "Use energizing, motivating language. Be encouraging, positive, and inspiring. Focus on possibilities and progress.",
-      "Direct & friendly": "Be direct and to-the-point while remaining friendly. No fluff. Clear and actionable but still warm."
-    };
-    const ALLOWED_TONES = new Set(Object.keys(toneInstructions));
+    const ALLOWED_TONES = new Set(Object.keys(TONE_INSTRUCTIONS));
     const toneTrimmed = String(tone).trim();
     if (!ALLOWED_TONES.has(toneTrimmed)) {
-      console.warn("Invalid tone received:", tone);
+      console.warn("regenerate_message: invalid tone", tone);
       return jsonResponse(
-        { error: "Invalid tone. Allowed values: Warm & caring, Motivating, Direct & friendly" },
-        400
+        {
+          error: "Invalid tone. Allowed values: Warm & caring, Motivating, Direct & friendly",
+        },
+        400,
       );
     }
 
-    // Call OpenAI
     const openaiKey = Deno.env.get("OPENAI_API_KEY");
     if (!openaiKey) {
       throw new Error("OpenAI API key not configured");
     }
 
-    const instruction = toneInstructions[toneTrimmed];
+    const model = Deno.env.get("OPENAI_MODEL") ?? "gpt-4o-mini";
+    const toneHint = TONE_INSTRUCTIONS[toneTrimmed];
+    const aboutName =
+      member_name && String(member_name).trim()
+        ? `The message is about: ${String(member_name).trim()}.`
+        : "Keep the message personal and kind.";
 
-    const prompt = `Rewrite this outreach message in a "${toneTrimmed}" tone. Keep it around the same length and preserve the core message.
+    const systemContent = [
+      "You rewrite short wellness outreach messages for families.",
+      BASE_FAMILY_SAFE_RULES,
+      "",
+      `Tone target: ${toneTrimmed}.`,
+      toneHint,
+    ].join("\n");
 
-Original message:
-"${original_message}"
+    const userContent = `Rewrite the following message in the "${toneTrimmed}" tone.
 
-Guidelines:
-- ${instruction}
-- The message is about ${member_name}
-- Keep it personal and natural
-- Preserve any specific data or facts mentioned
-- Don't change the core message, just adjust the tone and style
+${aboutName}
 
-Rewritten message:`;
+Original message (preserve meaning and all factual details):
+"""
+${String(original_message)}
+"""
+
+Return only the rewritten message text, similar length.`;
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${openaiKey}`,
+        Authorization: `Bearer ${openaiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model,
         messages: [
-          { 
-            role: "system", 
-            content: "You are a helpful writing assistant that rewrites health-related messages in different tones while preserving factual content." 
-          },
-          { role: "user", content: prompt }
+          { role: "system", content: systemContent },
+          { role: "user", content: userContent },
         ],
-        temperature: 0.7,
-        max_tokens: 300
-      })
+        temperature: 0.65,
+        max_tokens: 320,
+      }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`OpenAI error: ${response.status} ${errorText}`);
+      console.error("regenerate_message: OpenAI error", response.status, errorText);
+      throw new Error(`OpenAI error: ${response.status}`);
     }
 
     const data = await response.json();
@@ -123,12 +164,11 @@ Rewritten message:`;
     }
 
     return jsonResponse({ message });
-
   } catch (error) {
-    console.error("Error:", error);
+    console.error("regenerate_message:", error);
     return jsonResponse(
       { error: error instanceof Error ? error.message : "Internal error" },
-      500
+      500,
     );
   }
 });

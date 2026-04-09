@@ -201,6 +201,15 @@ extension DashboardView {
                             }
                         }
                     },
+                    onDeleteAccount: {
+                        _ = try await dataManager.deleteMyAccountPermanently()
+                        // The auth user may already be deleted server-side; still force local reset.
+                        do {
+                            try await authManager.signOut()
+                        } catch {
+                            // signOut() still clears local state and posts logout notification.
+                        }
+                    },
                     onConnectWearables: {
                         triggerWearableSync()
                     },

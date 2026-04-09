@@ -80,6 +80,7 @@ struct FamilyNotificationDetailSheet: View {
     @State private var loadError: String?
     @State private var hasMinimumCoverage = false
     @State private var showAskMiyaChat = false
+    @State private var showAIConsentForInsightFeatures = false
     
     // AI Insight state
     @State private var aiInsightHeadline: String?
@@ -624,6 +625,11 @@ struct FamilyNotificationDetailSheet: View {
         print("🤖 AI_INSIGHT: fetchAIInsightIfPossible() called for \(item.memberName)")
         print("🤖 AI_INSIGHT: debugWhy = \(item.debugWhy ?? "nil")")
         
+        guard dataManager.canUseAIThirdPartyServices() else {
+            print("ℹ️ AI_INSIGHT: skipped — third-party AI consent off or not loaded")
+            return
+        }
+        
         // Only fetch for server pattern alerts with an alertStateId
         guard let debugWhy = item.debugWhy else {
             print("❌ AI_INSIGHT: No debugWhy found - exiting")
@@ -761,6 +767,21 @@ struct FamilyNotificationDetailSheet: View {
             return
         }
         #endif
+        
+        guard dataManager.canUseAIThirdPartyServices() else {
+            print("ℹ️ CHAT: third-party AI consent off — skipping AI chat init")
+            await MainActor.run {
+                isInitializing = false
+                chatMessages = [
+                    ChatMessage(
+                        role: .miya,
+                        text: "AI chat is turned off for your account. Enable third-party AI in Edit profile when you’re ready to use this assistant."
+                    ),
+                ]
+                availablePrompts = []
+            }
+            return
+        }
         
         // Extract alert_state_id from debugWhy.
         // Local trend-insight notifications don't have a server alertStateId — skip chat init
@@ -1218,6 +1239,13 @@ struct FamilyNotificationDetailSheet: View {
         
         guard !trimmedText.isEmpty else {
             print("❌ CHAT: Empty text, returning")
+            return
+        }
+        
+        guard dataManager.canUseAIThirdPartyServices() else {
+            await MainActor.run {
+                chatError = "AI features are off. Enable third-party AI in Edit profile to send messages."
+            }
             return
         }
         
@@ -2954,6 +2982,7 @@ struct FamilyNotificationDetailSheet: View {
                 showMessageTemplates = false
             }
         )
+        .environmentObject(dataManager)
     }
     
     // MARK: - Old Body View (to be removed after testing)
@@ -3134,7 +3163,18 @@ struct FamilyNotificationDetailSheet: View {
                             #if DEBUG
                             print("📤 ASK_MIYA_PAYLOAD: \(payload)")
                             #endif
-                            showAskMiyaChat = true
+                            Task {
+                                if !dataManager.isAIThirdPartyConsentLoaded {
+                                    await dataManager.refreshAIThirdPartyConsentFromServer()
+                                }
+                                await MainActor.run {
+                                    guard dataManager.canUseAIThirdPartyServices() else {
+                                        showAIConsentForInsightFeatures = true
+                                        return
+                                    }
+                                    showAskMiyaChat = true
+                                }
+                            }
                         } label: {
                             HStack(spacing: 12) {
                                 ZStack {
@@ -3337,8 +3377,18 @@ struct FamilyNotificationDetailSheet: View {
                         // Primary CTA: either \"Check in\" (3d window) or \"Send challenge\" (7/14/21d window).
                         if isShortCheckInWindow {
                             Button {
-                                // For short 3-day drifts, focus on a gentle check-in via chat.
-                                showAskMiyaChat = true
+                                Task {
+                                    if !dataManager.isAIThirdPartyConsentLoaded {
+                                        await dataManager.refreshAIThirdPartyConsentFromServer()
+                                    }
+                                    await MainActor.run {
+                                        guard dataManager.canUseAIThirdPartyServices() else {
+                                            showAIConsentForInsightFeatures = true
+                                            return
+                                        }
+                                        showAskMiyaChat = true
+                                    }
+                                }
                             } label: {
                                 Text("Check in with \(memberFirstName)")
                                     .font(.system(size: 17, weight: .semibold))
@@ -3395,8 +3445,13 @@ struct FamilyNotificationDetailSheet: View {
                     Button("Close") { dismiss() }
                 }
             }
+            .sheet(isPresented: $showAIConsentForInsightFeatures) {
+                AIThirdPartyConsentRequiredSheet(onOpenSettings: {
+                    showAIConsentForInsightFeatures = false
+                })
+            }
             .sheet(isPresented: $showAskMiyaChat) {
-                MiyaInsightChatSheet(alertItem: item)
+                MiyaInsightChatSheet(alertItem: item, dataManager: dataManager)
             }
             .alert("Data loading", isPresented: .constant(false)) {
                 Button("OK", role: .cancel) { }

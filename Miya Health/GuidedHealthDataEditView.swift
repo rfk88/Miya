@@ -61,9 +61,9 @@ struct GuidedHealthDataEditView: View {
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundColor(.miyaTextPrimary)
                         
-                        // Gender
+                        // Biological sex
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Gender")
+                            Text("Biological sex")
                                 .font(.system(size: 14, weight: .semibold))
                             HStack(spacing: 12) {
                                 ForEach(Gender.allCases) { gender in
@@ -114,23 +114,33 @@ struct GuidedHealthDataEditView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Ethnicity")
                                 .font(.system(size: 14, weight: .semibold))
-                            Menu {
+                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                                 ForEach(Ethnicity.allCases) { ethnicity in
-                                    Button(ethnicity.rawValue) {
+                                    Button {
                                         selectedEthnicity = ethnicity
+                                    } label: {
+                                        HStack {
+                                            Text(ethnicity.rawValue)
+                                                .font(.system(size: 13))
+                                                .foregroundColor(.miyaTextPrimary)
+                                                .multilineTextAlignment(.leading)
+                                            Spacer()
+                                            if selectedEthnicity == ethnicity {
+                                                Image(systemName: "checkmark")
+                                                    .font(.system(size: 12))
+                                                    .foregroundColor(.miyaPrimary)
+                                            }
+                                        }
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 10)
+                                        .background(selectedEthnicity == ethnicity ? Color.miyaPrimary.opacity(0.1) : Color.white)
+                                        .cornerRadius(12)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(selectedEthnicity == ethnicity ? Color.miyaPrimary : Color.miyaBackground.opacity(0.8), lineWidth: 1)
+                                        )
                                     }
                                 }
-                            } label: {
-                                HStack {
-                                    Text(selectedEthnicity?.rawValue ?? "Select ethnicity")
-                                        .foregroundColor(selectedEthnicity == nil ? .miyaTextSecondary : .miyaTextPrimary)
-                                    Spacer()
-                                    Image(systemName: "chevron.down")
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .background(Color.white)
-                                .cornerRadius(12)
                             }
                         }
                         

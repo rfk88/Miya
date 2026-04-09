@@ -1,5 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  AI_CONSENT_DENIED_JSON,
+  isAIThirdPartySharingEnabledForUser,
+} from "../_shared/ai_third_party_consent.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -7,6 +11,21 @@ const corsHeaders: Record<string, string> = {
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+/** Shared calm fallback copy (aligned with other Miya edge functions). */
+const FALLBACK_TIMEOUT =
+  "Sorry — that took a bit too long. When you're ready, tell me whether you'd like a quick family overview or to focus on sleep, movement, or recovery first.";
+const FALLBACK_NETWORK =
+  "Sorry — I couldn't reach Miya just now. Please try again in a moment.";
+const FALLBACK_OPENAI_ERROR =
+  "I couldn't finish that reply just now. Would you like a quick overview, or shall we pick one area — sleep, movement, or recovery?";
+const FALLBACK_UNHANDLED =
+  "Sorry — something went wrong on my side. Please try again, or say whether you'd like to focus on sleep, movement, or recovery first.";
+const FALLBACK_EMPTY_REPLY = "Sorry — I couldn't generate a reply. Please try again.";
+
+/** If user text suggests an emergency, respond without calling the model. */
+const EMERGENCY_REPLY =
+  "If you or someone with you might be having a medical emergency — for example severe chest pain, trouble breathing, confusion, weakness on one side, severe bleeding, or thoughts of self-harm — please contact emergency services straight away (999 in the UK, 911 in the US) or go to A&E. I'm not able to help with emergencies here. Once everyone is safe, I'm here for everyday wellbeing questions about your family.";
 
 type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -32,7 +51,6 @@ function normaliseLabel(input: string): string {
   return input.trim();
 }
 
-// Trend wording that reads naturally alongside a status label.
 function normaliseTrendHuman(input: string): string {
   const v = (input || "").trim().toLowerCase();
   if (!v) return "";
@@ -42,7 +60,6 @@ function normaliseTrendHuman(input: string): string {
   return v;
 }
 
-// Label relative to target (no invented 0-100 thresholds)
 function labelFromTarget(current: number | null, target: number | null): string {
   if (current == null || target == null || target <= 0) return "Unknown";
   const ratio = current / target;
@@ -52,13 +69,28 @@ function labelFromTarget(current: number | null, target: number | null): string 
   return "Could be improved";
 }
 
-// Very simple trend from last-vs-prev.
-// We keep the numeric delta internal; model sees only improving/steady/slipping.
 function trendFromDelta(delta: number | null): string {
   if (delta === null || Number.isNaN(delta)) return "steady";
   if (delta >= 1) return "improving";
   if (delta <= -1) return "slipping";
   return "steady";
+}
+
+/** Lightweight scan of recent user messages for possible emergency wording. */
+function looksLikeUrgentMedicalOrCrisis(userTexts: string[]): boolean {
+  const combined = userTexts.join(" ").toLowerCase();
+  if (combined.length < 3) return false;
+  const patterns: RegExp[] = [
+    /\b999\b|\b911\b|\bemergency\b|\ba&e\b|\ber\b|\bambulance\b/,
+    /\bchest pain\b|\bheart attack\b|\bcrushing (chest|pain)\b/,
+    /\b(can't|cannot) breathe\b|\btrouble breathing\b|\bchoking\b|\bgasping\b/,
+    /\bstroke\b|\bfacial droop\b|\bone side (of my|of the) (face|body)\b|\bslurred speech\b/,
+    /\bsuicid\w*\b|\bkill myself\b|\bend my life\b|\bwant to die\b/,
+    /\bself[- ]harm\b|\bcut myself\b/,
+    /\bunconscious\b|\bpassed out\b|\bnon[- ]responsive\b/,
+    /\bsevere bleed\w*\b|\buncontrolled bleed\w*\b/,
+  ];
+  return patterns.some((p) => p.test(combined));
 }
 
 function buildFamilySnapshotMessage(snapshot: FamilySnapshot | null): ChatMessage | null {
@@ -80,7 +112,9 @@ function buildFamilySnapshotMessage(snapshot: FamilySnapshot | null): ChatMessag
   const priorityLine = priority ? `Priority focus: ${priority}.` : `Priority focus: unknown.`;
 
   const lines: string[] = [];
-  lines.push("Family Snapshot (use this to answer specifically; do not invent data):");
+  lines.push(
+    "Family Snapshot (ground truth for this reply — use only what appears here; do not invent numbers or medical facts):",
+  );
 
   lines.push(
     `Sleep: ${sleepStatus || "Unknown"}${sleepTrend ? ` (${sleepTrend})` : ""}${
@@ -120,7 +154,6 @@ async function fetchFamilySnapshotFromSupabase(opts: {
     global: { headers: { Authorization: `Bearer ${jwt}` } },
   });
 
-  // Identify authed user
   const { data: userRes, error: userErr } = await supabase.auth.getUser(jwt);
   const authedUserId = userRes?.user?.id ?? null;
 
@@ -129,7 +162,6 @@ async function fetchFamilySnapshotFromSupabase(opts: {
     return null;
   }
 
-  // Resolve family_id
   const { data: famRow, error: famErr } = await supabase
     .from("family_members")
     .select("family_id")
@@ -143,7 +175,6 @@ async function fetchFamilySnapshotFromSupabase(opts: {
 
   const familyId = String(famRow.family_id);
 
-  // Fetch all member user_ids in family
   const { data: members, error: memErr } = await supabase
     .from("family_members")
     .select("user_id")
@@ -156,7 +187,6 @@ async function fetchFamilySnapshotFromSupabase(opts: {
 
   const memberIds = members.map((m) => m.user_id).filter(Boolean).map(String);
 
-  // Pull profiles (current snapshot) - ONLY what we need
   const { data: profiles, error: profErr } = await supabase
     .from("user_profiles")
     .select("user_id, first_name, vitality_score_current, optimal_vitality_target")
@@ -164,17 +194,15 @@ async function fetchFamilySnapshotFromSupabase(opts: {
 
   if (profErr) console.log("arlo-chat: profiles fetch error", profErr.message);
 
-  // Pull last 2 vitality_scores per member (for trend)
   const { data: vs, error: vsErr } = await supabase
     .from("vitality_scores")
     .select("user_id, score_date, total_score")
     .in("user_id", memberIds)
     .order("score_date", { ascending: false })
-    .limit(Math.min(200, memberIds.length * 4)); // cap
+    .limit(Math.min(200, memberIds.length * 4));
 
   if (vsErr) console.log("arlo-chat: vitality_scores fetch error", vsErr.message);
 
-  // Helpers
   const profileByUser = new Map<string, any>();
   (profiles ?? []).forEach((p: any) => profileByUser.set(String(p.user_id), p));
 
@@ -186,9 +214,6 @@ async function fetchFamilySnapshotFromSupabase(opts: {
     vsByUser.set(k, arr);
   });
 
-  // Family aggregation: we keep it simple and honest.
-  // - Status: worst (lowest) across members (so you focus where it matters)
-  // - Trend: if any slipping -> slipping; else if any improving -> improving; else steady
   const statusRank: Record<string, number> = {
     Unknown: 0,
     Excellent: 4,
@@ -216,30 +241,24 @@ async function fetchFamilySnapshotFromSupabase(opts: {
 
     const memberTrend = trendFromDelta(delta) as "improving" | "steady" | "slipping";
 
-    // Update family status (lowest wins), but don't let Unknown override known values
     if (memberStatus !== "Unknown") {
       if (familyStatus === "Unknown") familyStatus = memberStatus;
       else if ((statusRank[memberStatus] ?? 0) < (statusRank[familyStatus] ?? 0)) familyStatus = memberStatus;
     }
 
-    // Update family trend
     if (memberTrend === "slipping") familyTrend = "slipping";
     else if (familyTrend !== "slipping" && memberTrend === "improving") familyTrend = "improving";
 
     const name = String(p?.first_name ?? "").trim();
-    // No numbers in the notes. Just a lightweight human summary.
     memberSummaries.push(`${name || "Member"}: ${memberStatus} (${memberTrend})`);
   }
 
-  // Priority logic (simple and readable)
   let priority: "sleep" | "movement" | "recovery" = "movement";
   if (familyTrend === "slipping" || familyStatus === "Could be improved") priority = "recovery";
   else if (familyStatus === "Okay") priority = "sleep";
 
   const summary = `Overall: ${familyStatus} (${familyTrend}).`;
 
-  // Until you define real pillar mappings, don't pretend.
-  // We provide a family-level snapshot used to answer conversations.
   return {
     sleep: { status: familyStatus, trend: familyTrend, note: memberSummaries.slice(0, 4).join(" | ") },
     movement: { status: familyStatus, trend: familyTrend, note: memberSummaries.slice(0, 4).join(" | ") },
@@ -251,6 +270,27 @@ async function fetchFamilySnapshotFromSupabase(opts: {
 
 function safeJsonHeaders(extra: Record<string, string> = {}) {
   return { ...corsHeaders, "Content-Type": "application/json", ...extra };
+}
+
+function buildMiyaFamilySystemPrompt(): string {
+  return `
+You are Miya: a warm, trustworthy family wellbeing coach (British English). You help households think clearly about sleep, movement, and recovery — not as a doctor, but as a calm, informed companion.
+
+TRUST CONTRACT (always follow):
+1) Acknowledge the human concern first in plain language when the user sounds worried or frustrated (one short sentence).
+2) Say what you can see from the Family Snapshot when it is present. If the snapshot is missing or thin, say clearly that your view is limited and avoid guessing.
+3) Never invent raw numbers, lab results, diagnoses, or medical certainty. Do not diagnose conditions or imply you examined someone.
+4) You MAY use overview labels and trends from the snapshot: Excellent / Good / Okay / Could be improved, and improving / steady / slipping. Do not show raw scores unless the user explicitly asks for numbers.
+5) If the user asks "who", "which", or "most" and per-member lines appear in the snapshot notes, compare members fairly and specifically. If those lines are absent, say you don't have member-level detail in what you can see.
+6) Offer one realistic next step the family could try in the next 24 hours when it fits — small, kind, and specific.
+7) If you need to learn more, end with at most ONE question, as the last sentence. Do not ask two questions in one reply.
+8) Vary your wording; avoid repeating the same stock phrases every turn (e.g. "7-day plan", "deep dive") unless the user asks.
+
+SAFETY:
+- If the user describes possible emergency symptoms (severe chest pain, trouble breathing, stroke signs, severe bleeding, thoughts of self-harm), do not coach: give a brief urgent-care directive and stop. (The system may also intercept these messages.)
+
+LENGTH: About 80–140 words. Sound natural — like a trusted friend who respects boundaries.
+`.trim();
 }
 
 Deno.serve(async (req) => {
@@ -274,7 +314,7 @@ Deno.serve(async (req) => {
     const openingLine = String(body?.openingLine ?? "");
 
     if (!Array.isArray(messages) || messages.length === 0) {
-      return new Response(JSON.stringify({ error: "Missing `messages` array." }), {
+      return new Response(JSON.stringify({ error: "Missing messages array." }), {
         status: 400,
         headers: safeJsonHeaders(),
       });
@@ -293,6 +333,18 @@ Deno.serve(async (req) => {
       }
     }
 
+    const recentUserTexts = messages
+      .filter((m) => m.role === "user")
+      .map((m) => m.content)
+      .slice(-5);
+    if (looksLikeUrgentMedicalOrCrisis(recentUserTexts)) {
+      console.log("arlo-chat: urgent/crisis pattern — skipping model");
+      return new Response(JSON.stringify({ reply: EMERGENCY_REPLY }), {
+        status: 200,
+        headers: safeJsonHeaders(),
+      });
+    }
+
     const apiKey = Deno.env.get("OPENAI_API_KEY");
     const model = Deno.env.get("OPENAI_MODEL") ?? "gpt-4o-mini";
 
@@ -303,56 +355,55 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Supabase secrets (must be set in Edge Function secrets)
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
-    // JWT from client request
     const authHeader = req.headers.get("authorization") ?? req.headers.get("Authorization") ?? "";
     const jwt = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
 
-    // 1) Fetch snapshot (fast + capped)
-    let familySnapshot: FamilySnapshot | null = null;
-    if (supabaseUrl && serviceRoleKey && jwt) {
-      const ts0 = Date.now();
-      console.log("arlo-chat: fetching family snapshot");
-      familySnapshot = await fetchFamilySnapshotFromSupabase({ supabaseUrl, serviceRoleKey, jwt });
-      console.log(
-        "arlo-chat: snapshot present",
-        !!familySnapshot,
-        "ms",
-        Date.now() - ts0,
-      );
-    } else {
-      console.log("arlo-chat: missing SUPABASE_URL / SERVICE_ROLE / JWT; skipping snapshot");
+    if (!supabaseUrl || !serviceRoleKey || !jwt) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: safeJsonHeaders(),
+      });
     }
 
-    // 2) Build system prompt: Miya, warm, one question only, no repetitive offers
+    const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
+    const { data: authUser, error: authErr } = await supabaseAdmin.auth.getUser(jwt);
+    if (authErr || !authUser?.user?.id) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: safeJsonHeaders(),
+      });
+    }
+    const consentOk = await isAIThirdPartySharingEnabledForUser(supabaseAdmin, authUser.user.id);
+    if (!consentOk) {
+      console.log("arlo-chat: third-party AI consent denied for user", authUser.user.id);
+      return new Response(JSON.stringify(AI_CONSENT_DENIED_JSON), {
+        status: 403,
+        headers: safeJsonHeaders(),
+      });
+    }
+
+    let familySnapshot: FamilySnapshot | null = null;
+    const ts0 = Date.now();
+    console.log("arlo-chat: fetching family snapshot");
+    familySnapshot = await fetchFamilySnapshotFromSupabase({ supabaseUrl, serviceRoleKey, jwt });
+    console.log("arlo-chat: snapshot present", !!familySnapshot, "ms", Date.now() - ts0);
+
     const system: ChatMessage = {
       role: "system",
-      content: `
-You are Miya: a warm, supportive family health and wellness coach (British English). Sound natural, informative, warm, and motivating—like a trusted friend who cares about the family. Your job is to answer the user's question clearly, using the Family Snapshot when present.
-
-Rules:
-- You MAY reference OVERVIEWS and TRENDS only (Excellent/Good/Okay/Could be improved + improving/steady/slipping). Do NOT show raw numbers unless the user explicitly asks.
-- Do NOT diagnose medical conditions.
-- When you want to learn more, end your message with exactly ONE question. Never ask two or more questions in one reply—the only question should be the last sentence.
-- Avoid repeating the same phrases or offers every message (e.g. "7-day plan", "deeper dive", "quick tip"). Vary your language and keep the conversation fresh and natural.
-- If the Family Snapshot includes per-member summaries, you MUST compare members when the user asks "who", "which", or "most". Never say you cannot tell if member-level summaries are present.
-
-Reply style:
-- Give a direct, warm answer first (1–2 sentences).
-- Briefly tie to the snapshot or their message when relevant ("Why" in one short line).
-- Suggest one simple next step the whole family can do in 24h when it fits.
-- End with exactly one question if you want to learn more—nothing else after that question.
-
-Keep it conversational. 80–140 words.
-      `.trim(),
+      content: buildMiyaFamilySystemPrompt(),
     };
 
     const contextBits: string[] = [];
     if (firstName.trim()) contextBits.push(`User first name: ${firstName.trim()}.`);
-    if (openingLine.trim()) contextBits.push(`Opening context: ${openingLine.trim()}.`);
+    if (openingLine.trim()) contextBits.push(`Opening context from the app: ${openingLine.trim()}.`);
+    if (!familySnapshot) {
+      contextBits.push(
+        "No Family Snapshot is available for this reply — say so briefly and avoid fabricating family metrics.",
+      );
+    }
 
     const contextSystem: ChatMessage | null = contextBits.length
       ? { role: "system", content: contextBits.join(" ") }
@@ -360,7 +411,6 @@ Keep it conversational. 80–140 words.
 
     const snapshotSystem = buildFamilySnapshotMessage(familySnapshot);
 
-    // Keep only last N messages for speed and relevance
     const recentMessages = messages
       .filter((m) => typeof m.content === "string" && m.content.trim().length > 0)
       .slice(-10);
@@ -372,11 +422,10 @@ Keep it conversational. 80–140 words.
       ...recentMessages,
     ];
 
-    // 3) OpenAI Chat Completions API
     const payload = {
       model,
       messages: input,
-      max_tokens: 260,
+      max_tokens: 280,
     };
 
     console.log("arlo-chat: calling openai", { model, inputCount: input.length });
@@ -387,7 +436,6 @@ Keep it conversational. 80–140 words.
 
     let resp: Response;
     try {
-      // OpenAI Chat Completions API (must be /v1/chat/completions, not /v1/responses).
       resp = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -406,9 +454,7 @@ Keep it conversational. 80–140 words.
 
       return new Response(
         JSON.stringify({
-          reply: isAbort
-            ? "Sorry — that took too long. Would you like a quick family overview, or shall we focus on sleep, movement, or recovery first?"
-            : "Sorry — I couldn’t reach the coach right now. Try again in a moment.",
+          reply: isAbort ? FALLBACK_TIMEOUT : FALLBACK_NETWORK,
         }),
         { status: 200, headers: safeJsonHeaders() },
       );
@@ -431,22 +477,19 @@ Keep it conversational. 80–140 words.
 
       return new Response(
         JSON.stringify({
-          reply:
-            "I couldn’t generate that just now. Would you like a quick overview, or pick one to focus on: sleep, movement, or recovery?",
+          reply: FALLBACK_OPENAI_ERROR,
           status: resp.status,
         }),
         { status: 200, headers: safeJsonHeaders() },
       );
     }
 
-    // Extract output text (Chat Completions API: choices[0].message.content)
-    const outputText =
-      data?.choices?.[0]?.message?.content ??
-      "";
+    const outputText = data?.choices?.[0]?.message?.content ?? "";
+    const trimmed = outputText && String(outputText).trim();
 
     return new Response(
       JSON.stringify({
-        reply: (outputText && String(outputText).trim()) || "Sorry — I couldn’t generate a reply.",
+        reply: trimmed || FALLBACK_EMPTY_REPLY,
       }),
       { status: 200, headers: safeJsonHeaders() },
     );
@@ -455,8 +498,7 @@ Keep it conversational. 80–140 words.
 
     return new Response(
       JSON.stringify({
-        reply:
-          "Sorry — something went wrong on my side. Try again, or tell me if you’d like to focus on sleep, movement, or recovery first.",
+        reply: FALLBACK_UNHANDLED,
         error: "Unhandled error",
       }),
       { status: 200, headers: safeJsonHeaders() },

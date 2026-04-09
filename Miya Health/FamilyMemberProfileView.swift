@@ -394,11 +394,7 @@ private extension FamilyMemberProfileView {
 private extension FamilyMemberProfileView {
     #if DEBUG
     func isDemoMemberUserId(_ uid: String) -> Bool {
-        let lower = uid.lowercased()
-        return lower == ScreenshotDemoData.simonUserId.lowercased()
-            || lower == ScreenshotDemoData.sarahUserId.lowercased()
-            || lower == ScreenshotDemoData.emmaUserId.lowercased()
-            || lower == ScreenshotDemoData.liamUserId.lowercased()
+        ScreenshotDemoData.isDemoMemberUserId(uid)
     }
 
     /// Fills profile with realistic demo data so "See how X is doing" doesn't show "Limited data".
@@ -680,6 +676,12 @@ private extension FamilyMemberProfileView {
     /// Fetches AI-generated insight for a pattern alert (headline, clinical interpretation, possible causes, action steps).
     /// Uses the miya_insight Edge Function; result is cached server-side.
     func fetchAIInsight(alertStateId: String) async {
+        guard dataManager.canUseAIThirdPartyServices() else {
+            await MainActor.run {
+                aiInsightError = "Turn on third-party AI in Edit profile to load this insight."
+            }
+            return
+        }
         await MainActor.run {
             aiInsightHeadline = nil
             aiInsightClinicalInterpretation = nil
@@ -1680,6 +1682,7 @@ private struct PillarDiveDeeperSheet: View {
     let recovery: ProfilePillarData?
 
     @EnvironmentObject private var dataManager: DataManager
+    @Environment(\.dismiss) private var dismiss
 
     private enum PillarRange: Int, CaseIterable, Identifiable {
         case days30 = 30
@@ -1710,6 +1713,7 @@ private struct PillarDiveDeeperSheet: View {
     @State private var isSending: Bool = false
     @State private var scrollToBottomTrigger: Int = 0
     @State private var showPills: Bool = true  // Control pill visibility
+    @State private var showAIConsentSheet: Bool = false
     
     // Dynamic pills state
     @State private var dynamicPills: [Pill] = []
@@ -1763,6 +1767,11 @@ private struct PillarDiveDeeperSheet: View {
     @MainActor
     private func sendMessage(intent: String?) async {
         guard !messages.isEmpty else { return }
+        
+        guard dataManager.canUseAIThirdPartyServices() else {
+            showAIConsentSheet = true
+            return
+        }
 
         isSending = true
 
@@ -1995,6 +2004,11 @@ private struct PillarDiveDeeperSheet: View {
                             Button(action: {
                                 let trimmed = chatInput.trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard !trimmed.isEmpty else { return }
+                                
+                                guard dataManager.canUseAIThirdPartyServices() else {
+                                    showAIConsentSheet = true
+                                    return
+                                }
 
                                 let intentTag = selectedIntent
                                 
@@ -2053,6 +2067,12 @@ private struct PillarDiveDeeperSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .sheet(isPresented: $showAIConsentSheet) {
+            AIThirdPartyConsentRequiredSheet(onOpenSettings: {
+                showAIConsentSheet = false
+                dismiss()
+            })
+        }
         .task {
             // Seed opening message for chat if empty
             if pillar == .overview && messages.isEmpty {
@@ -2085,6 +2105,10 @@ private struct PillarDiveDeeperSheet: View {
             HStack(spacing: 10) {
                 ForEach(displayedPills) { pill in
                     Button {
+                        guard dataManager.canUseAIThirdPartyServices() else {
+                            showAIConsentSheet = true
+                            return
+                        }
                         let intent = pill.intent
                         selectedIntent = intent
                         
@@ -2309,6 +2333,18 @@ private struct PillarDiveDeeperSheet: View {
             isLoading = true
             loadError = nil
         }
+
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled && ScreenshotDemoData.isDemoMemberUserId(memberUserId) {
+            let vp = vitalityPillar(for: pillar)
+            let rows = ScreenshotDemoData.makeDemoPillarHistory(userId: memberUserId, pillar: vp, days: days)
+            await MainActor.run {
+                history = rows
+                isLoading = false
+            }
+            return
+        }
+        #endif
 
         do {
             let vp = vitalityPillar(for: pillar)

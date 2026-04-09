@@ -11,6 +11,10 @@
 // - MIYA_AI_ENABLED (default: true)
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  AI_CONSENT_DENIED_JSON,
+  isAIThirdPartySharingEnabledForUser,
+} from "../_shared/ai_third_party_consent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -135,6 +139,16 @@ Deno.serve(async (req) => {
       .limit(1)
       .maybeSingle();
     if (memberErr || !memberLink) return jsonResponse({ ok: false, error: "Not authorized" }, 403);
+
+    const memberConsent = await isAIThirdPartySharingEnabledForUser(supabaseAdmin, alert.user_id);
+    const callerConsent = await isAIThirdPartySharingEnabledForUser(supabaseAdmin, callerId);
+    if (!memberConsent || !callerConsent) {
+      console.log("miya_insight_chat: third-party AI consent denied", {
+        memberOk: memberConsent,
+        callerOk: callerConsent,
+      });
+      return jsonResponse({ ...AI_CONSENT_DENIED_JSON }, 403);
+    }
 
     // Thread upsert
     const { data: thread, error: threadErr } = await supabaseAdmin

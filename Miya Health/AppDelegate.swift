@@ -27,20 +27,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // banners while the app is in the foreground.
         UNUserNotificationCenter.current().delegate = self
 
-        // Request permission and register with APNs.
-        // The actual token is received in didRegisterForRemoteNotificationsWithDeviceToken.
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            if let error = error {
-                print("⚠️ AppDelegate: Push permission error: \(error.localizedDescription)")
-            }
-            if granted {
-                DispatchQueue.main.async {
-                    application.registerForRemoteNotifications()
-                }
-            } else {
-                print("⚠️ AppDelegate: Push notifications permission denied by user")
-            }
-        }
+        // Push permission is requested from onboarding Privacy & Alerts when the user enables
+        // "Push notifications". This avoids prompting too early at cold app launch.
 
         return true
     }
@@ -108,4 +96,31 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) {
         completionHandler([.banner, .sound, .badge])
     }
+
+    /// Called when the user taps a push notification banner.
+    /// Posts a typed NotificationCenter event so SwiftUI views can react
+    /// without AppDelegate needing direct references to view state.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let userInfo = response.notification.request.content.userInfo
+        if let data = userInfo["data"] as? [String: Any],
+           let kind = data["kind"] as? String {
+            switch kind {
+            case "invite_joined":
+                NotificationCenter.default.post(
+                    name: .miyaPushTapInviteJoined, object: nil
+                )
+            default:
+                break
+            }
+        }
+        completionHandler()
+    }
+}
+
+extension Notification.Name {
+    static let miyaPushTapInviteJoined = Notification.Name("MiyaPushTapInviteJoined")
 }

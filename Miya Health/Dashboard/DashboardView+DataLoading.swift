@@ -313,6 +313,33 @@ extension DashboardView {
     
     /// Consolidated dashboard initialization logic (extracted from .task for compiler performance)
     internal func onDashboardAppear() async {
+        // #region agent log
+        dbgLog("onDashboardAppear START", hyp: "H2", runId: "initial", data: [
+            "isRefreshingDashboard": isRefreshingDashboard,
+            "currentUserIdString_isNil": currentUserIdString == nil,
+            "familyMembers_count_before": familyMembers.count,
+            "familyVitalityScore_before": familyVitalityScore as Any
+        ])
+        // #endregion
+        let alreadyRefreshing = await MainActor.run {
+            if isRefreshingDashboard { return true }
+            isRefreshingDashboard = true
+            return false
+        }
+        if alreadyRefreshing {
+            print("ℹ️ Dashboard: onDashboardAppear skipped (refresh already in progress)")
+            // #region agent log
+            dbgLog("onDashboardAppear SKIPPED alreadyRefreshing", hyp: "H2", runId: "initial")
+            // #endregion
+            return
+        }
+        defer {
+            Task { @MainActor in
+                isRefreshingDashboard = false
+                lastDashboardRefreshDate = Date()
+            }
+        }
+
         print("DashboardView .task started")
         loadFamilyName()
         currentUserIdString = await dataManager.currentUserIdString
@@ -322,6 +349,7 @@ extension DashboardView {
         }
         #if DEBUG
         if ScreenshotDemoData.isScreenshotModeEnabled {
+            await dataManager.refreshAIThirdPartyConsentFromServer()
             await loadScreenshotDemoData()
             return
         }
@@ -331,34 +359,56 @@ extension DashboardView {
 
         await refreshFamilyVitalitySnapshotsIfPossible()
         await loadFamilyMembers()
+        // #region agent log
+        dbgLog("after loadFamilyMembers", hyp: "H3", runId: "initial", data: [
+            "familyMembers_count": familyMembers.count,
+            "familyMemberRecords_count": familyMemberRecords.count,
+            "currentFamilyId_isNil": dataManager.currentFamilyId == nil
+        ])
+        // #endregion
         await loadServerPatternAlerts()
         await loadActiveMemberChallenge()
-        // ALWAYS load vitality on app launch (to show cached score)
         await loadFamilyVitality()
-        // Weekly refresh logic: only refresh from server on Sundays
+        // #region agent log
+        dbgLog("after loadFamilyVitality", hyp: "H4", runId: "initial", data: [
+            "familyVitalityScore": familyVitalityScore as Any,
+            "familyVitalityMembersWithData": familyVitalityMembersWithData as Any,
+            "familyVitalityMembersTotal": familyVitalityMembersTotal as Any,
+            "isLoadingFamilyVitality": isLoadingFamilyVitality
+        ])
+        // #endregion
         if WeeklyVitalityScheduler.shared.shouldRefreshFamilyVitality() {
             await refreshFamilyVitalitySnapshotsIfPossible()
-            await loadFamilyVitality() // Reload after server refresh
+            await loadFamilyVitality()
             WeeklyVitalityScheduler.shared.markRefreshed()
         } else if WeeklyVitalityScheduler.shared.needsInitialRefresh() {
-            // First-time user or >7 days since last refresh - allow refresh
             await refreshFamilyVitalitySnapshotsIfPossible()
-            await loadFamilyVitality() // Reload after server refresh
+            await loadFamilyVitality()
             WeeklyVitalityScheduler.shared.markRefreshed()
         }
-        // Check and update current user's vitality if needed
         await checkAndUpdateCurrentUserVitality()
         await computeAndStoreFamilySnapshot()
         await computeTrendInsights()
         await computeFamilyBadgesIfNeeded()
+        // #region agent log
+        dbgLog("onDashboardAppear END", hyp: "H1", runId: "initial", data: [
+            "familyMembers_count_after": familyMembers.count,
+            "serverPatternAlerts_count_after": serverPatternAlerts.count,
+            "dailyBadgeWinners_count_after": dailyBadgeWinners.count,
+            "weeklyBadgeWinners_count_after": weeklyBadgeWinners.count,
+            "familyVitalityScore_after": familyVitalityScore as Any
+        ])
+        // #endregion
         print("DashboardView .task finished, familyVitalityScore=\(String(describing: familyVitalityScore))")
 
-        // If both server alerts and trend insights are empty but we have family members,
-        // the Supabase session may not have been fully propagated on first login.
-        // Re-run the member + trend pipeline once after a short delay.
+        await dataManager.refreshAIThirdPartyConsentFromServer()
+        await MainActor.run {
+            evaluateLegacyAITransparencyIfNeeded()
+        }
+
         if serverPatternAlerts.isEmpty && trendInsights.isEmpty && !familyMembers.isEmpty {
             print("⚠️ Dashboard: Empty notifications on initial load — retrying member+trend pipeline after delay")
-            try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 s
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
             await loadFamilyMembers()
             await loadServerPatternAlerts()
             await computeAndStoreFamilySnapshot()
@@ -368,24 +418,52 @@ extension DashboardView {
     }
     
     // MARK: - Debug logging helper (session 0f4dd1)
-    private func dbgLog(_ msg: String, hyp: String, data: [String: Any] = [:]) {
-        // #region agent log
-        var payload: [String: Any] = ["sessionId": "0f4dd1", "timestamp": Int(Date().timeIntervalSince1970 * 1000), "location": "DashboardView+DataLoading.swift", "message": msg, "hypothesisId": hyp]
-        if !data.isEmpty { payload["data"] = data }
-        if let d = try? JSONSerialization.data(withJSONObject: payload), let s = String(data: d, encoding: .utf8) {
-            let path = "/Users/ramikaawach/Desktop/Miya Live/.cursor/debug-0f4dd1.log"
-            let line = s + "\n"
-            if let h = FileHandle(forWritingAtPath: path) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); h.closeFile() } else { try? line.write(toFile: path, atomically: false, encoding: .utf8) }
+    private func dbgLog(_ msg: String, hyp: String, runId: String = "initial", data: [String: Any] = [:]) {
+        return
+    }
+
+    /// Lightweight foreground refresh: reload the most visible data (members, vitality, alerts)
+    /// without the expensive trend/badge/snapshot recompute. Keeps the dashboard feeling fresh
+    /// on resume without the full pipeline cost.
+    internal func softRefreshDashboard() async {
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled { return }
+        #endif
+        let alreadyRefreshing = await MainActor.run {
+            if isRefreshingDashboard { return true }
+            isRefreshingDashboard = true
+            return false
         }
-        // #endregion
+        if alreadyRefreshing { return }
+        defer {
+            Task { @MainActor in
+                isRefreshingDashboard = false
+                lastDashboardRefreshDate = Date()
+            }
+        }
+        print("🔄 Dashboard: soft refresh (foreground resume)")
+        await loadFamilyMembers()
+        await loadServerPatternAlerts()
+        await loadFamilyVitality()
+        await loadActiveMemberChallenge()
     }
 
     /// Pull-to-refresh handler (extracted for compiler performance)
     internal func onPullToRefresh() async {
-        // Avoid overlapping refresh calls that can trigger cancellation
-        if isLoadingFamilyMembers || isLoadingFamilyVitality {
+        let alreadyRefreshing = await MainActor.run {
+            if isRefreshingDashboard { return true }
+            isRefreshingDashboard = true
+            return false
+        }
+        if alreadyRefreshing {
             print("ℹ️ Dashboard: refresh skipped (already loading)")
             return
+        }
+        defer {
+            Task { @MainActor in
+                isRefreshingDashboard = false
+                lastDashboardRefreshDate = Date()
+            }
         }
         #if DEBUG
         if ScreenshotDemoData.isScreenshotModeEnabled {
@@ -863,8 +941,10 @@ extension DashboardView {
             }
 
             await MainActor.run {
-                familyMembers = ordered
-                vitalityFactors = factors
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    familyMembers = ordered
+                    vitalityFactors = factors
+                }
                 loadFamilyName()
             }
             
@@ -933,7 +1013,9 @@ extension DashboardView {
             BadgeEngine.Winner(badgeType: "weekly_sleep_mvp", winnerUserId: ScreenshotDemoData.sarahUserId, winnerName: "Sarah", metadata: ["percentIncrease": 5.0, "thisAvg": 80.0, "prevAvg": 76.0]),
             BadgeEngine.Winner(badgeType: "weekly_movement_mvp", winnerUserId: ScreenshotDemoData.emmaUserId, winnerName: "Emma", metadata: ["percentIncrease": 7.0, "thisAvg": 72.0, "prevAvg": 67.0]),
         ]
+        let shouldAnimate = DashboardResumeFlags.demoAnimationsEnabled && DashboardResumeFlags.sectionAnimationsEnabled
         await MainActor.run {
+            if shouldAnimate { resetSectionAnimationState() }
             familyMembers = ordered
             familyMemberRecords = ScreenshotDemoData.makeFamilyMemberRecords()
             serverPatternAlerts = ScreenshotDemoData.makeServerPatternAlerts()
@@ -951,6 +1033,10 @@ extension DashboardView {
             weeklyBadgeWinners = weeklyWinners
             isComputingBadges = false
         }
+        if shouldAnimate {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            await MainActor.run { triggerSectionEntranceAnimations() }
+        }
         print("DashboardView: Loaded screenshot demo data (4 members, 2 alerts, champions)")
     }
     #endif
@@ -958,7 +1044,9 @@ extension DashboardView {
     internal func loadFamilyVitality() async {
         print("loadFamilyVitality() called")
         await MainActor.run {
-            isLoadingFamilyVitality = true
+            if familyVitalityScore == nil {
+                isLoadingFamilyVitality = true
+            }
             familyVitalityErrorMessage = nil
         }
         
@@ -983,10 +1071,12 @@ extension DashboardView {
             dbgLog("loadFamilyVitality result", hyp: "B", data: ["score": summary.score as Any, "membersWithData": summary.membersWithData, "membersTotal": summary.membersTotal])
             // #endregion
             await MainActor.run {
-                familyVitalityScore = summary.score
-                familyVitalityProgressScore = summary.progressScore
-                familyVitalityMembersWithData = summary.membersWithData
-                familyVitalityMembersTotal = summary.membersTotal
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    familyVitalityScore = summary.score
+                    familyVitalityProgressScore = summary.progressScore
+                    familyVitalityMembersWithData = summary.membersWithData
+                    familyVitalityMembersTotal = summary.membersTotal
+                }
             }
         } catch {
             // Preserve last-known good state on cancellation (BUG-025: type/code only, no string match).

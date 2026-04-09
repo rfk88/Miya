@@ -165,6 +165,18 @@ struct VitalityFactorDetailSheet: View {
     
     private func loadMemberDetails() async {
         isLoading = true
+
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled {
+            await MainActor.run {
+                memberDetails = ScreenshotDemoData.makePillarMemberDetails(pillar: pillar, members: factor.memberScores)
+                hasAnyBackfilledData = false
+                oldestSourceAgeInDays = 0
+                isLoading = false
+            }
+            return
+        }
+        #endif
         
         // Get member user IDs
         let memberIds = factor.memberScores.compactMap { $0.userId }.filter { !$0.isEmpty }

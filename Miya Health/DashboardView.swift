@@ -4,6 +4,17 @@ import Foundation
 import Supabase
 import RookSDK
 
+// MARK: - Smooth Resume Feature Flags (rollback switches)
+// Set to `false` to revert to pre-smooth-resume behavior.
+enum DashboardResumeFlags {
+    /// When true, foreground resume uses a lightweight soft-refresh instead of the full pipeline.
+    static let softRefreshOnForeground = true
+    /// When true, section entrance animations are enabled on the dashboard.
+    static let sectionAnimationsEnabled = false
+    /// When true, demo/screenshot mode uses the same section entrance animations. Set false to disable independently.
+    static let demoAnimationsEnabled = false
+}
+
 // AUDIT REPORT (guided onboarding status-driven admin dashboard)
 // - Compile audit: Cannot run `xcodebuild` in this environment (no Xcode). Verified compile-safety via lints/type checks in Cursor.
 // - State integrity: Admin "Guided setup" UI reads only from `FamilyMemberRecord.guidedSetupStatus` (canonical DB field)
@@ -77,6 +88,9 @@ struct DashboardView: View {
     
     // Chat with Miya sheet
     @State internal var isArloChatPresented: Bool = false
+    @State internal var showAIThirdPartyConsentGate: Bool = false
+    @State internal var showLegacyAIThirdPartyTransparency: Bool = false
+    @State internal var showEditProfileForAIConsent: Bool = false
     
     // Family vitality (in-memory only; no UI yet)
     @State internal var familyVitalityScore: Int? = nil
@@ -139,11 +153,32 @@ struct DashboardView: View {
     // Superadmin-only: present Invite Member flow from sidebar reliably (single source of truth at Dashboard root)
     @State internal var isInviteMemberSheetPresented: Bool = false
     @State internal var showFamilyChallenges: Bool = false
+
+    /// First-time post-onboarding orientation (7 cards); gated by `DashboardOrientationStorage`.
+    @State private var showDashboardOrientation: Bool = false
+    @State private var orientationEligibilityRetryCount: Int = 0
+    /// Resolved user ID locked in when orientation eligibility is confirmed.
+    /// Using the same ID for both the hasCompleted check and markCompleted save
+    /// prevents mismatches when onboardingManager.currentUserId and currentUserIdString
+    /// are briefly out of sync (e.g. returning email/password login before async hydration).
+    @State private var orientationGatingUserId: String? = nil
     
     // Loading states (avoid flashing placeholders while data is still loading)
     @State internal var isLoadingFamilyMembers: Bool = false
     @State internal var isShowingDebugUpload: Bool = false
     @State internal var isShowingDebugAddRecord: Bool = false
+
+    /// Prevents overlapping full-pipeline refreshes (foreground bounce, .task re-fire, pull-to-refresh).
+    @State internal var isRefreshingDashboard: Bool = false
+    /// Tracks when the last full dashboard refresh completed (for staleness checks).
+    @State internal var lastDashboardRefreshDate: Date? = nil
+
+    // Section entrance animation state (Phase 3: smooth resume polish)
+    @State internal var sectionAppearMembers: Bool = false
+    @State internal var sectionAppearVitality: Bool = false
+    @State internal var sectionAppearNotifications: Bool = false
+    @State internal var sectionAppearBadges: Bool = false
+    @State internal var sectionAppearPersonal: Bool = false
     
     internal var displayedNotifications: [FamilyNotificationItem] {
         // Server pattern alerts come directly from the DB — they don't require a local snapshot
@@ -191,28 +226,96 @@ struct DashboardView: View {
         }
     }
     
+    // MARK: - Body (split into two expressions for compiler type-check performance)
+
     var body: some View {
+        dashboardContentWithSheets
+        .task {
+            await onDashboardAppear()
+            await MainActor.run {
+                scheduleDashboardOrientationIfNeeded()
+                triggerSectionEntranceAnimations()
+            }
+        }
+        .onChange(of: familyMembers.count) { _, newCount in
+            guard newCount > 0, !sectionAppearMembers else { return }
+            triggerSectionEntranceAnimations()
+        }
+        .onChange(of: familyVitalityScore) { _, newScore in
+            guard newScore != nil, !sectionAppearVitality else { return }
+            triggerSectionEntranceAnimations()
+        }
+        .onChange(of: onboardingManager.isOnboardingComplete) { _, isComplete in
+            guard isComplete else { return }
+            scheduleDashboardOrientationIfNeeded()
+        }
+        .onChange(of: currentUserIdString) { _, _ in
+            scheduleDashboardOrientationIfNeeded()
+        }
+        .onChange(of: dataManager.isAIThirdPartyConsentLoaded) { _, _ in
+            evaluateLegacyAITransparencyIfNeeded()
+        }
+        .onChange(of: dataManager.aiThirdPartyConsentSource) { _, _ in
+            evaluateLegacyAITransparencyIfNeeded()
+        }
+        .onChange(of: serverPatternAlerts.count) { _, _ in
+            triggerSectionEntranceAnimations()
+        }
+        .onChange(of: dailyBadgeWinners.count) { _, _ in
+            triggerSectionEntranceAnimations()
+        }
+        .onChange(of: weeklyBadgeWinners.count) { _, _ in
+            triggerSectionEntranceAnimations()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            Task {
+                #if DEBUG
+                if ScreenshotDemoData.isScreenshotModeEnabled { return }
+                #endif
+                if shouldCheckVitality() {
+                    await checkAndUpdateCurrentUserVitality()
+                }
+                if DashboardResumeFlags.softRefreshOnForeground {
+                    let staleThreshold: TimeInterval = 5 * 60
+                    let isStale = lastDashboardRefreshDate.map {
+                        Date().timeIntervalSince($0) > staleThreshold
+                    } ?? true
+                    if isStale && !isRefreshingDashboard {
+                        await softRefreshDashboard()
+                    }
+                }
+                await dataManager.refreshAIThirdPartyConsentFromServer()
+            }
+        }
+    } // 👈 END OF `var body: some View`
+
+    /// ZStack + sheet/navigation modifiers, extracted so the compiler type-checks each half independently.
+    @ViewBuilder
+    private var dashboardContentWithSheets: some View {
         ZStack {
-            Color.miyaBackground.ignoresSafeArea()  // Use actual onboarding background
-            
+            Color.miyaBackground.ignoresSafeArea()
+
             VStack(spacing: 0) {
                 dashboardTopBar
-                
                 mainScrollContent
             }
-            
-            // NOTIFICATIONS OVERLAY
+
             if showNotifications {
                 notificationsOverlay
             }
-            
-            // SIDEBAR OVERLAY + MENU
+
             if showSidebar {
                 sidebarOverlay
             }
-        } // 👈 END OF ZSTACK
-        
-        // Attach sheets to the whole dashboard view
+
+            if showDashboardOrientation {
+                DashboardOrientationView(userId: orientationGatingUserId) {
+                    showDashboardOrientation = false
+                }
+                .transition(.opacity)
+                .zIndex(5)
+            }
+        }
         .sheet(item: $selectedFactor) { factor in
             VitalityFactorDetailSheet(
                 factor: factor,
@@ -248,8 +351,6 @@ struct DashboardView: View {
             ActivityView(activityItems: [shareText])
         }
         .sheet(item: $selectedFamilyNotification) { item in
-            // Always use the latest version from serverPatternAlerts so care state
-            // updates (e.g. "Following up" after challenge sent) are reflected live.
             let liveItem = serverPatternAlerts.first(where: { $0.id == item.id }) ?? item
             familyNotificationSheet(liveItem)
         }
@@ -280,9 +381,32 @@ struct DashboardView: View {
         .sheet(isPresented: $isArloChatPresented) {
             arloChatSheet
         }
+        .sheet(isPresented: $showAIThirdPartyConsentGate) {
+            AIThirdPartyConsentRequiredSheet {
+                showEditProfileForAIConsent = true
+            }
+        }
+        .sheet(isPresented: $showLegacyAIThirdPartyTransparency) {
+            LegacyAIThirdPartyTransparencySheet(
+                onManageSettings: {
+                    showLegacyAIThirdPartyTransparency = false
+                    showEditProfileForAIConsent = true
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .onDisappear {
+                if let uid = currentUserIdString, !uid.isEmpty {
+                    UserDefaults.standard.set(true, forKey: "miya.didShowAIThirdPartyTransparencyV1.\(uid)")
+                }
+            }
+        }
+        .sheet(isPresented: $showEditProfileForAIConsent) {
+            EditProfileView()
+                .environmentObject(authManager)
+                .environmentObject(dataManager)
+                .environmentObject(onboardingManager)
+        }
         .onChange(of: selectedFamilyNotification?.id) { _, newId in
-            // When the notification detail sheet is dismissed, refetch server pattern alerts
-            // so we can show the correct server-style list (with AI) if it was empty before.
             if newId == nil {
                 Task { await loadServerPatternAlerts() }
             }
@@ -305,20 +429,142 @@ struct DashboardView: View {
         .onChange(of: isShowingDebugAddRecord) { _, isPresented in
             handleDebugAddRecordDismiss(isPresented)
         }
-        .task {
-            await onDashboardAppear()
+    }
+
+    /// Resets all section entrance animation flags so the stagger can replay (e.g. demo toggle, pull-to-refresh replay).
+    internal func resetSectionAnimationState() {
+        sectionAppearMembers = false
+        sectionAppearVitality = false
+        sectionAppearNotifications = false
+        sectionAppearBadges = false
+        sectionAppearPersonal = false
+    }
+
+    /// Staggered entrance animation for dashboard sections.
+    /// Only animates sections that have data ready and haven't animated yet.
+    internal func triggerSectionEntranceAnimations() {
+        // #region agent log
+        dbgViewLog("triggerSectionEntranceAnimations INPUT", hyp: "H1", data: [
+            "familyMembers_count": familyMembers.count,
+            "familyVitalityScore_isNil": familyVitalityScore == nil,
+            "displayedNotifications_count": displayedNotifications.count,
+            "serverPatternAlerts_count": serverPatternAlerts.count,
+            "dailyBadgeWinners_count": dailyBadgeWinners.count,
+            "weeklyBadgeWinners_count": weeklyBadgeWinners.count,
+            "sectionAppearMembers_before": sectionAppearMembers,
+            "sectionAppearVitality_before": sectionAppearVitality,
+            "sectionAppearNotifications_before": sectionAppearNotifications,
+            "sectionAppearBadges_before": sectionAppearBadges,
+            "sectionAppearPersonal_before": sectionAppearPersonal
+        ])
+        // #endregion
+        guard DashboardResumeFlags.sectionAnimationsEnabled else {
+            sectionAppearMembers = true
+            sectionAppearVitality = true
+            sectionAppearNotifications = true
+            sectionAppearBadges = true
+            sectionAppearPersonal = true
+            // #region agent log
+            dbgViewLog("triggerSectionEntranceAnimations OUTPUT (flags disabled)", hyp: "H1", data: [
+                "sectionAppearMembers_after": sectionAppearMembers,
+                "sectionAppearVitality_after": sectionAppearVitality,
+                "sectionAppearNotifications_after": sectionAppearNotifications,
+                "sectionAppearBadges_after": sectionAppearBadges,
+                "sectionAppearPersonal_after": sectionAppearPersonal
+            ])
+            // #endregion
+            return
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-            Task {
-                if shouldCheckVitality() {
-                    await checkAndUpdateCurrentUserVitality()
-                }
+        let baseDelay: Double = 0.06
+        let shouldShowMembers = !isLoadingFamilyMembers
+        if shouldShowMembers && !sectionAppearMembers {
+            withAnimation(.easeOut(duration: 0.3).delay(baseDelay * 0)) {
+                sectionAppearMembers = true
             }
         }
-    } // 👈 END OF `var body: some View`
-    
+        let shouldShowVitality = familyVitalityScore != nil || !isLoadingFamilyVitality
+        if shouldShowVitality && !sectionAppearVitality {
+            withAnimation(.easeOut(duration: 0.3).delay(baseDelay * 1)) {
+                sectionAppearVitality = true
+            }
+        }
+        // Notifications may be legitimately empty for new families; still reveal the section state.
+        let shouldShowNotifications = !displayedNotifications.isEmpty || !serverPatternAlerts.isEmpty || !isRefreshingDashboard
+        if shouldShowNotifications && !sectionAppearNotifications {
+            withAnimation(.easeOut(duration: 0.3).delay(baseDelay * 2)) {
+                sectionAppearNotifications = true
+            }
+        }
+        // Champions can be empty on first load; keep the card visible instead of hidden.
+        let shouldShowBadges = !dailyBadgeWinners.isEmpty || !weeklyBadgeWinners.isEmpty || !isComputingBadges
+        if shouldShowBadges && !sectionAppearBadges {
+            withAnimation(.easeOut(duration: 0.3).delay(baseDelay * 3)) {
+                sectionAppearBadges = true
+            }
+        }
+        let shouldShowPersonal = familyMembers.contains(where: { $0.isMe }) || !isLoadingFamilyMembers
+        if shouldShowPersonal && !sectionAppearPersonal {
+            withAnimation(.easeOut(duration: 0.3).delay(baseDelay * 4)) {
+                sectionAppearPersonal = true
+            }
+        }
+        // #region agent log
+        dbgViewLog("triggerSectionEntranceAnimations OUTPUT", hyp: "H1", data: [
+            "sectionAppearMembers_after": sectionAppearMembers,
+            "sectionAppearVitality_after": sectionAppearVitality,
+            "sectionAppearNotifications_after": sectionAppearNotifications,
+            "sectionAppearBadges_after": sectionAppearBadges,
+            "sectionAppearPersonal_after": sectionAppearPersonal
+        ])
+        // #endregion
+    }
+
+    private func dbgViewLog(_ msg: String, hyp: String, runId: String = "initial", data: [String: Any] = [:]) {
+        return
+    }
+
+    /// Presents the one-time dashboard orientation after data loads when onboarding is complete.
+    private func scheduleDashboardOrientationIfNeeded() {
+        guard onboardingManager.isOnboardingComplete else { return }
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled { return }
+        #endif
+        // Prefer the live-session ID from DataManager; fall back to the value set during sign-up.
+        // Using a consistent resolution order here and below guarantees the same key is used for
+        // both hasCompleted and markCompleted, even when onboardingManager.currentUserId is stale
+        // or nil (e.g. returning email/password login before async hydration finishes).
+        let uid = currentUserIdString ?? onboardingManager.currentUserId
+        guard let normalizedUid = uid?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !normalizedUid.isEmpty else {
+            guard orientationEligibilityRetryCount < 4 else { return }
+            orientationEligibilityRetryCount += 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                scheduleDashboardOrientationIfNeeded()
+            }
+            return
+        }
+        DashboardOrientationStorage.migrateLegacyCompletionIfNeeded(userId: normalizedUid)
+        // If completion was saved under the alternate ID source, migrate it to the canonical key
+        // so the check below correctly finds it.
+        DashboardOrientationStorage.crossCheckAndMigrateIfNeeded(
+            primaryId: normalizedUid,
+            alternateId: onboardingManager.currentUserId
+        )
+        #if DEBUG
+        print("🔎 OrientationCheck: uid=\(normalizedUid), hasCompleted=\(DashboardOrientationStorage.hasCompleted(userId: normalizedUid)), onboardingComplete=\(onboardingManager.isOnboardingComplete)")
+        #endif
+        guard !DashboardOrientationStorage.hasCompleted(userId: normalizedUid) else { return }
+        orientationEligibilityRetryCount = 0
+        // Lock in the resolved ID now so the orientation view uses the exact same key when
+        // calling markCompleted — eliminating any check/save mismatch at render time.
+        orientationGatingUserId = normalizedUid
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            showDashboardOrientation = true
+        }
+    }
+
     // MARK: - Extracted Sheet Views (for compiler performance)
-    
+
     internal var inviteMemberSheet: some View {
         NavigationStack {
             FamilyMembersInviteView(isPresentedFromDashboard: true)
@@ -339,8 +585,13 @@ struct DashboardView: View {
             ArloChatView(
                 familyId: familyId,
                 firstName: currentUserFirstNameForGreeting(),
-                openingLine: arloVitalityBand(for: familyVitalityScore).sentence
+                openingLine: arloVitalityBand(for: familyVitalityScore).sentence,
+                onNeedAIConsentSettings: {
+                    isArloChatPresented = false
+                    showEditProfileForAIConsent = true
+                }
             )
+            .environmentObject(dataManager)
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
 
@@ -368,11 +619,31 @@ struct DashboardView: View {
     
     @MainActor
     internal func presentArloChat() async {
+        if !dataManager.isAIThirdPartyConsentLoaded {
+            await dataManager.refreshAIThirdPartyConsentFromServer()
+        }
+        guard dataManager.canUseAIThirdPartyServices() else {
+            showAIThirdPartyConsentGate = true
+            return
+        }
         // If vitality isn't loaded yet, try to load it before presenting chat.
         if familyVitalityScore == nil {
             await loadFamilyVitality()
         }
         isArloChatPresented = true
+    }
+    
+    /// One-time disclosure for accounts backfilled as opted-in at migration (Apple 5.1.1(i)).
+    @MainActor
+    internal func evaluateLegacyAITransparencyIfNeeded() {
+        guard dataManager.isAIThirdPartyConsentLoaded,
+              dataManager.isAIThirdPartySharingEnabled,
+              dataManager.aiThirdPartyConsentSource == "legacy_migration",
+              let uid = currentUserIdString, !uid.isEmpty
+        else { return }
+        let key = "miya.didShowAIThirdPartyTransparencyV1.\(uid)"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        showLegacyAIThirdPartyTransparency = true
     }
     
     internal func familyNotificationSheet(_ item: FamilyNotificationItem) -> some View {
@@ -394,6 +665,7 @@ struct DashboardView: View {
     internal func missingWearableSheet(_ notification: MissingWearableNotification) -> some View {
         MissingWearableDetailSheet(
             notification: notification,
+            dataManager: dataManager,
             onDismiss: {
                 dismissMissingWearableNotification(id: notification.id)
                 selectedMissingWearableNotification = nil
@@ -691,6 +963,17 @@ struct DashboardView: View {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
                     showNotifications = false
                 }
+
+            case .inviteJoined:
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                    showNotifications = false
+                }
+                Task { await loadFamilyMembers() }
+                
+            case .billingOwnerLeft, .billingGraceReminder, .billingInterrupted, .billingRestored:
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                    showNotifications = false
+                }
             }
         }
         
@@ -937,21 +1220,26 @@ struct DashboardView: View {
             .clipped()
             .fixedSize()
         }
-    }
     
     // MARK: - PERSONAL VITALITY CARD
     
     // MARK: - DashboardView Content Extensions
-    extension DashboardView {
         internal var mainScrollContent: some View {
-            ScrollView {
+            let animate = DashboardResumeFlags.sectionAnimationsEnabled
+            return ScrollView {
                 VStack(alignment: .leading, spacing: DashboardDesign.sectionSpacing) {
                     dataBackfillBanner
                     familyMembersSection
+                        .opacity(animate ? (sectionAppearMembers ? 1 : 0) : 1)
+                        .offset(y: animate ? (sectionAppearMembers ? 0 : 12) : 0)
                     guidedSetupSection
                     missingWearableSection
                     familyVitalitySection
+                        .opacity(animate ? (sectionAppearVitality ? 1 : 0) : 1)
+                        .offset(y: animate ? (sectionAppearVitality ? 0 : 12) : 0)
                     notificationsSection
+                        .opacity(animate ? (sectionAppearNotifications ? 1 : 0) : 1)
+                        .offset(y: animate ? (sectionAppearNotifications ? 0 : 12) : 0)
                     if let challenge = activeMemberChallenge {
                         MyChallengeView(challenge: challenge)
                     }
@@ -961,7 +1249,11 @@ struct DashboardView: View {
                     dataGuidanceBannerSection
                     badgeSaveErrorBanner
                     badgesSection
+                        .opacity(animate ? (sectionAppearBadges ? 1 : 0) : 1)
+                        .offset(y: animate ? (sectionAppearBadges ? 0 : 12) : 0)
                     personalVitalitySection
+                        .opacity(animate ? (sectionAppearPersonal ? 1 : 0) : 1)
+                        .offset(y: animate ? (sectionAppearPersonal ? 0 : 12) : 0)
                     Spacer(minLength: DashboardDesign.sectionSpacing)
                 }
                 .padding(EdgeInsets(
@@ -1089,10 +1381,14 @@ struct DashboardView: View {
                 
                 Button {
                     ScreenshotDemoData.isScreenshotModeEnabled.toggle()
+                    if ScreenshotDemoData.isScreenshotModeEnabled && DashboardResumeFlags.demoAnimationsEnabled {
+                        resetSectionAnimationState()
+                    }
                     Task {
                         await onDashboardAppear()
                         if ScreenshotDemoData.isScreenshotModeEnabled {
                             await loadBellNotifications()
+                            await MainActor.run { triggerSectionEntranceAnimations() }
                         }
                     }
                 } label: {
@@ -1120,7 +1416,8 @@ struct DashboardView: View {
                 if isLoadingFamilyMembers {
                     DashboardInlineLoaderCard(title: "Family members")
                 } else {
-                    FamilyMembersStrip(members: familyMembers, familyId: dataManager.currentFamilyId, currentUserAvatarURL: onboardingManager.avatarURL)
+                    // Use initials immediately for all members; avoid delayed remote avatar pop-in on first load.
+                    FamilyMembersStrip(members: familyMembers, familyId: dataManager.currentFamilyId, currentUserAvatarURL: nil)
                         .id(familyMembersRefreshID)
                 }
             }
@@ -1231,6 +1528,18 @@ struct DashboardView: View {
                         Task { await snoozeNotification(item, days: days) }
                     }
                 )
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Family insights")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(DashboardDesign.primaryTextColor)
+                    Text("No alerts yet. As your family syncs more health data, insights will show up here.")
+                        .font(.system(size: 13))
+                        .foregroundColor(DashboardDesign.secondaryTextColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(DashboardDesign.cardPadding)
+                .background(DashboardDesign.glassCardBackground(tint: .white))
             }
         }
         
@@ -1301,7 +1610,7 @@ struct DashboardView: View {
         
         @ViewBuilder
         internal var familyVitalitySection: some View {
-            if isLoadingFamilyVitality {
+            if isLoadingFamilyVitality && familyVitalityScore == nil {
                 FamilyVitalityLoadingCard()
             } else if let score = familyVitalityScore {
                 FamilyVitalityCard(
@@ -1376,7 +1685,8 @@ struct DashboardView: View {
                 PersonalVitalityCard(
                     currentUser: me,
                     factors: vitalityFactors,
-                    avatarURL: onboardingManager.avatarURL,
+                    // Keep dashboard stable: use initials-first avatar instead of waiting on remote image.
+                    avatarURL: nil,
                     demoAvatarImageName: {
                         #if DEBUG
                         return ScreenshotDemoData.isScreenshotModeEnabled ? ScreenshotDemoData.demoAvatarAssetName(for: me.name) : nil
@@ -1387,7 +1697,6 @@ struct DashboardView: View {
                 )
             }
         }
-    }
     
     
     
@@ -1403,6 +1712,8 @@ struct DashboardView: View {
     
     // MARK: - Pillar Status Indicator
     
+}
+
     
     #Preview {
         NavigationStack {

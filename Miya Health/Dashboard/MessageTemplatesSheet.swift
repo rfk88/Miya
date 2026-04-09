@@ -33,6 +33,7 @@ struct MessageTemplatesSheet: View {
     let suggestedMessages: [(label: String, text: String)]
     let onSendMessage: (String, MessagePlatform) -> Void
     
+    @EnvironmentObject private var dataManager: DataManager
     @Environment(\.dismiss) private var dismiss
     @State private var selectedMessageIndex: Int = 0
     @State private var customMessage: String = ""
@@ -350,6 +351,11 @@ struct MessageTemplatesSheet: View {
     }
     
     private func regenerateMessageWithTone(messageIndex: Int, tone: MessageTone) async {
+        guard dataManager.canUseAIThirdPartyServices() else {
+            print("ℹ️ regenerate_message: skipped — third-party AI consent off or not loaded")
+            return
+        }
+        
         await MainActor.run {
             isRegeneratingMessage = true
         }

@@ -167,26 +167,66 @@ async function fetchExerciseDates(supabase: any, userId: string, startDate: stri
   return dates;
 }
 
-async function fetchFamilyAdminRecipients(supabase: any, memberUserId: string): Promise<string[]> {
-  // Find family_id for member
+/** All accepted family member user_ids except the triggering member (for level 7+ pattern fan-out). */
+async function fetchAcceptedFamilyMemberUserIdsExcludingMember(
+  supabase: any,
+  memberUserId: string,
+): Promise<string[]> {
   const { data: fm, error: fmErr } = await supabase
     .from("family_members")
     .select("family_id")
     .eq("user_id", memberUserId)
+    .eq("invite_status", "accepted")
     .maybeSingle();
-  if (fmErr || !fm?.family_id) return [memberUserId];
+  if (fmErr || !fm?.family_id) return [];
 
-  const familyId = fm.family_id;
-  const { data: admins, error: aErr } = await supabase
+  const { data: rows, error: mErr } = await supabase
     .from("family_members")
-    .select("user_id,role,invite_status")
-    .eq("family_id", familyId)
-    .in("role", ["superadmin", "admin"])
-    .eq("invite_status", "accepted");
-  if (aErr) return [memberUserId];
+    .select("user_id")
+    .eq("family_id", fm.family_id)
+    .eq("invite_status", "accepted")
+    .not("user_id", "is", null);
 
-  const ids = (admins ?? []).map((r: any) => String(r.user_id)).filter((x) => x && x !== "null");
-  return ids.length ? Array.from(new Set(ids)) : [memberUserId];
+  if (mErr) return [];
+  const ids = (rows ?? [])
+    .map((r: { user_id: string | null }) => r.user_id)
+    .filter((id): id is string => id != null && id.length > 0 && id !== memberUserId);
+  return Array.from(new Set(ids));
+}
+
+/** Exclusions for level-7+ fan-out; Guided Setup ignores stored rows (treat as empty). */
+async function fetchMemberPatternRecipientPrefs(
+  supabase: any,
+  memberUserId: string,
+): Promise<{ excludedUserIds: Set<string> }> {
+  const { data: fm } = await supabase
+    .from("family_members")
+    .select("onboarding_type")
+    .eq("user_id", memberUserId)
+    .eq("invite_status", "accepted")
+    .maybeSingle();
+  if (fm?.onboarding_type === "Guided Setup") {
+    return { excludedUserIds: new Set() };
+  }
+  const { data: rows } = await supabase
+    .from("pattern_alert_recipient_exclusions")
+    .select("excluded_user_id")
+    .eq("subject_user_id", memberUserId);
+  const excludedUserIds = new Set<string>();
+  for (const r of rows ?? []) {
+    const id = (r as { excluded_user_id: string | null }).excluded_user_id;
+    if (id) excludedUserIds.add(String(id));
+  }
+  return { excludedUserIds };
+}
+
+/** Intersection-safe: only removes IDs present in rawOthers. */
+function applyPatternRecipientFilter(
+  rawOthers: string[],
+  excludedUserIds: Set<string>,
+): { filtered: string[]; familyNotifiedInApp: boolean } {
+  const filtered = rawOthers.filter((id) => !excludedUserIds.has(id));
+  return { filtered, familyNotifiedInApp: filtered.length > 0 };
 }
 
 async function upsertActiveAlertState(params: {
@@ -311,7 +351,8 @@ export async function evaluatePatternsForUser(
   supabase: any,
   params: { userId: string; endDate: string },
 ): Promise<{ evaluatedEndDate: string; metricsAttempted: number }> {
-  const shadowMode = (Deno.env.get("MIYA_PATTERN_SHADOW_MODE") ?? "true").toLowerCase() !== "false";
+  // Shadow / dry-run only when explicitly MIYA_PATTERN_SHADOW_MODE=true (default: enqueue real notifications).
+  const shadowMode = Deno.env.get("MIYA_PATTERN_SHADOW_MODE")?.toLowerCase() === "true";
 
   const userId = params.userId;
   const endDate = clampEndDateToToday(params.endDate);
@@ -328,6 +369,8 @@ export async function evaluatePatternsForUser(
 
   const metrics: MetricType[] = ["sleep_minutes", "steps", "hrv_ms", "resting_hr", "sleep_efficiency_pct", "movement_minutes", "deep_sleep_minutes"];
   let attempted = 0;
+
+  const recipientPrefs = await fetchMemberPatternRecipientPrefs(supabase, userId);
 
   for (const metric of metrics) {
     const cfg = thresholds[metric];
@@ -397,38 +440,45 @@ export async function evaluatePatternsForUser(
     });
 
     if (enqueue && alertStateId) {
-      const recipients = [userId];
-      for (const recipientUserId of recipients) {
-        const payload = {
-          kind: "pattern_alert",
-          member_user_id: userId,
-          metric_type: metric,
-          pattern_type: patternType,
-          level,
-          active_since: episodeStart,
-          evaluated_end_date: endDate,
-        };
+      const rawOthers =
+        level >= 7 ? await fetchAcceptedFamilyMemberUserIdsExcludingMember(supabase, userId) : [];
+      const { filtered: otherLeadIds, familyNotifiedInApp } = applyPatternRecipientFilter(
+        rawOthers,
+        recipientPrefs.excludedUserIds,
+      );
+      const soleInAppFamilyLead = level >= 7 && rawOthers.length === 0;
+      const familyNotifiedInAppFlag = level >= 7 && familyNotifiedInApp;
 
-        const { error: qErr } = await supabase.from("notification_queue").insert({
-          recipient_user_id: recipientUserId,
-          member_user_id: userId,
-          alert_state_id: alertStateId,
-          channel: "push",
-          payload,
-          status: "pending",
+      if (level >= 7 && otherLeadIds.length < rawOthers.length) {
+        console.log("MIYA_PATTERN_RECIPIENT_PREFS_APPLIED", {
+          userId,
+          metric,
+          rawCount: rawOthers.length,
+          filteredCount: otherLeadIds.length,
         });
-
-        if (qErr) {
-          console.error("🔴 MIYA_PATTERN_QUEUE_INSERT_ERROR", { userId, recipientUserId, metric, error: qErr.message });
-        }
       }
 
-      await supabase.from("pattern_alert_state").update({ last_notified_level: level, last_notified_at: new Date().toISOString() }).eq("id", alertStateId);
-      
-      // Pre-warm AI insight cache (fire and forget - don't block notification queue)
-      prewarmInsightCache(supabase, alertStateId).catch((e) => {
-        console.error("⚠️ MIYA_PREWARM_INSIGHT_FAILED", { alertStateId, error: String(e) });
+      const { error: rpcErr } = await supabase.rpc("miya_pattern_alert_enqueue_and_bump", {
+        p_alert_state_id: alertStateId,
+        p_member_user_id: userId,
+        p_new_level: level,
+        p_metric_type: metric,
+        p_pattern_type: patternType,
+        p_active_since: episodeStart,
+        p_evaluated_end_date: endDate,
+        p_deviation_percent: result.deviationPercent,
+        p_sole_in_app_family_lead: soleInAppFamilyLead,
+        p_family_notified_in_app: familyNotifiedInAppFlag,
+        p_other_lead_ids: level >= 7 ? otherLeadIds : [],
       });
+
+      if (rpcErr) {
+        console.error("🔴 MIYA_PATTERN_ENQUEUE_RPC_ERROR", { userId, metric, error: rpcErr.message });
+      } else {
+        prewarmInsightCache(supabase, alertStateId).catch((e) => {
+          console.error("⚠️ MIYA_PREWARM_INSIGHT_FAILED", { alertStateId, error: String(e) });
+        });
+      }
     }
   }
 

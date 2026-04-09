@@ -65,7 +65,7 @@ ADD COLUMN IF NOT EXISTS vitality_score_source TEXT;
 ALTER TABLE user_profiles
 ADD COLUMN IF NOT EXISTS vitality_score_updated_at TIMESTAMP WITH TIME ZONE;
 
--- Champion settings referenced by DataManager.saveChampionSettings(...)
+-- Legacy health-advocate champion columns (optional; app clears on Privacy & Alerts save)
 ALTER TABLE user_profiles
 ADD COLUMN IF NOT EXISTS champion_name TEXT;
 

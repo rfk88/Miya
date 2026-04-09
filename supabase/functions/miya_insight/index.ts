@@ -14,6 +14,10 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { mergeRowsByDay } from "../rook/shared/merge.ts";
+import {
+  AI_CONSENT_DENIED_JSON,
+  isAIThirdPartySharingEnabledForUser,
+} from "../_shared/ai_third_party_consent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -777,6 +781,12 @@ Deno.serve(async (req) => {
 
       const memberName = memberLink.first_name ?? "Member";
       memberFirst = firstName(memberName);
+
+      const callerInsightConsent = await isAIThirdPartySharingEnabledForUser(supabaseAdmin, callerId);
+      if (!callerInsightConsent) {
+        console.log("miya_insight: third-party AI consent denied for caller", callerId);
+        return jsonResponse({ ...AI_CONSENT_DENIED_JSON }, 403);
+      }
     }
 
     const memberId: string = alert.user_id;
@@ -784,6 +794,12 @@ Deno.serve(async (req) => {
     const patternType: string | null = alert.pattern_type ?? null;
     const level: number = alert.current_level ?? 3;
     const sev = severityLabel(alert.severity ?? null, level);
+
+    const insightConsentOk = await isAIThirdPartySharingEnabledForUser(supabaseAdmin, memberId);
+    if (!insightConsentOk) {
+      console.log("miya_insight: third-party AI consent denied for data subject", memberId);
+      return jsonResponse({ ...AI_CONSENT_DENIED_JSON }, 403);
+    }
 
     const evaluatedEnd = clampEndDateToToday(alert.last_evaluated_date ?? toYYYYMMDD(new Date()));
     // BUG-023: Fetch 24 days so we have 21 baseline + 3 recent (same window as pattern engine)

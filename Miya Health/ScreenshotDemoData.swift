@@ -23,6 +23,23 @@ enum ScreenshotDemoData {
         set { UserDefaults.standard.set(newValue, forKey: userDefaultsKey) }
     }
 
+    static func enableDemoMode() {
+        isScreenshotModeEnabled = true
+    }
+
+    static func disableDemoMode() {
+        isScreenshotModeEnabled = false
+    }
+
+    /// Keeps demo mode exclusive to the fixed demo account.
+    /// - Note: This does NOT auto-enable demo mode. It only clears it for non-demo users.
+    static func syncForAuthenticatedUser(email: String?) {
+        let normalized = email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if normalized != demoEmail.lowercased() {
+            disableDemoMode()
+        }
+    }
+
     // Fixed UUIDs for demo family (so notification items can reference them)
     static let familyIdUUID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-111111111111")!
     static let simonUserId = "AAAAAAAA-BBBB-CCCC-DDDD-222222222222"
@@ -31,6 +48,14 @@ enum ScreenshotDemoData {
     static let liamUserId = "AAAAAAAA-BBBB-CCCC-DDDD-555555555555"
     static let dadRecoveryAlertStateId = "AAAAAAAA-BBBB-CCCC-DDDD-666666666666"
     static let emmaMovementAlertStateId = "AAAAAAAA-BBBB-CCCC-DDDD-777777777777"
+
+    static func isDemoMemberUserId(_ uid: String) -> Bool {
+        let lower = uid.lowercased()
+        return lower == simonUserId.lowercased()
+            || lower == sarahUserId.lowercased()
+            || lower == emmaUserId.lowercased()
+            || lower == liamUserId.lowercased()
+    }
 
     private static let now = Date()
     private static let freshDate = now.addingTimeInterval(-24 * 3600) // yesterday
@@ -313,6 +338,186 @@ enum ScreenshotDemoData {
         """
     }
 
+    // MARK: - Vitality factor detail sheet (per-member rows)
+
+    /// Rich mock rows for `VitalityFactorDetailSheet` when demo mode is on.
+    static func makePillarMemberDetails(pillar: VitalityPillar, members: [FamilyMemberScore]) -> [PillarMemberDetail] {
+        members.map { member in
+            let (score, trend, pct, subs) = demoSubmetricsForPillarMember(pillar: pillar, member: member)
+            return PillarMemberDetail(
+                member: member,
+                todayScore: score,
+                trendDirection: trend,
+                trendPercentChange: pct,
+                subMetrics: subs,
+                hasBackfilledData: false,
+                oldestSourceAgeInDays: nil
+            )
+        }
+    }
+
+    private static func demoSubmetricsForPillarMember(
+        pillar: VitalityPillar,
+        member: FamilyMemberScore
+    ) -> (Int?, TrendDirection, Double?, [SubMetric]) {
+        let uid = member.userId?.lowercased() ?? ""
+        switch pillar {
+        case .sleep:
+            switch uid {
+            case simonUserId.lowercased():
+                return (70, .stable, 2.0, [
+                    SubMetric(name: "Sleep Duration", value: "6.8 hours", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Deep Sleep", value: "82 min", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "REM Sleep", value: "98 min", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Efficiency", value: "87%", isBackfilled: false, sourceAgeInDays: nil),
+                ])
+            case sarahUserId.lowercased():
+                return (82, .up, 4.0, [
+                    SubMetric(name: "Sleep Duration", value: "7.5 hours", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Deep Sleep", value: "95 min", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "REM Sleep", value: "110 min", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Efficiency", value: "91%", isBackfilled: false, sourceAgeInDays: nil),
+                ])
+            case emmaUserId.lowercased():
+                return (62, .down, 3.0, [
+                    SubMetric(name: "Sleep Duration", value: "6.2 hours", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Deep Sleep", value: "68 min", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "REM Sleep", value: "85 min", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Efficiency", value: "79%", isBackfilled: false, sourceAgeInDays: nil),
+                ])
+            default: // Liam
+                return (74, .stable, 1.5, [
+                    SubMetric(name: "Sleep Duration", value: "7.0 hours", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Deep Sleep", value: "78 min", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "REM Sleep", value: "98 min", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Efficiency", value: "87%", isBackfilled: false, sourceAgeInDays: nil),
+                ])
+            }
+        case .movement:
+            switch uid {
+            case simonUserId.lowercased():
+                return (71, .stable, 2.0, [
+                    SubMetric(name: "Steps", value: "8,200 steps", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Active Minutes", value: "48 min", isBackfilled: false, sourceAgeInDays: nil),
+                ])
+            case sarahUserId.lowercased():
+                return (79, .up, 3.0, [
+                    SubMetric(name: "Steps", value: "9,100 steps", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Active Minutes", value: "62 min", isBackfilled: false, sourceAgeInDays: nil),
+                ])
+            case emmaUserId.lowercased():
+                return (58, .down, 6.0, [
+                    SubMetric(name: "Steps", value: "5,800 steps", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Active Minutes", value: "32 min", isBackfilled: false, sourceAgeInDays: nil),
+                ])
+            default:
+                return (72, .stable, 1.0, [
+                    SubMetric(name: "Steps", value: "7,400 steps", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Active Minutes", value: "44 min", isBackfilled: false, sourceAgeInDays: nil),
+                ])
+            }
+        case .stress:
+            switch uid {
+            case simonUserId.lowercased():
+                return (68, .down, 4.0, [
+                    SubMetric(name: "HRV", value: "58 ms", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Resting HR", value: "62 bpm", isBackfilled: false, sourceAgeInDays: nil),
+                ])
+            case sarahUserId.lowercased():
+                return (78, .stable, 2.0, [
+                    SubMetric(name: "HRV", value: "65 ms", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Resting HR", value: "58 bpm", isBackfilled: false, sourceAgeInDays: nil),
+                ])
+            case emmaUserId.lowercased():
+                return (65, .stable, 1.0, [
+                    SubMetric(name: "HRV", value: "52 ms", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Resting HR", value: "64 bpm", isBackfilled: false, sourceAgeInDays: nil),
+                ])
+            default:
+                return (71, .stable, 2.0, [
+                    SubMetric(name: "HRV", value: "60 ms", isBackfilled: false, sourceAgeInDays: nil),
+                    SubMetric(name: "Resting HR", value: "60 bpm", isBackfilled: false, sourceAgeInDays: nil),
+                ])
+            }
+        }
+    }
+
+    // MARK: - Member pillar history (90d) for PillarDiveDeeperSheet charts
+
+    /// Demo-only: ascending dates, `days` rows, values 0–100 for charts.
+    static func makeDemoPillarHistory(userId: String, pillar: VitalityPillar, days: Int) -> [(date: String, value: Int?)] {
+        let calendar = Calendar.current
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        let base = demoBasePillarScore(userId: userId, pillar: pillar)
+        var rows: [(String, Int?)] = []
+        rows.reserveCapacity(days)
+        for i in 0..<days {
+            let dayOffset = i - (days - 1)
+            guard let date = calendar.date(byAdding: .day, value: dayOffset, to: calendar.startOfDay(for: Date())) else { continue }
+            let dayStr = df.string(from: date)
+            let wave = 5.0 * sin(Double(i) * 0.15)
+            let bump = (i % 9) - 4
+            let v = max(42, min(96, base + Int(wave) + bump))
+            rows.append((dayStr, v))
+        }
+        return rows
+    }
+
+    private static func demoBasePillarScore(userId: String, pillar: VitalityPillar) -> Int {
+        let u = userId.lowercased()
+        let member: Int
+        switch u {
+        case simonUserId.lowercased(): member = 0
+        case sarahUserId.lowercased(): member = 1
+        case emmaUserId.lowercased(): member = 2
+        case liamUserId.lowercased(): member = 3
+        default: member = 0
+        }
+        let bases: [[Int]] = [
+            [70, 71, 68], // Simon sleep, movement, stress
+            [82, 79, 78], // Sarah
+            [62, 58, 65], // Emma
+            [74, 72, 71], // Liam
+        ]
+        let pi: Int
+        switch pillar {
+        case .sleep: pi = 0
+        case .movement: pi = 1
+        case .stress: pi = 2
+        }
+        return bases[member][pi]
+    }
+
+    // MARK: - Member overview chat (demo)
+
+    /// Returns canned assistant text for `ArloMemberChatAPI.sendMemberOverview` in demo mode.
+    static func memberOverviewDemoReplyText(memberName: String, intent: String?) -> String {
+        switch intent {
+        case "member_doing_well":
+            return "\(memberName) has been steady — consistency in routine and sleep is the backbone. Movement and recovery are both in a healthy band for the last few weeks. If you want to go further, we can pick one small upgrade next."
+        case "member_needs_support":
+            return "The clearest window is gentle movement: short walks tied to something \(memberName) already does work best. If recovery dips, prioritize sleep timing first — it’s usually the fastest lever."
+        case "member_sleep":
+            return "\(memberName)'s sleep duration and efficiency look good. If anything, keep wake time consistent — that’s what usually moves the needle for energy the next day."
+        case "member_movement":
+            return "Steps and active minutes are in a solid range. If you want a nudge, try a 5–10 minute walk after lunch — it’s often the easiest habit to add without feeling like a ‘workout.’"
+        case "member_recovery":
+            return "HRV and resting heart rate are in a reasonable range. If stress spikes, focus on wind-down before bed — the watch picks up recovery best when sleep is regular."
+        default:
+            return "Here’s a quick read: \(memberName)’s scores are in a healthy range with a few small ups and downs — that’s normal. Tell me if you want to zoom in on sleep, movement, or recovery."
+        }
+    }
+
+    static func memberOverviewDemoSuggestedPrompts(memberName: String) -> [(id: String, title: String, intent: String)] {
+        [
+            ("well", "What is \(memberName) doing well?", "member_doing_well"),
+            ("support", "Where does \(memberName) need support?", "member_needs_support"),
+            ("sleep", "How is \(memberName)’s sleep?", "member_sleep"),
+            ("move", "How is \(memberName)’s movement?", "member_movement"),
+        ]
+    }
+
     // MARK: - Demo family challenges (for Family Challenges tab)
 
     static func makeDemoFamilyChallenges() -> [FamilyChallenge] {
@@ -344,6 +549,34 @@ enum ScreenshotDemoData {
                 sourceAlertMetric: "Movement",
                 sourceAlertDays: 14,
                 myRole: "challengee",
+                challengerCount: 1
+            ),
+            FamilyChallenge(
+                id: "AAAAAAAA-BBBB-CCCC-DDDD-303303303303",
+                pillar: "sleep",
+                status: "completed_success",
+                memberUserId: sarahUserId,
+                memberName: "Sarah",
+                daysSucceeded: 7,
+                daysEvaluated: 7,
+                endDate: iso.string(from: now.addingTimeInterval(-4 * 24 * 3600)),
+                sourceAlertMetric: "Sleep",
+                sourceAlertDays: 14,
+                myRole: "challenger",
+                challengerCount: 2
+            ),
+            FamilyChallenge(
+                id: "AAAAAAAA-BBBB-CCCC-DDDD-304304304304",
+                pillar: "stress",
+                status: "completed_failed",
+                memberUserId: liamUserId,
+                memberName: "Liam",
+                daysSucceeded: 4,
+                daysEvaluated: 7,
+                endDate: iso.string(from: now.addingTimeInterval(-10 * 24 * 3600)),
+                sourceAlertMetric: "Recovery",
+                sourceAlertDays: 21,
+                myRole: "challenger",
                 challengerCount: 1
             ),
         ]

@@ -211,8 +211,7 @@ async function getApnsJwt(): Promise<string> {
   return jwt;
 }
 
-// ── Notification content builder ─────────────────────────────────────────────
-// Only these three kinds trigger a push. All others are silently skipped.
+// ── Notification content builder (warm tone; descriptive vs personal baseline only) ──
 
 function formatMetric(metric: string): string {
   const map: Record<string, string> = {
@@ -238,52 +237,326 @@ function formatPillar(pillar: string): string {
   return map[pillar] ?? pillar;
 }
 
-// Returns { title, body } for allowed notification kinds, or null to skip.
+function driftBand(payload: any): "moderate" | "marked" {
+  const p = payload.deviation_percent;
+  if (p == null || typeof p !== "number" || !Number.isFinite(p)) return "moderate";
+  return Math.abs(p) >= 0.18 ? "marked" : "moderate";
+}
+
+/** False only when enqueue omitted other family recipients (e.g. subject's settings). Missing = legacy rows, treat as true. */
+function familyNotifiedInApp(payload: any): boolean {
+  return payload.family_notified_in_app !== false;
+}
+
+/** Pattern-alert copy: member vs family_lead (other family members in Miya), stage level, drift. */
+function buildPatternAlertCopy(payload: any, memberFirst: string): { title: string; body: string } | null {
+  const level = Number(payload.level ?? 3);
+  const band = driftBand(payload);
+  const audience = (payload.audience as string) || "member";
+  /** True when no other accepted family members on Miya to notify (solo in family on the app). */
+  const sole = payload.sole_in_app_family_lead === true;
+  const notifiedFamilyInApp = familyNotifiedInApp(payload);
+  const metric = formatMetric(payload.metric_type ?? "");
+
+  if (audience === "family_lead") {
+    if (level < 7) return null;
+    const t = (modTitle: string, markTitle: string, modBody: string, markBody: string) =>
+      band === "marked" ? { title: markTitle, body: markBody } : { title: modTitle, body: modBody };
+    if (level === 7) {
+      return t(
+        `${memberFirst}: ${metric} low about a week`,
+        `${memberFirst}: ${metric} sharply down ~1 week`,
+        `A little under their norm—life gets busy. A warm “how are you, really?” goes further than pressure.`,
+        `Well below what’s usual for them. Show up with care; encourage rest and a chat with their doctor if they’re not feeling great.`,
+      );
+    }
+    if (level === 14) {
+      return t(
+        `${memberFirst}: ${metric} off pattern ~2 weeks`,
+        `${memberFirst}: large ${metric} gap ~2 weeks`,
+        `A gentler dip that’s lingered—your steady presence helps them feel supported, not watched.`,
+        `A meaningful change for them. Extra kindness and help accessing care if they want it can make a real difference.`,
+      );
+    }
+    return t(
+      `${memberFirst}: ${metric} still off ~3 weeks`,
+      `${memberFirst}: please offer extra support`,
+      `Worth sitting down kindly and planning together—accountability with heart, not shame.`,
+      `${metric.charAt(0).toUpperCase() + metric.slice(1)} has been far below their baseline for three weeks. They may need you—and maybe a clinician—on their side. Show up softly, stay close.`,
+    );
+  }
+
+  // Member audience — stage 3
+  const mt = String(payload.metric_type ?? "");
+  const sleepish = mt.includes("sleep");
+  if (level === 3) {
+    if (band === "marked") {
+      return {
+        title: `Your ${metric} is well below your normal`,
+        body: sleepish
+          ? `This is a bigger gap than usual for you. Be gentle with yourself—rest more if you can, and talk to someone you trust or your doctor if you’re worried.`
+          : `This is a bigger gap than usual for you. Be gentle with yourself, and talk to someone you trust or your doctor if you’re worried.`,
+      };
+    }
+    return {
+      title: `Your ${metric} is a little under your usual`,
+      body: sleepish
+        ? `Last few nights trail your normal—that’s okay. When you have a moment, a little extra rest or routine tweak might help.`
+        : `Your recent readings are a bit below your usual—that’s okay. Small tweaks or rest might help when you’re ready.`,
+    };
+  }
+
+  if (level === 7) {
+    if (sole) {
+      return band === "marked"
+        ? {
+          title: `1 week: ${metric} far below normal`,
+          body:
+            `A week of a large gap vs your usual—we care about you. You’re the only person in your family on Miya right now, so no one else got this alert in the app. Reach out to someone you trust in real life if it helps, and seek care if you don’t feel right.`,
+        }
+        : {
+          title: `1 week: ${metric} still low`,
+          body:
+            `Still under your baseline, and that’s been a week—totally human. You’re the only one in your family on Miya at the moment; reach out to someone you trust outside the app when you’re ready.`,
+        };
+    }
+    if (!notifiedFamilyInApp) {
+      return band === "marked"
+        ? {
+          title: `1 week: ${metric} far below normal`,
+          body:
+            `A week of a large gap vs your usual—we care about you. Based on your notification preferences, we didn’t alert others in your family in the app. Reach out to someone you trust if it helps, and seek care if you don’t feel right.`,
+        }
+        : {
+          title: `1 week: ${metric} still low`,
+          body:
+            `Still under your baseline, and that’s been a week—totally human. You’ve chosen not to loop in your family on Miya for this—when you’re ready, people you trust outside the app can still help.`,
+        };
+    }
+    return band === "marked"
+      ? {
+        title: `1 week: ${metric} far below normal`,
+        body:
+          `A week of a large gap vs your usual—we care about you. Everyone else in your family on Miya has been notified so they can check in with you.`,
+      }
+      : {
+        title: `1 week: ${metric} still low`,
+        body:
+          `Still under your baseline, and that’s been a week—totally human. Your family on Miya is in the loop; reach out when you’re ready.`,
+      };
+  }
+  if (level === 14) {
+    if (sole) {
+      return band === "marked"
+        ? {
+          title: `2 weeks: big ${metric} change`,
+          body:
+            `A sustained big change is worth taking seriously—for your wellbeing. You’re the only person in your family on Miya, so lean on people you trust outside the app; professional support is okay to ask for too.`,
+        }
+        : {
+          title: `2 weeks: ${metric} off your pattern`,
+          body:
+            `Two weeks counts as a stretch. You’re the only one in your family on Miya right now—small steps still matter, and you’re not failing anyone.`,
+        };
+    }
+    if (!notifiedFamilyInApp) {
+      return band === "marked"
+        ? {
+          title: `2 weeks: big ${metric} drop`,
+          body:
+            `A sustained big change is worth taking seriously—for your wellbeing. Per your settings, we didn’t notify others in your family in Miya—lean on people you trust in real life; professional support is okay to ask for too.`,
+        }
+        : {
+          title: `2 weeks: ${metric} off your pattern`,
+          body:
+            `Two weeks counts as a stretch. You’ve kept this private in Miya for now—small steps still matter, and you’re not failing anyone.`,
+        };
+    }
+    return band === "marked"
+      ? {
+        title: `2 weeks: big ${metric} drop`,
+        body:
+          `A sustained big change is worth taking seriously—for your wellbeing. Your family on Miya has been kept in the loop; professional support is okay to ask for too.`,
+      }
+      : {
+        title: `2 weeks: ${metric} off your pattern`,
+        body:
+          `Two weeks counts as a stretch. Others in your family on Miya can support you—small steps still matter, and you’re not failing anyone.`,
+      };
+  }
+  if (sole) {
+    return band === "marked"
+      ? {
+        title: `3 weeks: ${metric} needs extra care`,
+        body:
+          `Your wellbeing matters. Loop in your doctor if it feels right—you’re the only person in your family on Miya, so be gentle with yourself and reach out to people you trust outside the app.`,
+      }
+      : {
+        title: `3 weeks: ${metric} not back to usual`,
+        body:
+          `Three weeks is a lot to carry alone. You’re the only one in your family on Miya—reach out to someone you trust in real life; no blame, just support.`,
+      };
+  }
+  if (!notifiedFamilyInApp) {
+    return band === "marked"
+      ? {
+        title: `3 weeks: ${metric} needs extra care`,
+        body:
+          `Your wellbeing matters. You asked us not to alert your family in Miya for this—loop in your doctor if it feels right, and reach out to people you trust outside the app.`,
+      }
+      : {
+        title: `3 weeks: ${metric} not back to usual`,
+        body:
+          `Three weeks is a lot to carry alone. Others in your family weren’t notified in the app per your settings—reach out in real life when you’re ready; no blame, just support.`,
+      };
+  }
+  return band === "marked"
+    ? {
+      title: `3 weeks: ${metric} needs extra care`,
+      body:
+        `Your wellbeing matters. Your family on Miya has been notified; loop in your doctor too if it feels right—we want you supported, not stressed.`,
+    }
+    : {
+      title: `3 weeks: ${metric} not back to usual`,
+      body:
+        `Three weeks is a lot to carry alone. Everyone in your family on Miya can help make a simple, kind plan with you—no blame, just support.`,
+    };
+}
+
+// Returns { title, body } for push-capable kinds, or null if we intentionally do not push this kind.
 function buildAlert(
   payload: any,
   memberName: string,
 ): { title: string; body: string } | null {
   const kind: string = payload.kind ?? "";
   const pillar = formatPillar(payload.pillar ?? "");
-  const metric = formatMetric(payload.metric_type ?? "");
-  const days: number = payload.level ?? 3;
   const success = payload.status === "completed_success";
+  const daysEval = payload.days_evaluated ?? payload.days_succeeded;
+  const remaining = payload.remaining_days ?? "";
+  const needed = payload.successes_needed ?? "";
 
   switch (kind) {
-    case "pattern_alert": {
-      const direction = payload.pattern_type === "rise_vs_baseline" ? "elevated" : "lower than usual";
-      return {
-        title: `${memberName}'s health alert`,
-        body: `${memberName}'s ${metric} has been ${direction} for ${days}+ days.`,
-      };
-    }
+    case "pattern_alert":
+      return buildPatternAlertCopy(payload, memberName);
 
     case "challenge_invite":
       return {
-        title: "New Health Challenge",
-        body: `You've been invited to a ${pillar} challenge. Tap to see the details.`,
+        title: `You’re invited: ${pillar} challenge`,
+        body: `No pressure—open Miya when you’re ready to peek or say yes. We’d love to have you.`,
       };
 
     case "challenge_completed_member":
       return {
-        title: success ? "Challenge Complete! 🎉" : "Challenge Ended",
+        title: success ? `You finished the ${pillar} challenge` : `${pillar} challenge wrapped up`,
         body: success
-          ? `You completed your ${pillar} challenge. Great work!`
-          : `Your ${pillar} challenge has ended.`,
+          ? `That took effort—nice work. Open Miya to see what’s next, no rush.`
+          : `The goal didn’t land this round, and that’s human. Another try is there whenever you want it.`,
       };
 
     case "challenge_completed_admin":
       return {
-        title: success
-          ? `${memberName} completed their challenge! 🎉`
-          : `${memberName}'s challenge ended`,
+        title: success ? `${memberName} finished the ${pillar} challenge` : `${memberName}’s ${pillar} challenge ended`,
         body: success
-          ? `${memberName} finished the ${pillar} challenge successfully.`
-          : `${memberName}'s ${pillar} challenge has ended.`,
+          ? `Worth a little celebration—they showed up. Say something kind in Miya or in person.`
+          : `The bar wasn’t met—no shame. A warm check-in beats silence.`,
+      };
+
+    case "challenge_invite_expired":
+      return {
+        title: `${pillar} challenge invite quietly closed`,
+        body:
+          `${memberName} didn’t jump in this time—that’s okay. A gentle real-life hello might feel better than another ping.`,
+      };
+
+    case "challenge_daily_member": {
+      const d = daysEval != null ? String(daysEval) : "?";
+      return {
+        title: `Day ${d} of 7 — ${pillar}`,
+        body: `You’re doing fine. Open Miya for a small, friendly nudge whenever you like.`,
+      };
+    }
+
+    case "challenge_daily_admin":
+      return {
+        title: `${memberName} — day ${daysEval ?? "?"} of 7, ${pillar}`,
+        body: `On track so far. A short word of encouragement from you could mean a lot.`,
+      };
+
+    case "invite_joined": {
+      const firstName = payload.member_first_name ?? memberName;
+      return {
+        title: `${firstName}’s here—welcome them`,
+        body: `Their profile is live. Say hi when it feels natural; we’re glad they’re part of the family.`,
+      };
+    }
+
+    case "care_outcome":
+      return {
+        title: `Lovely news about ${memberName}’s health signal`,
+        body:
+          payload.outcome_message ??
+          `Closer to their baseline again—your care may have helped more than you know.`,
+      };
+
+    case "missing_wearable": {
+      const days = Number(payload.days_stale ?? 3);
+      const critical = days >= 7 || payload.severity === "critical";
+      return critical
+        ? {
+          title: `${memberName} — we’d love fresh data when they’re ready`,
+          body:
+            `About a week without sync makes alerts harder. Offer to help them reconnect when it feels supportive.`,
+        }
+        : {
+          title: `${memberName} — wearable’s gone quiet a few days`,
+          body:
+            `Maybe a dead battery or a busy week. A kind nudge to sync or charge could help—no lecture needed.`,
+        };
+    }
+
+    case "billing_owner_left":
+      return {
+        title: `Let’s keep the family on Miya together`,
+        body:
+          `Someone lovely can take over billing within 7 days—tap when you’re ready; we’ll walk you through it.`,
+      };
+
+    case "billing_grace_reminder": {
+      const rt = payload.reminder_type as string | undefined;
+      const final = rt === "final_day" || (payload as any).reminder_type === "final_day";
+      return final
+        ? {
+          title: `Last day to choose a new billing owner`,
+          body: `One more window to keep everyone covered. You’ve got this—open Miya and we’ll help.`,
+        }
+        : {
+          title: `A few days left to sort billing`,
+          body:
+            `No stress—whoever can step in, Miya’s here to make it simple for the whole family.`,
+        };
+    }
+
+    case "billing_interrupted":
+      return {
+        title: `Miya’s paused for now—we’re still with you`,
+        body:
+          `Restore billing when someone’s ready; your family’s space will be waiting. No blame.`,
+      };
+
+    case "billing_restored":
+      return {
+        title: `You’re all set—welcome back`,
+        body: `Family access is on again. Thanks for taking care of everyone.`,
+      };
+
+    case "personal_trend":
+      return {
+        title: `Movement shifted vs your usual`,
+        body: `Just a friendly heads-up—open Miya for context, not a verdict. You’re doing okay.`,
       };
 
     default:
-      return null; // Skip — not a notification kind we want to push
+      return null;
   }
 }
 
@@ -297,29 +570,30 @@ async function getMemberFirstName(memberUserId: string | undefined): Promise<str
   return (data?.first_name as string | null) ?? "Your family member";
 }
 
+type PushAttempt = { outcome: "sent" | "skipped" | "failed"; error?: string };
+
 // ── Send push notification via APNs ──────────────────────────────────────────
 async function sendPushNotification(
   recipientUserId: string,
   payload: any,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<PushAttempt> {
   const bundleId = Deno.env.get("APNS_BUNDLE_ID");
   const keyId = Deno.env.get("APNS_KEY_ID");
   const teamId = Deno.env.get("APNS_TEAM_ID");
   const privateKey = Deno.env.get("APNS_PRIVATE_KEY");
 
   if (!bundleId || !keyId || !teamId || !privateKey) {
-    console.log("⚠️ APNs secrets not configured — skipping push");
-    return { success: true }; // Degrade gracefully so queue doesn't get stuck
+    console.log("⚠️ APNs secrets not configured — marking skipped (not sent)");
+    return { outcome: "skipped", error: "apns_not_configured" };
   }
 
   // Resolve member name for notification copy
   const memberName = await getMemberFirstName(payload.member_user_id);
 
-  // Build the alert — returns null if this notification kind should not be pushed
   const alert = buildAlert(payload, memberName);
   if (!alert) {
-    console.log(`⏭️ Skipping push for kind: ${payload.kind ?? "unknown"}`);
-    return { success: true }; // Mark as handled so queue doesn't retry
+    console.log(`⏭️ No push template for kind: ${payload.kind ?? "unknown"}`);
+    return { outcome: "skipped", error: "no_push_template" };
   }
 
   // Fetch active device tokens for this user
@@ -332,12 +606,12 @@ async function sendPushNotification(
 
   if (tokenErr) {
     console.error("Error fetching device tokens:", tokenErr);
-    return { success: false, error: "token_fetch_error" };
+    return { outcome: "failed", error: "token_fetch_error" };
   }
 
   if (!tokens?.length) {
     console.log("⚠️ No active device tokens for user:", recipientUserId);
-    return { success: false, error: "no_device_tokens" };
+    return { outcome: "failed", error: "no_device_tokens" };
   }
 
   const apnsBody = JSON.stringify({
@@ -354,15 +628,18 @@ async function sendPushNotification(
     jwt = await getApnsJwt();
   } catch (e) {
     console.error("APNs JWT generation failed:", e);
-    return { success: false, error: `jwt_error: ${e}` };
+    return { outcome: "failed", error: `jwt_error: ${e}` };
   }
+
+  const useSandbox = Deno.env.get("APNS_USE_SANDBOX")?.toLowerCase() === "true";
+  const apnsHost = useSandbox ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
 
   let anySuccess = false;
 
   for (const { device_token } of tokens) {
     try {
       const res = await fetch(
-        `https://api.push.apple.com/3/device/${device_token}`,
+        `${apnsHost}/3/device/${device_token}`,
         {
           method: "POST",
           headers: {
@@ -395,8 +672,8 @@ async function sendPushNotification(
   }
 
   return anySuccess
-    ? { success: true }
-    : { success: false, error: "apns_delivery_failed" };
+    ? { outcome: "sent" }
+    : { outcome: "failed", error: "apns_delivery_failed" };
 }
 
 // Process a single notification
@@ -462,47 +739,59 @@ async function processNotification(notification: any): Promise<{
     return { success: true, skipped: true, reason };
   }
 
-  // Send based on channel
-  let result: { success: boolean; error?: string };
+  let pushResult: PushAttempt | null = null;
 
   switch (channel) {
     case "push":
-      result = await sendPushNotification(recipient_user_id, payload);
+      pushResult = await sendPushNotification(recipient_user_id, payload);
       break;
 
     case "whatsapp":
-      // TODO: Implement WhatsApp Business API integration
       console.log("📱 WhatsApp notification (not implemented):", {
         recipient_user_id,
         payload,
       });
-      result = { success: false, error: "whatsapp_not_implemented" };
+      pushResult = { outcome: "failed", error: "whatsapp_not_implemented" };
       break;
 
     case "sms":
-      // TODO: Implement SMS via Twilio/AWS SNS
       console.log("📱 SMS notification (not implemented):", {
         recipient_user_id,
         payload,
       });
-      result = { success: false, error: "sms_not_implemented" };
+      pushResult = { outcome: "failed", error: "sms_not_implemented" };
       break;
 
     case "email":
-      // TODO: Implement email via SendGrid/AWS SES
       console.log("📧 Email notification (not implemented):", {
         recipient_user_id,
         payload,
       });
-      result = { success: false, error: "email_not_implemented" };
+      pushResult = { outcome: "failed", error: "email_not_implemented" };
       break;
 
     default:
-      result = { success: false, error: "unknown_channel" };
+      pushResult = { outcome: "failed", error: "unknown_channel" };
   }
 
-  // Update notification status
-  if (result.success) {
+  if (!pushResult) {
+    return { success: false, error: "internal_no_channel_result" };
+  }
+
+  if (pushResult.outcome === "skipped") {
+    await supabase
+      .from("notification_queue")
+      .update({
+        status: "skipped",
+        last_error: pushResult.error || "push_skipped",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id);
+    console.log("⏭️ Push skipped (not sent):", id, pushResult.error);
+    return { success: true, skipped: true, reason: pushResult.error };
+  }
+
+  if (pushResult.outcome === "sent") {
     await supabase
       .from("notification_queue")
       .update({
@@ -511,26 +800,24 @@ async function processNotification(notification: any): Promise<{
         updated_at: new Date().toISOString(),
       })
       .eq("id", id);
-
     console.log("✅ Notification sent successfully:", id);
     return { success: true };
-  } else {
-    const newAttempts = (attempts || 0) + 1;
-    const maxAttempts = 5;
-
-    await supabase
-      .from("notification_queue")
-      .update({
-        status: newAttempts >= maxAttempts ? "failed" : "pending",
-        attempts: newAttempts,
-        last_error: result.error || "unknown_error",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", id);
-
-    console.log("❌ Notification failed:", { id, error: result.error, attempts: newAttempts });
-    return { success: false, error: result.error };
   }
+
+  const newAttempts = (attempts || 0) + 1;
+  const maxAttempts = 5;
+  await supabase
+    .from("notification_queue")
+    .update({
+      status: newAttempts >= maxAttempts ? "failed" : "pending",
+      attempts: newAttempts,
+      last_error: pushResult.error || "unknown_error",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+
+  console.log("❌ Notification failed:", { id, error: pushResult.error, attempts: newAttempts });
+  return { success: false, error: pushResult.error };
 }
 
 Deno.serve(async (req) => {
@@ -567,7 +854,7 @@ Deno.serve(async (req) => {
     }
 
     const batchSize = body.batchSize || 50;
-    const maxAge = body.maxAge || 24; // hours
+    const maxAge = body.maxAge ?? 72; // hours — wider default so brief worker outages don’t strand rows
 
     const { data: notifications, error } = await supabase
       .from("notification_queue")

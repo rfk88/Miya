@@ -247,14 +247,14 @@ struct GuidedSetupStatusCard: View {
             HStack {
                 Image(systemName: "person.2.fill")
                     .foregroundColor(.miyaSecondary)
-                Text("Guided setup")
+                Text("Profiles you set up for family")
                     .font(.headline)
                     .foregroundColor(.miyaTextPrimary)
                 Spacer()
             }
             
             if members.isEmpty {
-                Text("No guided setup members.")
+                Text("No family members waiting for you to finish their profile.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
@@ -347,7 +347,7 @@ struct GuidedSetupMemberRow: View {
                     inviteCode: member.inviteCode ?? ""
                 ) { }
             } label: {
-                Text("Start guided setup")
+                Text("Set up their profile")
                     .font(.caption.bold())
                     .foregroundColor(.miyaPrimary)
             }

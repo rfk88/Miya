@@ -1,0 +1,21 @@
+Miya notifications — deployment checklist (run in Supabase Dashboard / CI)
+
+1) Edge Function secrets (process_notifications)
+   - MIYA_ADMIN_SECRET: non-empty; cron callers must send header x-miya-admin-secret
+   - SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (auto in hosted)
+   - APNS_BUNDLE_ID, APNS_KEY_ID, APNS_TEAM_ID, APNS_PRIVATE_KEY (PEM)
+   - Optional: APNS_USE_SANDBOX=true for sandbox APNs host (TestFlight / dev)
+
+2) Schedule POST to process_notifications
+   - Example: every 1–5 minutes, POST { "batchSize": 50, "maxAge": 72 }
+   - URL: https://<project>.supabase.co/functions/v1/process_notifications
+
+3) Pattern alerts (rook / patterns)
+   - MIYA_PATTERN_SHADOW_MODE: set to "false" for production enqueueing (explicit "true" = shadow only)
+
+4) Related crons (documented on each function)
+   - challenges_daily_evaluate, check_wearable_staleness, care_outcome_evaluator, family_billing_maintenance
+
+5) Smoke test
+   - GET process_notifications → { ok: true, message: "process_notifications worker alive" }
+   - POST with admin secret on a pending row → device receives push (after APNs configured)
