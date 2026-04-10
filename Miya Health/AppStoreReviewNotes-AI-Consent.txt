@@ -1,16 +1,24 @@
-App Review — Third-party AI (Miya AI) and user consent (Guidelines 5.1.1(i) / 5.1.2(i))
+App Review — Third-party AI (Miya AI / OpenAI) and user consent (Guidelines 5.1.1(i) / 5.1.2(i))
+
+AI features are disabled by default. Data is only sent to OpenAI after explicit user opt-in via the consent screen in onboarding (or inline when the user first attempts to open Miya Chat).
 
 New accounts
-- Optional AI features that send limited wellbeing/health context to Miya AI are OFF by default.
-- Users explicitly opt in during onboarding (Privacy & Alerts step) or later in Edit profile.
-- Until they opt in, the app does not call our Miya AI–backed edge functions for chat, pattern insights, or message regeneration.
+- Optional AI features that send limited wellbeing/health context to OpenAI are OFF by default.
+- Users explicitly opt in during onboarding (Privacy & Alerts step, or Wellbeing Privacy step) by toggling on and reading the disclosure that names OpenAI directly.
+- The onboarding consent card is titled "Optional AI features — powered by OpenAI" and labels the toggle "I agree to share limited data with OpenAI for these features."
+- Until they opt in, the app does not call our OpenAI-backed edge functions for chat, pattern insights, or message regeneration. Zero data is sent to OpenAI while the feature is off.
+- The onboarding consent screen also includes the text: "Off by default — you can change this anytime in Settings."
+
+Post-onboarding gate
+- If a user who has not consented tries to open Miya Chat, the app presents an inline consent card (not a Settings redirect). The card is titled "Enable Miya AI to use this feature," names OpenAI explicitly, and requires tapping "Enable Miya AI (sends data to OpenAI)" to proceed.
+- Tapping "Not now" or closing the sheet leaves the feature off and the chat does not open.
+- No health data is fetched or sent to OpenAI until after this affirmative tap.
 
 Existing users at release
-- Accounts that already had a privacy_settings row are migrated server-side to remain opted IN so behavior stays consistent (with an in-app one-time transparency notice and an Edit profile toggle to turn AI off).
-- The Privacy Policy describes Miya AI’s role; the in-app “Learn more” sheet names Miya AI and what categories of data may be sent depending on the feature.
+- Accounts that already had a privacy_settings row are migrated server-side to remain opted IN so behavior stays consistent (with an in-app one-time transparency notice that names OpenAI and an Edit profile toggle to turn AI off).
 
 Settings
-- Edit profile includes a toggle: “Share limited data with Miya AI,” plus an info sheet and Privacy Policy link.
+- Edit profile includes a toggle: "Share limited data with Miya AI," plus an info sheet naming OpenAI and a Privacy Policy link.
 
 Server
-- Edge functions that invoke the AI model (e.g. arlo-chat, arlo-member-chat, miya_insight, miya_insight_chat, regenerate_message) verify privacy_settings before calling the provider.
+- Edge functions that invoke the AI model (e.g. arlo-chat, arlo-member-chat, miya_insight, miya_insight_chat, regenerate_message) verify the user's privacy_settings consent record before calling OpenAI's API.

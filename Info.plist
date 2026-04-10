@@ -33,7 +33,7 @@
 	<key>RookSecretKey</key>
 	<string>$(ROOK_SECRET_KEY)</string>
 	<key>SupabaseURL</key>
-	<string>$(SUPABASE_URL)</string>
+	<string>https://$(SUPABASE_HOST)</string>
 	<key>SupabaseAnonKey</key>
 	<string>$(SUPABASE_ANON_KEY)</string>
 	<key>UIApplicationSceneManifest</key>

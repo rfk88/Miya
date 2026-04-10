@@ -1588,7 +1588,6 @@ enum Ethnicity: String, CaseIterable, Identifiable {
     case black = "Black"
     case hispanic = "Hispanic"
     case other = "Other"
-    case preferNotToSay = "Prefer not to say"
     
     var id: String { rawValue }
 }
@@ -2981,7 +2980,7 @@ struct AlertsChampionView: View {
     private var openAIThirdPartyCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
-                Text("Optional AI features (Miya AI)")
+                Text("Optional AI features — powered by OpenAI")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.miyaTextPrimary)
                 Spacer()
@@ -2995,16 +2994,19 @@ struct AlertsChampionView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Learn how Miya AI is used")
             }
-            Text("Miya can use Miya AI for family chat, insights, and message suggestions. You stay in control — leave this off if you prefer.")
+            Text("Miya uses OpenAI's API for family chat, insights, and message suggestions. Enabling this sends limited health context to OpenAI. Leave this off if you prefer.")
                 .font(.system(size: 13))
                 .foregroundColor(.miyaTextSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             Toggle(isOn: $allowOpenAIThirdParty) {
-                Text("I agree to share limited data with Miya AI for these features")
+                Text("I agree to share limited data with OpenAI for these features")
                     .font(.system(size: 14))
                     .foregroundColor(.miyaTextPrimary)
             }
             .tint(.miyaPrimary)
+            Text("Off by default — you can change this anytime in Settings.")
+                .font(.system(size: 12))
+                .foregroundColor(.miyaTextSecondary)
         }
         .padding(16)
         .background(Color.white)
@@ -3521,7 +3523,7 @@ struct WellbeingPrivacyView: View {
                         
                         VStack(alignment: .leading, spacing: 10) {
                             HStack(alignment: .top, spacing: 10) {
-                                Text("Optional AI (Miya AI)")
+                                Text("Optional AI — powered by OpenAI")
                                     .font(.system(size: 15, weight: .semibold))
                                     .foregroundColor(.miyaTextPrimary)
                                 Spacer()
@@ -3534,14 +3536,17 @@ struct WellbeingPrivacyView: View {
                                 }
                                 .buttonStyle(.plain)
                             }
-                            Text("Turn on only if you want Miya to use Miya AI for insights and chat.")
+                            Text("Miya uses OpenAI's API for insights and chat. Enabling this sends limited health context to OpenAI. Leave this off if you prefer.")
                                 .font(.system(size: 13))
                                 .foregroundColor(.miyaTextSecondary)
                             Toggle(isOn: $allowOpenAIThirdParty) {
-                                Text("I agree to share limited data with Miya AI")
+                                Text("I agree to share limited data with OpenAI for these features")
                                     .font(.system(size: 14))
                             }
                             .tint(.miyaPrimary)
+                            Text("Off by default — you can change this anytime in Settings.")
+                                .font(.system(size: 12))
+                                .foregroundColor(.miyaTextSecondary)
                         }
                         .padding(.vertical, 8)
                     }

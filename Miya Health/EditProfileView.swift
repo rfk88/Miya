@@ -153,7 +153,7 @@ struct EditProfileView: View {
     @State private var isPhotoPickerPresented: Bool = false
 
     private let genders = ["Male", "Female"]
-    private let ethnicities = ["White", "Black", "Asian", "Hispanic", "Other", "Prefer not to say"]
+    private let ethnicities = ["White", "Black", "Asian", "Hispanic", "Other"]
     private let smokingStatuses = ["Never", "Former", "Current"]
 
     var body: some View {

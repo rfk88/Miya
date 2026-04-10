@@ -382,9 +382,14 @@ struct DashboardView: View {
             arloChatSheet
         }
         .sheet(isPresented: $showAIThirdPartyConsentGate) {
-            AIThirdPartyConsentRequiredSheet {
-                showEditProfileForAIConsent = true
-            }
+            AIThirdPartyConsentRequiredSheet(
+                onEnable: {
+                    Task { await enableAIConsentAndOpenChat() }
+                },
+                onOpenSettings: {
+                    showEditProfileForAIConsent = true
+                }
+            )
         }
         .sheet(isPresented: $showLegacyAIThirdPartyTransparency) {
             LegacyAIThirdPartyTransparencySheet(
@@ -633,6 +638,22 @@ struct DashboardView: View {
         isArloChatPresented = true
     }
     
+    /// Called when the user taps "Enable Miya AI" directly from the consent gate sheet.
+    /// Saves consent server-side, refreshes local state, then opens the chat.
+    @MainActor
+    internal func enableAIConsentAndOpenChat() async {
+        do {
+            try await dataManager.applyAIThirdPartyConsent(enabled: true, source: "onboarding_agree")
+            await dataManager.refreshAIThirdPartyConsentFromServer()
+            if familyVitalityScore == nil {
+                await loadFamilyVitality()
+            }
+            isArloChatPresented = true
+        } catch {
+            // Consent save failed — user can retry via the gate or go to Settings
+        }
+    }
+
     /// One-time disclosure for accounts backfilled as opted-in at migration (Apple 5.1.1(i)).
     @MainActor
     internal func evaluateLegacyAITransparencyIfNeeded() {
