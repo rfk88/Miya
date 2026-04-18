@@ -26,6 +26,11 @@ final class SubscriptionManager: ObservableObject {
 
     private let productIds: Set<String> = [PaywallConfig.subscriptionProductId]
 
+    /// Bumped on `reset()` so in-flight loads do not publish after logout.
+    private var loadEpoch = 0
+    /// Coalesces overlapping `loadProductsAndCheckEntitlements()` calls (init, paywall, foreground).
+    private var inflightLoad: Task<Void, Never>?
+
     /// Legacy in-app promo bypass (removed for App Store 3.1.1). Strip any leftover keys once.
     private static let obsoletedPromoKeyPrefix = "MiyaHealthPromoRedeemed"
 
@@ -48,35 +53,59 @@ final class SubscriptionManager: ObservableObject {
     }
 
     // MARK: - Load products
+    /// Loads subscription metadata from StoreKit and refreshes entitlements.
+    /// Simulator: select **Products.storekit** in the scheme (Run → Options → StoreKit Configuration) so `Product.products` resolves locally.
     func loadProductsAndCheckEntitlements() async {
+        if let existing = inflightLoad {
+            await existing.value
+            return
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performLoadProductsAndCheckEntitlements()
+        }
+        inflightLoad = task
+        await task.value
+        inflightLoad = nil
+    }
+
+    private func performLoadProductsAndCheckEntitlements() async {
+        let epoch = loadEpoch
+        guard !Task.isCancelled else { return }
+
         isLoadingProducts = true
         loadError = nil
         purchaseError = nil
-        defer { isLoadingProducts = false }
-
-        // Safety timeout: if StoreKit hangs (e.g. Simulator), unblock the UI after 8 seconds
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
-            if !entitlementCheckComplete {
-                entitlementCheckComplete = true
+        defer {
+            if epoch == loadEpoch {
+                isLoadingProducts = false
             }
         }
 
         do {
             let products = try await Product.products(for: Array(productIds))
+            guard epoch == loadEpoch, !Task.isCancelled else { return }
+
             subscriptionProduct = products.first
             if subscriptionProduct == nil {
                 loadError = "Product not found. Check App Store Connect."
             }
-            await checkEntitlements()
+
+            let hasEntitlement = await readCurrentEntitlementsVerified()
+            guard epoch == loadEpoch, !Task.isCancelled else { return }
+            hasActiveSubscription = hasEntitlement
+            entitlementCheckComplete = true
         } catch {
+            guard epoch == loadEpoch, !Task.isCancelled else { return }
             loadError = error.localizedDescription
+            let hasEntitlement = await readCurrentEntitlementsVerified()
+            guard epoch == loadEpoch, !Task.isCancelled else { return }
+            hasActiveSubscription = hasEntitlement
             entitlementCheckComplete = true
         }
     }
 
-    // MARK: - Entitlements
-    func checkEntitlements() async {
+    private func readCurrentEntitlementsVerified() async -> Bool {
         var hasEntitlement = false
         for await result in Transaction.currentEntitlements {
             guard case .verified(let transaction) = result else { continue }
@@ -85,6 +114,12 @@ final class SubscriptionManager: ObservableObject {
                 break
             }
         }
+        return hasEntitlement
+    }
+
+    // MARK: - Entitlements
+    func checkEntitlements() async {
+        let hasEntitlement = await readCurrentEntitlementsVerified()
         hasActiveSubscription = hasEntitlement
         entitlementCheckComplete = true
     }
@@ -152,12 +187,16 @@ final class SubscriptionManager: ObservableObject {
     // MARK: - Reset (on logout)
     func reset() {
         clearObsoletedPromoBypassDefaultsIfNeeded()
+        loadEpoch &+= 1
+        inflightLoad?.cancel()
+        inflightLoad = nil
         hasActiveSubscription = false
         entitlementCheckComplete = false
         subscriptionProduct = nil
         loadError = nil
         purchaseError = nil
         restoreMessage = nil
+        isLoadingProducts = false
     }
 
     func clearRestoreMessage() {
@@ -172,6 +211,11 @@ final class SubscriptionManager: ObservableObject {
     /// If an entitlement check already completed this session, refresh silently without
     /// resetting the UI gate (prevents "Checking subscription…" spinner on every scene-active bounce).
     func refreshForCurrentSession() async {
+        let needsProductReload = subscriptionProduct == nil && loadError != nil
+        if needsProductReload {
+            await loadProductsAndCheckEntitlements()
+            return
+        }
         if !entitlementCheckComplete {
             await loadProductsAndCheckEntitlements()
         } else {

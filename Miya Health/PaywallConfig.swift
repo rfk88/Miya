@@ -24,6 +24,8 @@ enum PaywallConfig {
         static let cancelAnytimeReassurance = "Cancel anytime."
         static let finePrint = ""
         static let restoreLabel = "Restore purchases"
+        /// Opens Apple’s subscription management UI (helps TestFlight / sandbox testing).
+        static let manageSubscriptionLabel = "Manage subscription"
         /// App Store subscription offer codes only (system redemption sheet — not custom promo).
         static let redeemOfferCodeLabel = "Redeem offer code"
         static let timelineTodayTitle = "Today: Instant access"

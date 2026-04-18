@@ -18,15 +18,16 @@ struct PaywallView: View {
     @State private var testimonialTimer: Timer?
     @State private var outcomeBulletsVisible: Bool = false
     @State private var isOfferCodeRedemptionPresented = false
+    @State private var isManageSubscriptionsPresented = false
 
     init(
         onStartTrial: @escaping () -> Void,
         onRestore: @escaping () -> Void,
-        subscriptionManager: SubscriptionManager? = nil
+        subscriptionManager: SubscriptionManager
     ) {
         self.onStartTrial = onStartTrial
         self.onRestore = onRestore
-        self._subscriptionManager = ObservedObject(wrappedValue: subscriptionManager ?? SubscriptionManager())
+        self._subscriptionManager = ObservedObject(wrappedValue: subscriptionManager)
     }
 
     private var isBusy: Bool {
@@ -58,6 +59,7 @@ struct PaywallView: View {
             .padding(.bottom, 28)
         }
         .background(paywallBackground.ignoresSafeArea())
+        .manageSubscriptionsSheet(isPresented: $isManageSubscriptionsPresented)
         .offerCodeRedemption(isPresented: $isOfferCodeRedemptionPresented) { result in
             Task { @MainActor in
                 if case .success = result {
@@ -328,21 +330,32 @@ struct PaywallView: View {
     }
 
     private var restoreRow: some View {
-        HStack(alignment: .center) {
-            Button(action: onRestore) {
-                Text(PaywallConfig.Copy.restoreLabel)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(Color.miyaPrimary)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center) {
+                Button(action: onRestore) {
+                    Text(PaywallConfig.Copy.restoreLabel)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(Color.miyaPrimary)
+                }
+                .disabled(subscriptionManager.isPurchasing)
+                Spacer(minLength: 12)
+                Button {
+                    isOfferCodeRedemptionPresented = true
+                } label: {
+                    Text(PaywallConfig.Copy.redeemOfferCodeLabel)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(Color.miyaPrimary)
+                        .multilineTextAlignment(.trailing)
+                }
+                .disabled(subscriptionManager.isPurchasing)
             }
-            .disabled(subscriptionManager.isPurchasing)
-            Spacer(minLength: 12)
             Button {
-                isOfferCodeRedemptionPresented = true
+                isManageSubscriptionsPresented = true
             } label: {
-                Text(PaywallConfig.Copy.redeemOfferCodeLabel)
+                Text(PaywallConfig.Copy.manageSubscriptionLabel)
                     .font(.system(size: 15, weight: .medium))
                     .foregroundColor(Color.miyaPrimary)
-                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(subscriptionManager.isPurchasing)
         }
@@ -449,5 +462,5 @@ private extension Product {
 }
 
 #Preview {
-    PaywallView(onStartTrial: {}, onRestore: {})
+    PaywallView(onStartTrial: {}, onRestore: {}, subscriptionManager: SubscriptionManager())
 }
