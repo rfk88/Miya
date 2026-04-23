@@ -2,6 +2,17 @@ import SwiftUI
 import Supabase
 import Charts
 
+/// Loaded from `user_profiles` alongside header vitality; pillar integers match dashboard / scoring.
+private struct ProfileVitalityLoad {
+    let score: Int
+    let label: String
+    let trendDelta: Int
+    let hasMinimumData: Bool
+    let sleepPillarScore: Int?
+    let movementPillarScore: Int?
+    let stressPillarScore: Int?
+}
+
 // MARK: - Family Member Profile (New Design)
 struct FamilyMemberProfileView: View {
     let memberUserId: String
@@ -24,6 +35,15 @@ struct FamilyMemberProfileView: View {
         self.isCurrentUser = isCurrentUser
         self.previewMock = previewMock
         self.initialPillar = initialPillar
+    }
+
+    /// True when this screen is the signed-in user's own profile: from family `isMe`, or when `memberUserId` matches Supabase auth (covers missing/wrong `isMe` on the family row).
+    private var isViewingOwnProfile: Bool {
+        MemberProfileOwnVoice.isViewingOwnProfile(
+            isCurrentUser: isCurrentUser,
+            memberUserId: memberUserId,
+            authUserId: SupabaseConfig.client.auth.currentUser?.id.uuidString
+        )
     }
     
     @EnvironmentObject private var dataManager: DataManager
@@ -86,7 +106,7 @@ struct FamilyMemberProfileView: View {
             }
             
             if isLoading {
-                ProgressView("Loading \(memberName)’s data...")
+                ProgressView(loadingProfileMessage)
                     .padding(16)
                     .background(Color.miyaCardWhite)
                     .cornerRadius(12)
@@ -117,7 +137,7 @@ struct FamilyMemberProfileView: View {
                 } catch { }
             }
         }
-        .navigationTitle("\(memberName)’s Health")
+        .navigationTitle(profileHealthNavTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Color.miyaPrimary, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
@@ -185,12 +205,14 @@ struct FamilyMemberProfileView: View {
             PillarDiveDeeperSheet(
                 memberUserId: memberUserId,
                 memberName: memberName,
+                isViewingOwnProfile: isViewingOwnProfile,
                 vitalityScore: vitalityScore,
                 vitalityDeltaPercent: vitalityTrendDelta,
                 pillar: pillar,
                 movement: movementData,
                 sleep: sleepData,
-                recovery: stressData
+                recovery: stressData,
+                lastMetricDate: lastMetricDate
             )
         }
     }
@@ -198,6 +220,20 @@ struct FamilyMemberProfileView: View {
 
 // MARK: - Sections
 private extension FamilyMemberProfileView {
+
+    /// Shown under the avatar on the profile screen.
+    var profileHeaderDisplayName: String {
+        isViewingOwnProfile ? "Me" : memberName
+    }
+
+    /// Navigation title and main vitality card heading.
+    var profileHealthNavTitle: String {
+        isViewingOwnProfile ? "My Health" : "\(memberName)’s Health"
+    }
+
+    var loadingProfileMessage: String {
+        isViewingOwnProfile ? "Loading your data…" : "Loading \(memberName)’s data…"
+    }
 
     var headerSection: some View {
         HStack(spacing: 12) {
@@ -241,10 +277,10 @@ private extension FamilyMemberProfileView {
             .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(memberName)
+                Text(profileHeaderDisplayName)
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundColor(.miyaTextPrimary)
-                Text(isCurrentUser ? "This is your profile" : "Member in your family")
+                Text(isViewingOwnProfile ? "This is your profile" : "Member in your family")
                     .font(.system(size: 14))
                     .foregroundColor(.miyaTextSecondary)
             }
@@ -256,6 +292,7 @@ private extension FamilyMemberProfileView {
     var healthScoreSection: some View {
         HealthScoreCard(
             memberName: memberName,
+            isViewingOwnProfile: isViewingOwnProfile,
             score: vitalityScore,
             statusText: vitalityLabel,
             trendDelta: vitalityTrendDelta,
@@ -286,7 +323,7 @@ private extension FamilyMemberProfileView {
             
             if dataFreshness == .none {
                 Text(
-                    isCurrentUser
+                    isViewingOwnProfile
                     ? "We haven’t seen any wearable data for you yet. Wear your Apple Watch for a few days and we’ll start showing your Movement, Sleep and Recovery."
                     : "We haven’t seen any wearable data for \(memberName) yet. Once \(memberName) wears their device for a few days, we’ll start showing their Movement, Sleep and Recovery here."
                 )
@@ -464,23 +501,40 @@ private extension FamilyMemberProfileView {
             vitalityLabel = vitality.label
             vitalityTrendDelta = vitality.trendDelta
             vitalityHasMinimumData = vitality.hasMinimumData
-            sleepData = metrics.sleep
-            movementData = metrics.movement
-            stressData = metrics.stress
+            // Pillar cards: same 0–100 scores as dashboard / family vitality (from `user_profiles`), with
+            // legacy raw-metric copy only when a stored pillar is missing.
+            sleepData = MemberProfilePillarPresentation.pillarData(
+                stored: vitality.sleepPillarScore,
+                raw: metrics.sleep,
+                displayName: "Sleep"
+            )
+            movementData = MemberProfilePillarPresentation.pillarData(
+                stored: vitality.movementPillarScore,
+                raw: metrics.movement,
+                displayName: "Movement"
+            )
+            stressData = MemberProfilePillarPresentation.pillarData(
+                stored: vitality.stressPillarScore,
+                raw: metrics.stress,
+                displayName: "Recovery"
+            )
             daysWithMetricsLast7 = metrics.days
             lastMetricDate = lastDate
             isLoading = false
             animateProgress = true
         }
     }
-    
+
     @MainActor
-    func fetchVitality() async -> (score: Int, label: String, trendDelta: Int, hasMinimumData: Bool) {
+    func fetchVitality() async -> ProfileVitalityLoad {
         struct VitalityProfileRow: Decodable {
             let vitality_score_current: Int?
             let vitality_score_updated_at: String?
             let optimal_vitality_target: Int?
             let vitality_progress_score_current: Int?
+            let vitality_sleep_pillar_score: Int?
+            let vitality_movement_pillar_score: Int?
+            let vitality_stress_pillar_score: Int?
         }
         
         struct VitalityScoreRow: Decodable {
@@ -491,7 +545,7 @@ private extension FamilyMemberProfileView {
             let supabase = SupabaseConfig.client
             let rows: [VitalityProfileRow] = try await supabase
                 .from("user_profiles")
-                .select("vitality_score_current, vitality_score_updated_at, optimal_vitality_target, vitality_progress_score_current")
+                .select("vitality_score_current, vitality_score_updated_at, optimal_vitality_target, vitality_progress_score_current, vitality_sleep_pillar_score, vitality_movement_pillar_score, vitality_stress_pillar_score")
                 .eq("user_id", value: memberUserId)
                 .limit(1)
                 .execute()
@@ -513,10 +567,26 @@ private extension FamilyMemberProfileView {
             let score = row?.vitality_score_current ?? 0
             let label = labelForScore(score)
             let deltaPercent = (try? await dataManager.fetchUserWeeklyVitalityDeltaPercent(userId: memberUserId)) ?? 0
-            return (score, label, deltaPercent, hasMinimumData)
+            return ProfileVitalityLoad(
+                score: score,
+                label: label,
+                trendDelta: deltaPercent,
+                hasMinimumData: hasMinimumData,
+                sleepPillarScore: row?.vitality_sleep_pillar_score,
+                movementPillarScore: row?.vitality_movement_pillar_score,
+                stressPillarScore: row?.vitality_stress_pillar_score
+            )
         } catch {
             print("❌ Profile: Failed to fetch vitality for \(memberUserId): \(error.localizedDescription)")
-            return (0, "No data", 0, false)
+            return ProfileVitalityLoad(
+                score: 0,
+                label: "No data",
+                trendDelta: 0,
+                hasMinimumData: false,
+                sleepPillarScore: nil,
+                movementPillarScore: nil,
+                stressPillarScore: nil
+            )
         }
     }
     
@@ -746,7 +816,7 @@ private func freshness(for lastMetricDate: Date?) -> DataFreshness {
 // MARK: - Helpers
 
 /// Short explanation of why this alert was triggered, tied to notification triggers (baseline + duration).
-private func whyThisIsAnAlert(alert: PatternAlert, memberName: String) -> String {
+private func whyThisIsAnAlert(alert: PatternAlert, memberName: String, viewingOwnProfile: Bool) -> String {
     let pillar = displayNameForMetricType(alert.metricType)
     let direction: String
     if (alert.patternType ?? "").lowercased().contains("rise") {
@@ -755,7 +825,11 @@ private func whyThisIsAnAlert(alert: PatternAlert, memberName: String) -> String
         direction = "below"
     }
     let days = alert.currentLevel ?? 3
-    return "\(pillar) has been \(direction) \(memberName)'s baseline for \(days)+ days. We send alerts when a metric stays \(direction) baseline so the right people can check in early."
+    let baselinePhrase = viewingOwnProfile ? "your baseline" : "\(memberName)’s baseline"
+    let tail = viewingOwnProfile
+        ? "so you can catch changes early."
+        : "so the right people can check in early."
+    return "\(pillar) has been \(direction) \(baselinePhrase) for \(days)+ days. We send alerts when a metric stays \(direction) baseline \(tail)"
 }
 
 /// Maps raw metric_type from the backend to user-facing pillar names. Used for alert title and summary.
@@ -883,17 +957,6 @@ struct PatternAlert: Identifiable {
     }
 }
 
-struct ProfilePillarData {
-    let value: String
-    let status: PillarStatus
-    let changeText: String
-    let context: String
-}
-
-enum PillarStatus {
-    case above, stable, below
-}
-
 enum PillarType: Identifiable {
     case overview
     case movement
@@ -913,6 +976,7 @@ enum PillarType: Identifiable {
 // MARK: - Components
 private struct HealthScoreCard: View {
     let memberName: String
+    let isViewingOwnProfile: Bool
     let score: Int
     let statusText: String
     let trendDelta: Int
@@ -920,10 +984,18 @@ private struct HealthScoreCard: View {
     let animateProgress: Bool
     let onAskMiya: (() -> Void)?
     
+    private var cardTitle: String {
+        isViewingOwnProfile ? "My Health" : "\(memberName)’s Health"
+    }
+
+    private var askMiyaPrompt: String {
+        isViewingOwnProfile ? "See how I’m doing" : "See how \(memberName) is doing"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("\(memberName)’s Health")
+                Text(cardTitle)
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundColor(.miyaTextPrimary)
                 Spacer()
@@ -978,7 +1050,7 @@ private struct HealthScoreCard: View {
                             )
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("See how \(memberName) is doing")
+                            Text(askMiyaPrompt)
                                 .font(DashboardDesign.title2Font)
                                 .foregroundColor(.miyaTextPrimary)
                             Text("Chat with Miya")
@@ -1674,14 +1746,19 @@ private struct ThinPillarRow: View {
 private struct PillarDiveDeeperSheet: View {
     let memberUserId: String
     let memberName: String
+    let isViewingOwnProfile: Bool
     let vitalityScore: Int
     let vitalityDeltaPercent: Int
     let pillar: PillarType
     let movement: ProfilePillarData?
     let sleep: ProfilePillarData?
     let recovery: ProfilePillarData?
+    /// When nil, profile has no wearable rows — omit numeric facts from AI so the model does not praise scores from `user_profiles` alone.
+    let lastMetricDate: Date?
 
     @EnvironmentObject private var dataManager: DataManager
+    @EnvironmentObject private var authManager: AuthManager
+    @EnvironmentObject private var onboardingManager: OnboardingManager
     @Environment(\.dismiss) private var dismiss
 
     private enum PillarRange: Int, CaseIterable, Identifiable {
@@ -1714,6 +1791,7 @@ private struct PillarDiveDeeperSheet: View {
     @State private var scrollToBottomTrigger: Int = 0
     @State private var showPills: Bool = true  // Control pill visibility
     @State private var showAIConsentSheet: Bool = false
+    @State private var showEditProfileForAIConsent: Bool = false
     
     // Dynamic pills state
     @State private var dynamicPills: [Pill] = []
@@ -1733,8 +1811,8 @@ private struct PillarDiveDeeperSheet: View {
         let memberId: String
         let memberName: String
 
-        let vitalityScore: Int
-        let vitalityDeltaPercent: Int
+        let vitalityScore: Int?
+        let vitalityDeltaPercent: Int?
 
         let sleepValue: String?
         let sleepChangeText: String?
@@ -1746,21 +1824,27 @@ private struct PillarDiveDeeperSheet: View {
         let recoveryChangeText: String?
     }
 
+    /// Only send scores the UI treats as backed by wearable history (see `freshness(for:)`).
+    private var includeWearableBackedFactsForChat: Bool {
+        freshness(for: lastMetricDate) != .none
+    }
+
     private var memberOverviewFacts: MemberOverviewFacts {
-        MemberOverviewFacts(
+        let include = includeWearableBackedFactsForChat
+        return MemberOverviewFacts(
             memberId: memberUserId,
             memberName: memberName,
-            vitalityScore: vitalityScore,
-            vitalityDeltaPercent: vitalityDeltaPercent,
+            vitalityScore: include ? vitalityScore : nil,
+            vitalityDeltaPercent: include ? vitalityDeltaPercent : nil,
 
-            sleepValue: sleep?.value,
-            sleepChangeText: sleep?.changeText,
+            sleepValue: include ? sleep?.value : nil,
+            sleepChangeText: include ? sleep?.changeText : nil,
 
-            movementValue: movement?.value,
-            movementChangeText: movement?.changeText,
+            movementValue: include ? movement?.value : nil,
+            movementChangeText: include ? movement?.changeText : nil,
 
-            recoveryValue: recovery?.value,
-            recoveryChangeText: recovery?.changeText
+            recoveryValue: include ? recovery?.value : nil,
+            recoveryChangeText: include ? recovery?.changeText : nil
         )
     }
     // MARK: - Send message to member-specific Miya chat
@@ -1797,10 +1881,13 @@ private struct PillarDiveDeeperSheet: View {
 
             await MainActor.run {
                 isSending = false
+                let displayReply = isViewingOwnProfile
+                    ? MemberProfileOwnVoice.rewriteMemberFacingCopy(memberName: memberName, text: reply.reply)
+                    : reply.reply
                 messages.append(
                     ChatMessage(
                         role: .assistant,
-                        text: reply.reply,
+                        text: displayReply,
                         intent: intent
                     )
                 )
@@ -1824,7 +1911,7 @@ private struct PillarDiveDeeperSheet: View {
                     }
                 }
                 
-                showPills = true  // Show pills after assistant responds
+                showPills = includeWearableBackedFactsForChat && !displayedPills.isEmpty
                 scrollToBottomTrigger += 1
             }
         } catch {
@@ -1842,6 +1929,29 @@ private struct PillarDiveDeeperSheet: View {
         }
     }
 
+    @MainActor
+    private func enableAIConsentFromMemberChatGate() async {
+        do {
+            try await dataManager.applyAIThirdPartyConsent(enabled: true, source: "onboarding_agree")
+            await dataManager.refreshAIThirdPartyConsentFromServer()
+        } catch {
+            // Gate will dismiss via sheet; user can open Settings if save fails.
+        }
+    }
+
+    /// When chatting from your own profile, rewrites server pill titles that still use your display name.
+    private func adaptDynamicPillForOwnProfile(_ pill: Pill) -> Pill {
+        Pill(
+            id: pill.id,
+            title: MemberProfileOwnVoice.suggestedPillTitleForOwnProfile(
+                memberName: memberName,
+                intent: pill.intent,
+                serverTitle: pill.title
+            ),
+            intent: pill.intent
+        )
+    }
+
     // MARK: - Overview Pills (deterministic)
     private struct Pill: Identifiable {
         let id: String
@@ -1853,17 +1963,30 @@ private struct PillarDiveDeeperSheet: View {
     private var staticInitialPills: [Pill] {
         var pills: [Pill] = []
 
-        pills.append(.init(id: "well", title: "What is \(memberName) doing well?", intent: "member_doing_well"))
-        pills.append(.init(id: "support", title: "Where does \(memberName) need support?", intent: "member_needs_support"))
-
-        if sleep != nil {
-            pills.append(.init(id: "sleep", title: "How is \(memberName)’s sleep?", intent: "member_sleep"))
-        }
-        if movement != nil {
-            pills.append(.init(id: "move", title: "How is \(memberName)’s movement?", intent: "member_movement"))
-        }
-        if recovery != nil {
-            pills.append(.init(id: "rec", title: "How is \(memberName)’s recovery?", intent: "member_recovery"))
+        if isViewingOwnProfile {
+            pills.append(.init(id: "well", title: "What am I doing well?", intent: "member_doing_well"))
+            pills.append(.init(id: "support", title: "Where do I need support?", intent: "member_needs_support"))
+            if sleep != nil {
+                pills.append(.init(id: "sleep", title: "How is my sleep?", intent: "member_sleep"))
+            }
+            if movement != nil {
+                pills.append(.init(id: "move", title: "How is my movement?", intent: "member_movement"))
+            }
+            if recovery != nil {
+                pills.append(.init(id: "rec", title: "How is my recovery?", intent: "member_recovery"))
+            }
+        } else {
+            pills.append(.init(id: "well", title: "What is \(memberName) doing well?", intent: "member_doing_well"))
+            pills.append(.init(id: "support", title: "Where does \(memberName) need support?", intent: "member_needs_support"))
+            if sleep != nil {
+                pills.append(.init(id: "sleep", title: "How is \(memberName)’s sleep?", intent: "member_sleep"))
+            }
+            if movement != nil {
+                pills.append(.init(id: "move", title: "How is \(memberName)’s movement?", intent: "member_movement"))
+            }
+            if recovery != nil {
+                pills.append(.init(id: "rec", title: "How is \(memberName)’s recovery?", intent: "member_recovery"))
+            }
         }
 
         return Array(pills.prefix(4))
@@ -1871,9 +1994,14 @@ private struct PillarDiveDeeperSheet: View {
     
     // Dynamic pills with used pill filtering
     private var displayedPills: [Pill] {
-        // Use dynamic pills if available, otherwise fallback to static
-        let pillsToShow = dynamicPills.isEmpty ? staticInitialPills : dynamicPills
-        // Filter out pills that have been used (by ID or intent)
+        guard includeWearableBackedFactsForChat else { return [] }
+        let pillsToShow: [Pill] = {
+            if isViewingOwnProfile {
+                if dynamicPills.isEmpty { return staticInitialPills }
+                return dynamicPills.map(adaptDynamicPillForOwnProfile)
+            }
+            return dynamicPills.isEmpty ? staticInitialPills : dynamicPills
+        }()
         return pillsToShow.filter { pill in
             !usedPillIds.contains(pill.id) && !usedPillIds.contains(pill.intent)
         }
@@ -1951,7 +2079,8 @@ private struct PillarDiveDeeperSheet: View {
                                             // Pills anchored to LAST assistant message only
                                             if msg.role == .assistant,
                                                msg.id == messages.last?.id,
-                                               showPills {
+                                               showPills,
+                                               !displayedPills.isEmpty {
                                                 overviewPillBar
                                                     .transition(.opacity.combined(with: .move(edge: .top)))
                                             }
@@ -2068,22 +2197,38 @@ private struct PillarDiveDeeperSheet: View {
         }
         .presentationDetents([.medium, .large])
         .sheet(isPresented: $showAIConsentSheet) {
-            AIThirdPartyConsentRequiredSheet(onOpenSettings: {
-                showAIConsentSheet = false
-                dismiss()
-            })
+            AIThirdPartyConsentRequiredSheet(
+                onEnable: {
+                    Task { await enableAIConsentFromMemberChatGate() }
+                },
+                onOpenSettings: {
+                    showAIConsentSheet = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showEditProfileForAIConsent = true
+                    }
+                }
+            )
+        }
+        .sheet(isPresented: $showEditProfileForAIConsent) {
+            EditProfileView()
+                .environmentObject(authManager)
+                .environmentObject(dataManager)
+                .environmentObject(onboardingManager)
         }
         .task {
             // Seed opening message for chat if empty
             if pillar == .overview && messages.isEmpty {
+                let opener = isViewingOwnProfile
+                    ? "I'm here to help with your health. What would you like to know?"
+                    : "I'm here to help with \(memberName)’s health. What would you like to know?"
                 messages = [
                     ChatMessage(
                         role: .assistant,
-                        text: "I'm here to help with \(memberName)'s health. What would you like to know?",
+                        text: opener,
                         intent: nil
                     )
                 ]
-                showPills = true
+                showPills = includeWearableBackedFactsForChat && !displayedPills.isEmpty
             }
             
             guard pillar != .overview else { return }
@@ -2512,7 +2657,7 @@ private struct PillarDiveDeeperSheet: View {
 
     private var sheetTitle: String {
         switch pillar {
-        case .overview: return "\(memberName) • Overview"
+        case .overview: return isViewingOwnProfile ? "My overview" : "\(memberName) • Overview"
         case .movement: return "Movement"
         case .sleep: return "Sleep"
         case .recovery: return "Recovery"
@@ -2605,7 +2750,7 @@ private struct PillarDiveDeeperSheet: View {
     // MARK: - Overview card (kept)
     private var overviewSummaryCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("\(memberName)’s health overview")
+            Text(isViewingOwnProfile ? "My health overview" : "\(memberName)’s health overview")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(.miyaTextPrimary)
 
@@ -2626,8 +2771,12 @@ private struct PillarDiveDeeperSheet: View {
             ? "Recovery has been trending down slightly, which may reflect increased strain or reduced rest."
             : "Recovery data is limited."
 
+        let lead = isViewingOwnProfile
+            ? "Over the last few weeks, your overall health has remained relatively stable."
+            : "Over the last few weeks, \(memberName)’s overall health has remained relatively stable."
+
         return """
-        Over the last few weeks, \(memberName)’s overall health has remained relatively stable.
+        \(lead)
 
         \(movementSentence) \(sleepSentence) \(recoverySentence)
 

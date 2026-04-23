@@ -208,8 +208,8 @@ CREATE TABLE connected_wearables (
     user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
     
     -- Type of wearable - MUST match Swift enum WearableType.rawValue:
-    -- Valid values: 'appleWatch', 'whoop', 'oura', 'fitbit'
-    wearable_type TEXT NOT NULL CHECK (wearable_type IN ('appleWatch', 'whoop', 'oura', 'fitbit')),
+    -- Valid values: 'appleWatch', 'whoop', 'oura', 'fitbit', 'garmin'
+    wearable_type TEXT NOT NULL CHECK (wearable_type IN ('appleWatch', 'whoop', 'oura', 'fitbit', 'garmin')),
     
     -- Whether currently connected
     is_connected BOOLEAN DEFAULT TRUE,

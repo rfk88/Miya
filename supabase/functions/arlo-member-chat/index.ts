@@ -61,36 +61,53 @@ function looksLikeUrgentMedicalOrCrisis(userTexts: string[]): boolean {
   return patterns.some((p) => p.test(combined));
 }
 
-function getIntentGuide(intent: string): string {
+function getIntentGuide(intent: string, factsPresent: boolean): string {
   switch (intent) {
     case "member_doing_well":
+      if (!factsPresent) {
+        return "The user asked what is going well. There are no recent member metrics in the facts message — do NOT claim they are doing well overall, do NOT invent scores or wearable trends, and do NOT praise specific pillars. In one short sentence say you don't have recent health data to judge yet, then one line of kind, general encouragement (e.g. checking in, small habits) with no numbers.";
+      }
       return "Celebrate genuine strengths. Tie praise to specific signals in the member facts. Avoid empty cheer — say why it matters for their week.";
     case "member_needs_support":
+      if (!factsPresent) {
+        return "Lead with empathy (no blame). You cannot see recent metrics for this person — say that briefly. Offer general, kind ways to support them without inventing numbers or trends.";
+      }
       return "Lead with empathy (no blame). Name what looks harder from the data, then one gentle, realistic action. Offer hope without minimising.";
     case "member_sleep":
     case "member_sleep_improve":
+      if (!factsPresent) {
+        return "Sleep question but there are no recent wearable metrics. Say clearly you cannot generate personalised sleep insights yet, then offer brief, general sleep-hygiene ideas only — no numbers or pretend data.";
+      }
       return "Focus on sleep only. Ground advice in sleep-related lines from the facts; if sleep data is missing, say so and give general sleep-hygiene ideas without pretending you saw their charts.";
     case "member_movement":
     case "member_move":
+      if (!factsPresent) {
+        return "Movement question but there are no recent wearable metrics. Say clearly you cannot generate personalised movement insights yet, then offer brief, general ideas to move a bit more — no step counts or pretend trends.";
+      }
       return "Focus on movement/activity only. Use movement lines from the facts; suggest small, achievable steps.";
     case "member_recovery":
     case "member_rec":
+      if (!factsPresent) {
+        return "Recovery question but there are no recent wearable metrics. Say clearly you cannot generate personalised recovery insights yet, then brief general habits that support recovery — no HRV or pretend trends.";
+      }
       return "Focus on recovery only. Use recovery-related lines from the facts; avoid medical diagnosis; encourage sustainable habits.";
     case "member_overview":
+      if (!factsPresent) {
+        return "You have no numeric snapshot for this member. Say so clearly in one sentence, then offer one general thought on how the viewer might check in — no invented scores.";
+      }
       return "Give a balanced snapshot: what's steady, what might need attention, and one priority — all grounded in the facts provided.";
     default:
+      if (!factsPresent) {
+        return "Free-form message. There are no member metrics in this request: if they want personalised insights, trends, scores, or how this person is doing on sleep/movement/recovery, you MUST say clearly that there is not enough recent data in Miya yet to generate those insights. Then you may answer generally without fabricating data, or acknowledge a non-data question briefly.";
+      }
       return "Answer the user's question directly. Ground every claim in the member facts when present; otherwise state clearly what you cannot see.";
   }
 }
 
 function hasUsefulFacts(facts: MemberFacts | null): boolean {
   if (!facts) return false;
-  return (
-    facts.vitalityScore !== undefined ||
-    !!facts.sleepValue ||
-    !!facts.movementValue ||
-    !!facts.recoveryValue
-  );
+  const hasVitality = typeof facts.vitalityScore === "number" && Number.isFinite(facts.vitalityScore);
+  return hasVitality || !!facts.sleepValue || !!facts.movementValue || !!facts.recoveryValue;
 }
 
 function buildMemberSystemPrompt(opts: {
@@ -98,11 +115,22 @@ function buildMemberSystemPrompt(opts: {
   intentGuide: string;
   memberName: string;
   factsPresent: boolean;
+  isViewingSelf: boolean;
 }): string {
-  const { identityContext, intentGuide, memberName, factsPresent } = opts;
+  const { identityContext, intentGuide, memberName, factsPresent, isViewingSelf } = opts;
   const dataLine = factsPresent
     ? `Member facts are provided in a separate system message — treat them as the only numeric/descriptive data you may cite for ${memberName}.`
     : `Limited or no structured member facts are available — say so in one short sentence and do not invent scores, trends, or wearable details. Offer general, kind guidance only.`;
+
+  const insightSubject = isViewingSelf ? "you" : memberName;
+  const noMetricsBlock = factsPresent
+    ? ""
+    : `
+
+NO METRICS MODE (mandatory):
+- If the user is asking for anything that would need their wearable or dashboard data (insights, trends, scores, how they are doing, sleep/movement/recovery specifics, "what the data says"), say clearly in your opening that there is not enough recent data in Miya yet to generate personalised insights for ${insightSubject}.
+- General wellbeing chat is fine only when it does not pretend their metrics were seen.
+- Never invent numbers, weekly patterns, charts, or pillar outcomes.`;
 
   return `
 You are Miya: a warm, trustworthy wellbeing coach for families (British English).
@@ -119,6 +147,7 @@ TRUST CONTRACT:
 5) Give one realistic next step for the next 24 hours when advice fits — small and kind.
 6) Optional: end with at most ONE short follow-up question if it genuinely helps — as the last sentence. If no question is needed, end with a supportive closing line instead.
 7) Do not repeat your previous answer verbatim; build on the thread.
+${noMetricsBlock}
 
 SAFETY: If emergency symptoms may be present, do not coach — direct to urgent care. (The system may intercept these messages.)
 
@@ -326,8 +355,8 @@ Deno.serve(async (req) => {
       ? "The viewer is asking about their own data. Use \"you\" and \"your\" naturally. Be kind and non-judgmental."
       : `The viewer cares about ${memberName}. Use their name when it helps clarity. Sound supportive — like you're helping someone check in on a loved one without blame.`;
 
-    const intentGuide = getIntentGuide(intent);
     const factsPresent = hasUsefulFacts(facts);
+    const intentGuide = getIntentGuide(intent, factsPresent);
 
     const system: ChatMessage = {
       role: "system",
@@ -336,6 +365,7 @@ Deno.serve(async (req) => {
         intentGuide,
         memberName,
         factsPresent,
+        isViewingSelf,
       }),
     };
 
@@ -345,7 +375,7 @@ Deno.serve(async (req) => {
     if (facts) {
       factsLines.push(`Member facts for ${facts.memberName} (ground truth for this reply):`);
 
-      if (facts.vitalityScore !== undefined) {
+      if (typeof facts.vitalityScore === "number" && Number.isFinite(facts.vitalityScore)) {
         const delta = facts.vitalityDeltaPercent
           ? ` (${facts.vitalityDeltaPercent > 0 ? "+" : ""}${facts.vitalityDeltaPercent}%)`
           : "";
@@ -375,7 +405,7 @@ Deno.serve(async (req) => {
         : {
             role: "system",
             content:
-              "No detailed member metrics were provided in this request — acknowledge the limit briefly; do not invent wearable or health data.",
+              "NO USABLE MEMBER METRICS in this request. The user may be typing free-form chat: if they want personalised insights, trends, or scores, you must explain that there is not enough recent data in Miya to generate those insights yet. Do not invent wearable or health data; general kindness or non-data answers are fine when appropriate.",
           };
 
     const recentMessages = messages

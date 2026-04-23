@@ -147,10 +147,12 @@ Deno.serve(async (req) => {
     const receivedAt = new Date().toISOString();
     const rawBody = await req.text();
     let payload: Record<string, unknown> | unknown;
+    let parseFailed = false;
     try {
       payload = rawBody ? JSON.parse(rawBody) : {};
     } catch (_err) {
       payload = { parse_error: true };
+      parseFailed = true;
     }
 
     const headersObj = Object.fromEntries(req.headers.entries());
@@ -164,7 +166,8 @@ Deno.serve(async (req) => {
     const { error } = await supabase.from("rook_webhook_events").insert({
       headers: headersObj,
       payload,
-      raw_body: rawBody || null,
+      // Avoid storing duplicate text when JSON parsed OK — payload jsonb is enough (major DB savings).
+      raw_body: parseFailed ? (rawBody || null) : null,
       source: "rook",
     });
 

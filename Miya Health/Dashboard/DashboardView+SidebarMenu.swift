@@ -103,6 +103,11 @@ extension DashboardView {
             }
             .sheet(isPresented: $showWearableSelectionSheet, onDismiss: {
                 Task {
+                    if let types = try? await dataManager.fetchConnectedWearableTypesForCurrentUser() {
+                        await MainActor.run {
+                            onboardingManager.connectedWearables = types
+                        }
+                    }
                     await recomputeWearableBaselineWithRetries()
                 }
             }) {

@@ -20,6 +20,7 @@ struct FamilyNotificationDetailSheet: View {
     
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var authManager: AuthManager
+    @EnvironmentObject private var onboardingManager: OnboardingManager
     
     // MARK: - Pillar Configuration
     
@@ -81,6 +82,7 @@ struct FamilyNotificationDetailSheet: View {
     @State private var hasMinimumCoverage = false
     @State private var showAskMiyaChat = false
     @State private var showAIConsentForInsightFeatures = false
+    @State private var showEditProfileForAIConsent = false
     
     // AI Insight state
     @State private var aiInsightHeadline: String?
@@ -425,6 +427,15 @@ struct FamilyNotificationDetailSheet: View {
         
         if let url = URL(string: urlString) {
             UIApplication.shared.open(url)
+        }
+    }
+
+    @MainActor
+    private func enableAIConsentFromInsightGate() async {
+        do {
+            try await dataManager.applyAIThirdPartyConsent(enabled: true, source: "onboarding_agree")
+            await dataManager.refreshAIThirdPartyConsentFromServer()
+        } catch {
         }
     }
     
@@ -3446,9 +3457,23 @@ struct FamilyNotificationDetailSheet: View {
                 }
             }
             .sheet(isPresented: $showAIConsentForInsightFeatures) {
-                AIThirdPartyConsentRequiredSheet(onOpenSettings: {
-                    showAIConsentForInsightFeatures = false
-                })
+                AIThirdPartyConsentRequiredSheet(
+                    onEnable: {
+                        Task { await enableAIConsentFromInsightGate() }
+                    },
+                    onOpenSettings: {
+                        showAIConsentForInsightFeatures = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                            showEditProfileForAIConsent = true
+                        }
+                    }
+                )
+            }
+            .sheet(isPresented: $showEditProfileForAIConsent) {
+                EditProfileView()
+                    .environmentObject(authManager)
+                    .environmentObject(dataManager)
+                    .environmentObject(onboardingManager)
             }
             .sheet(isPresented: $showAskMiyaChat) {
                 MiyaInsightChatSheet(alertItem: item, dataManager: dataManager)

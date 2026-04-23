@@ -17,8 +17,8 @@ final class RookAPIService {
     private var clientUUID: String { RookConfig.clientUUID }
     private var secretKey: String { RookConfig.secretKey }
 
-    // Sandbox base URL (update to production URL when transitioning)
-    private let baseURL = "https://api.rook-connect.review"
+    // Production Rook Connect REST API (API-based sources: Oura, Whoop, Fitbit, etc.)
+    private let baseURL = "https://api.rook-connect.com"
 
     private init() {}
     

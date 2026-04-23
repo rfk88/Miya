@@ -20,6 +20,9 @@ class AuthManager: ObservableObject {
     @Published var isLoadingProfile: Bool = false  // Tracks profile/onboarding data loading after auth
     /// True when cold-start profile/family hydration timed out; user can tap Retry to re-run.
     @Published var needsLaunchRestoreRetry: Bool = false
+    /// False until `performColdStartRestore` finishes (session probe + optional hydration). Used so we don’t show
+    /// “Syncing your profile…” during automatic Keychain session restore — that copy implies the user just signed in.
+    @Published private(set) var hasFinishedInitialLaunchRouting: Bool = false
 
     init() {
         // Until `performColdStartRestore` runs, avoid a one-frame window where the user could reach
@@ -299,6 +302,11 @@ class AuthManager: ObservableObject {
         } catch {
             throw AuthError.updateFailed(error.localizedDescription)
         }
+    }
+    
+    /// Called from `Miya_HealthApp.performColdStartRestore` defer when launch routing is done (success, timeout, or no session).
+    func markInitialLaunchRoutingFinished() {
+        hasFinishedInitialLaunchRouting = true
     }
 }
 

@@ -40,6 +40,11 @@ struct AccountSidebarView: View {
         lastRookSync.map { Date().timeIntervalSince($0) / 3600 } ?? Double.infinity
     }
 
+    /// Primary linked source for sync UI (from `connected_wearables`, hydrated at launch and when Account opens).
+    private var wearableAccountRowTitle: String {
+        WearableType.accountSidebarWearableTitle(connectedRawValues: onboardingManager.connectedWearables)
+    }
+
     private func relativeSyncLabel(_ date: Date) -> String {
         let seconds = Date().timeIntervalSince(date)
         let minutes = Int(seconds / 60)
@@ -261,10 +266,10 @@ struct AccountSidebarView: View {
                         // CONNECTED DEVICES
                         AccountSection("Connected devices & data") {
                             VStack(spacing: 10) {
-                                // Apple Health row with live sync status
+                                // Linked wearable + live sync status (title matches user’s chosen source from DB)
                                 HStack(spacing: 10) {
                                     VStack(alignment: .leading, spacing: 3) {
-                                        Text("Apple Health")
+                                        Text(wearableAccountRowTitle)
                                             .font(.system(size: 14, weight: .semibold))
                                             .foregroundColor(.white)
 
@@ -790,6 +795,17 @@ struct AccountSidebarView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("Deleting your Miya account does not cancel your App Store subscription.")
+        }
+        .task {
+            await refreshConnectedWearablesListFromServer()
+        }
+    }
+
+    /// Keeps sidebar copy aligned with `connected_wearables` after cold start and reconnect flows.
+    private func refreshConnectedWearablesListFromServer() async {
+        guard let types = try? await dataManager.fetchConnectedWearableTypesForCurrentUser() else { return }
+        await MainActor.run {
+            onboardingManager.connectedWearables = types
         }
     }
 

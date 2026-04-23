@@ -35,37 +35,37 @@ final class ROOKDataAdapterTests: XCTestCase {
         let raw = ROOKDataAdapter.mapDay(age: 35, rookPayload: payload)
         
         // Sleep Duration (Rule B): 28800 seconds / 3600 = 8.0 hours
-        XCTAssertEqual(raw.sleepDurationHours, 8.0, accuracy: 0.01)
+        XCTAssertEqual(raw.sleepDurationHours!, 8.0, accuracy: 0.01)
         
         // Restorative Sleep % (Rule C): (6480 + 7200) / 28800 * 100 = 47.5%
         XCTAssertNotNil(raw.restorativeSleepPercent)
         XCTAssertEqual(raw.restorativeSleepPercent!, 47.5, accuracy: 0.1)
         
         // Sleep Efficiency % (Rule D): Use ROOK's score directly
-        XCTAssertEqual(raw.sleepEfficiencyPercent, 94.0, accuracy: 0.01)
+        XCTAssertEqual(raw.sleepEfficiencyPercent!, 94.0, accuracy: 0.01)
         
         // Awake % (Rule E): 1800 / 30600 * 100 = 5.88%
         XCTAssertNotNil(raw.awakePercent)
         XCTAssertEqual(raw.awakePercent!, 5.88, accuracy: 0.1)
         
         // HRV (Rule A): SDNN present, should use it
-        XCTAssertEqual(raw.hrvMs, 55.3, accuracy: 0.01)
+        XCTAssertEqual(raw.hrvMs!, 55.3, accuracy: 0.01)
         XCTAssertEqual(raw.hrvType, "sdnn")
         
         // Resting Heart Rate (Rule G): Sleep-based RHR
-        XCTAssertEqual(raw.restingHeartRate, 58.0, accuracy: 0.01)
+        XCTAssertEqual(raw.restingHeartRate!, 58.0, accuracy: 0.01)
         
         // Breathing Rate (Rule F): Direct mapping
-        XCTAssertEqual(raw.breathingRate, 14.0, accuracy: 0.01)
+        XCTAssertEqual(raw.breathingRate!, 14.0, accuracy: 0.01)
         
         // Steps (Rule H): Direct mapping
         XCTAssertEqual(raw.steps, 9234)
         
         // Movement Minutes (Rule I): Direct mapping
-        XCTAssertEqual(raw.movementMinutes, 47.0, accuracy: 0.01)
+        XCTAssertEqual(raw.movementMinutes!, 47.0, accuracy: 0.01)
         
         // Active Calories (Rule J): Direct mapping, NOT total calories
-        XCTAssertEqual(raw.activeCalories, 487.3, accuracy: 0.1)
+        XCTAssertEqual(raw.activeCalories!, 487.3, accuracy: 0.1)
     }
     
     // MARK: - Minimal Coverage Tests (Apple Health)
@@ -75,7 +75,7 @@ final class ROOKDataAdapterTests: XCTestCase {
         let raw = ROOKDataAdapter.mapDay(age: 45, rookPayload: payload)
         
         // Sleep Duration: 25200 / 3600 = 7.0 hours
-        XCTAssertEqual(raw.sleepDurationHours, 7.0, accuracy: 0.01)
+        XCTAssertEqual(raw.sleepDurationHours!, 7.0, accuracy: 0.01)
         
         // Restorative Sleep %: Missing REM/Deep data
         XCTAssertNil(raw.restorativeSleepPercent)
@@ -94,7 +94,7 @@ final class ROOKDataAdapterTests: XCTestCase {
         XCTAssertNil(raw.hrvType)
         
         // Resting Heart Rate: Physical summary fallback
-        XCTAssertEqual(raw.restingHeartRate, 62.0, accuracy: 0.01)
+        XCTAssertEqual(raw.restingHeartRate!, 62.0, accuracy: 0.01)
         
         // Breathing Rate: Missing
         XCTAssertNil(raw.breathingRate)
@@ -116,7 +116,7 @@ final class ROOKDataAdapterTests: XCTestCase {
         let raw = ROOKDataAdapter.mapDay(age: 50, rookPayload: payload)
         
         // HRV: SDNN missing, should use RMSSD
-        XCTAssertEqual(raw.hrvMs, 42.7, accuracy: 0.01)
+        XCTAssertEqual(raw.hrvMs!, 42.7, accuracy: 0.01)
         XCTAssertEqual(raw.hrvType, "rmssd")
         
         // Verify RMSSD was NOT converted to SDNN
@@ -289,7 +289,7 @@ final class ROOKDataAdapterTests: XCTestCase {
         let raw = ROOKDataAdapter.mapDay(age: 35, rookPayload: payload)
         
         // Should use physical RHR
-        XCTAssertEqual(raw.restingHeartRate, 65.0, accuracy: 0.01)
+        XCTAssertEqual(raw.restingHeartRate!, 65.0, accuracy: 0.01)
     }
 }
 

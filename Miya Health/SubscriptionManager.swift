@@ -19,7 +19,8 @@ final class SubscriptionManager: ObservableObject {
     @Published private(set) var entitlementCheckComplete: Bool = false
     @Published private(set) var loadError: String?
     @Published private(set) var purchaseError: String?
-    @Published private(set) var restoreMessage: String? // "Restored" or "No purchases to restore"
+    /// Shown after Restore: success, no entitlement for this Apple ID, or error.
+    @Published private(set) var restoreMessage: String?
 
     private(set) var subscriptionProduct: Product?
     private var transactionUpdates: Task<Void, Never>?
@@ -30,6 +31,9 @@ final class SubscriptionManager: ObservableObject {
     private var loadEpoch = 0
     /// Coalesces overlapping `loadProductsAndCheckEntitlements()` calls (init, paywall, foreground).
     private var inflightLoad: Task<Void, Never>?
+
+    /// One reload after Miya profile hydration per session (logout clears via `reset()`).
+    private var didReloadSubscriptionAfterMiyaHydration = false
 
     /// Legacy in-app promo bypass (removed for App Store 3.1.1). Strip any leftover keys once.
     private static let obsoletedPromoKeyPrefix = "MiyaHealthPromoRedeemed"
@@ -54,6 +58,7 @@ final class SubscriptionManager: ObservableObject {
 
     // MARK: - Load products
     /// Loads subscription metadata from StoreKit and refreshes entitlements.
+    /// Does **not** call `AppStore.sync()` — that prompts for Apple ID and is reserved for explicit Restore.
     /// Simulator: select **Products.storekit** in the scheme (Run → Options → StoreKit Configuration) so `Product.products` resolves locally.
     func loadProductsAndCheckEntitlements() async {
         if let existing = inflightLoad {
@@ -67,6 +72,17 @@ final class SubscriptionManager: ObservableObject {
         inflightLoad = task
         await task.value
         inflightLoad = nil
+    }
+
+    /// After Supabase sign-in and profile hydration, re-run the StoreKit query so the paywall gate isn’t decided from a stale pre-login pass.
+    func reloadSubscriptionAfterMiyaProfileHydratedIfNeeded() async {
+        guard !didReloadSubscriptionAfterMiyaHydration else { return }
+        didReloadSubscriptionAfterMiyaHydration = true
+        loadEpoch &+= 1
+        inflightLoad?.cancel()
+        inflightLoad = nil
+        entitlementCheckComplete = false
+        await loadProductsAndCheckEntitlements()
     }
 
     private func performLoadProductsAndCheckEntitlements() async {
@@ -170,6 +186,7 @@ final class SubscriptionManager: ObservableObject {
     }
 
     // MARK: - Restore
+    /// Explicit user action only — `AppStore.sync()` may prompt for Apple ID.
     func restore() async {
         restoreMessage = nil
         isPurchasing = true
@@ -178,11 +195,43 @@ final class SubscriptionManager: ObservableObject {
         do {
             try await AppStore.sync()
             await checkEntitlements()
-            restoreMessage = hasActiveSubscription ? "Restored" : "No purchases to restore"
+            if hasActiveSubscription {
+                restoreMessage = String(localized: "Restored", comment: "Paywall: subscription restore succeeded")
+            } else {
+#if DEBUG
+                await logCurrentEntitlementsForDiagnostics(context: "after restore")
+#endif
+                restoreMessage = String(
+                    localized: "No Miya subscription found for this Apple ID. Confirm you’re signed into Media & Purchases in Settings, tap Manage subscription below, or subscribe.",
+                    comment: "Paywall: App Store sync ran but no entitlement for configured product ID"
+                )
+            }
         } catch {
-            restoreMessage = "Restore failed: \(error.localizedDescription)"
+            restoreMessage = String(
+                localized: "Restore failed: \(error.localizedDescription)",
+                comment: "Paywall: App Store sync error"
+            )
         }
     }
+
+#if DEBUG
+    /// Logs verified product IDs (and unverified count) so mismatched ASC product IDs or sandbox expiry are obvious in Xcode.
+    private func logCurrentEntitlementsForDiagnostics(context: String) async {
+        var verifiedIDs: [String] = []
+        var unverifiedCount = 0
+        for await result in Transaction.currentEntitlements {
+            switch result {
+            case .verified(let transaction):
+                verifiedIDs.append(transaction.productID)
+            case .unverified:
+                unverifiedCount += 1
+            }
+        }
+        print(
+            "🔎 StoreKit [\(context)] currentEntitlements verifiedProductIDs=\(verifiedIDs) unverified=\(unverifiedCount) expected=\(PaywallConfig.subscriptionProductId)"
+        )
+    }
+#endif
 
     // MARK: - Reset (on logout)
     func reset() {
@@ -197,6 +246,7 @@ final class SubscriptionManager: ObservableObject {
         purchaseError = nil
         restoreMessage = nil
         isLoadingProducts = false
+        didReloadSubscriptionAfterMiyaHydration = false
     }
 
     func clearRestoreMessage() {

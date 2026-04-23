@@ -19,9 +19,20 @@
 		A1B2C3D4E5F60123456789A2 /* Rook Samples/ROOKConnect-Whoop-dataset-v2.json in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60123456789A3 /* Rook Samples/ROOKConnect-Whoop-dataset-v2.json */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		366E9B672ED07BE4001C6CAD /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 366E9A2B2ED07BE3001C6CA1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 366E9A322ED07BE3001C6CA1;
+			remoteInfo = "Miya Health";
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		366E9A332ED07BE4001C6CA1 /* Miya Health.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Miya Health.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		366E9A412ED07BE5001C6CA2 /* Miya Health/Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Miya Health/Secrets.xcconfig"; sourceTree = SOURCE_ROOT; };
+		366E9B602ED07BE4001C6CA6 /* Miya HealthTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Miya HealthTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D4E5F60123456789A1 /* Rook Samples/ROOKConnect-Apple Health-dataset-v2.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "Rook Samples/ROOKConnect-Apple Health-dataset-v2.json"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60123456789A3 /* Rook Samples/ROOKConnect-Whoop-dataset-v2.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "Rook Samples/ROOKConnect-Whoop-dataset-v2.json"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -30,6 +41,11 @@
 		366E9A352ED07BE4001C6CA1 /* Miya Health */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "Miya Health";
+			sourceTree = "<group>";
+		};
+		366E9B612ED07BE4001C6CA7 /* Miya HealthTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Miya HealthTests";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -50,6 +66,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		366E9B622ED07BE4001C6CA8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -57,6 +80,7 @@
 			isa = PBXGroup;
 			children = (
 				366E9A352ED07BE4001C6CA1 /* Miya Health */,
+				366E9B612ED07BE4001C6CA7 /* Miya HealthTests */,
 				366E9A342ED07BE4001C6CA1 /* Products */,
 				6966C3E22EEF0D6F006389BF /* Recovered References */,
 			);
@@ -66,6 +90,7 @@
 			isa = PBXGroup;
 			children = (
 				366E9A332ED07BE4001C6CA1 /* Miya Health.app */,
+				366E9B602ED07BE4001C6CA6 /* Miya HealthTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -113,6 +138,29 @@
 			productReference = 366E9A332ED07BE4001C6CA1 /* Miya Health.app */;
 			productType = "com.apple.product-type.application";
 		};
+		366E9B652ED07BE4001C6CAB /* Miya HealthTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 366E9B682ED07BE4001C6CAE /* Build configuration list for PBXNativeTarget "Miya HealthTests" */;
+			buildPhases = (
+				366E9B632ED07BE4001C6CA9 /* Sources */,
+				366E9B622ED07BE4001C6CA8 /* Frameworks */,
+				366E9B642ED07BE4001C6CAA /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				366E9B662ED07BE4001C6CAC /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				366E9B612ED07BE4001C6CA7 /* Miya HealthTests */,
+			);
+			name = "Miya HealthTests";
+			packageProductDependencies = (
+			);
+			productName = "Miya HealthTests";
+			productReference = 366E9B602ED07BE4001C6CA6 /* Miya HealthTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -125,6 +173,10 @@
 				TargetAttributes = {
 					366E9A322ED07BE3001C6CA1 = {
 						CreatedOnToolsVersion = 26.1.1;
+					};
+					366E9B652ED07BE4001C6CAB = {
+						CreatedOnToolsVersion = 26.1.1;
+						TestTargetID = 366E9A322ED07BE3001C6CA1;
 					};
 				};
 			};
@@ -148,6 +200,7 @@
 			projectRoot = "";
 			targets = (
 				366E9A322ED07BE3001C6CA1 /* Miya Health */,
+				366E9B652ED07BE4001C6CAB /* Miya HealthTests */,
 			);
 		};
 /* End PBXProject section */
@@ -162,6 +215,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		366E9B642ED07BE4001C6CAA /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -172,7 +232,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		366E9B632ED07BE4001C6CA9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		366E9B662ED07BE4001C6CAC /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 366E9A322ED07BE3001C6CA1 /* Miya Health */;
+			targetProxy = 366E9B672ED07BE4001C6CAD /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		366E9A3C2ED07BE5001C6CA1 /* Debug */ = {
@@ -377,6 +452,50 @@
 			};
 			name = Release;
 		};
+		366E9B692ED07BE4001C6CAF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2.0;
+				DEVELOPMENT_TEAM = DG8R472FC7;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 40;
+				PRODUCT_BUNDLE_IDENTIFIER = "Miya-Health.com.Miya-HealthTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Miya Health.app/Miya Health";
+			};
+			name = Debug;
+		};
+		366E9B6A2ED07BE4001C6CB0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2.0;
+				DEVELOPMENT_TEAM = DG8R472FC7;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 40;
+				PRODUCT_BUNDLE_IDENTIFIER = "Miya-Health.com.Miya-HealthTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Miya Health.app/Miya Health";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -394,6 +513,15 @@
 			buildConfigurations = (
 				366E9A3F2ED07BE5001C6CA1 /* Debug */,
 				366E9A402ED07BE5001C6CA1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		366E9B682ED07BE4001C6CAE /* Build configuration list for PBXNativeTarget "Miya HealthTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				366E9B692ED07BE4001C6CAF /* Debug */,
+				366E9B6A2ED07BE4001C6CB0 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

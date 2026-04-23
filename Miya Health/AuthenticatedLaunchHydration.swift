@@ -145,6 +145,15 @@ enum AuthenticatedLaunchHydration {
             print("⚠️ AuthenticatedLaunchHydration: failed to load user profile — \(error.localizedDescription)")
         }
 
+        do {
+            let types = try await dataManager.fetchConnectedWearableTypesForCurrentUser()
+            onboardingManager.connectedWearables = types
+        } catch {
+#if DEBUG
+            print("⚠️ AuthenticatedLaunchHydration: connected wearables — \(error.localizedDescription)")
+#endif
+        }
+
         await onboardingManager.refreshGuidedContextFromDB(dataManager: dataManager)
         await dataManager.refreshAIThirdPartyConsentFromServer()
     }

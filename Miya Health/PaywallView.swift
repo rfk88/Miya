@@ -51,6 +51,11 @@ struct PaywallView: View {
                 ctaButton
                 postCtaReassurance
                 restoreRow
+                Text(PaywallConfig.Copy.subscriptionUsesAppleIDFootnote)
+                    .font(.system(size: 12))
+                    .foregroundColor(Color.miyaTextTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 4)
                 restoreMessage
                 legalSection
             }
@@ -368,7 +373,9 @@ struct PaywallView: View {
             Text(msg)
                 .font(.system(size: 13))
                 .foregroundColor(Color.miyaTextSecondary)
-                .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 4)
         }
     }

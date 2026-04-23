@@ -124,6 +124,7 @@ extension Miya_HealthApp {
         authManager.needsLaunchRestoreRetry = false
         defer {
             authManager.isLoadingProfile = false
+            authManager.markInitialLaunchRoutingFinished()
         }
 
         let sessionTimedOut = await raceTimeout(seconds: 18) {

@@ -245,6 +245,46 @@ extension DashboardView {
         UserDefaults.standard.set(Array(dismissedGuidedMemberIds), forKey: key)
     }
 
+    // MARK: - Vitality banner state evaluation
 
+    /// Called whenever the logged-in user ID or family members list changes.
+    /// Loads the persisted "initial baseline ever completed" flag and schedules /
+    /// cancels local notifications as needed.
+    internal func evaluateVitalityBannerState() {
+        guard let uid = currentUserIdString, !uid.isEmpty else { return }
 
+        // Load persisted completion flag (cheap, synchronous).
+        let wasAlreadyComplete = VitalityBannerStorage.hasCompletedInitialBaseline(userId: uid)
+        let me = familyMembers.first(where: { $0.isMe })
+        let currentUserHasVitality = me?.hasScore == true
+
+        // If baseline just completed for the first time, persist and fire local notification.
+        if currentUserHasVitality && !wasAlreadyComplete {
+            VitalityBannerStorage.markInitialBaselineCompleted(userId: uid)
+            initialBaselineEverCompleted = true
+            Task {
+                await DashboardVitalityLocalNotifications.scheduleBaselineReady(userId: uid)
+                // Cancel any pending resync notification since data is now present.
+                DashboardVitalityLocalNotifications.cancelMissingVitality()
+            }
+        } else {
+            initialBaselineEverCompleted = wasAlreadyComplete || currentUserHasVitality
+        }
+
+        // If Banner B would show (no vitality, ingest phase over), nudge via local notification.
+        let evaluator = DashboardVitalityBannerEvaluator(
+            currentUserId: uid,
+            me: me,
+            isWearableSyncing: isWearableSyncing,
+            isDataInsufficient: isDataInsufficient,
+            initialBaselineEverCompleted: initialBaselineEverCompleted
+        )
+        if evaluator.banner == .resync {
+            Task {
+                await DashboardVitalityLocalNotifications.scheduleMissingVitalityIfNeeded(userId: uid)
+            }
+        } else if currentUserHasVitality {
+            DashboardVitalityLocalNotifications.cancelMissingVitality()
+        }
+    }
 }

@@ -346,6 +346,8 @@ extension DashboardView {
         if let uid = currentUserIdString {
             loadDismissedMissingWearable(for: uid)
             loadDismissedGuidedMembers(for: uid)
+            // Hydrate persisted vitality banner flag so Banner A/B are correct immediately.
+            initialBaselineEverCompleted = VitalityBannerStorage.hasCompletedInitialBaseline(userId: uid)
         }
         #if DEBUG
         if ScreenshotDemoData.isScreenshotModeEnabled {
@@ -946,6 +948,8 @@ extension DashboardView {
                     vitalityFactors = factors
                 }
                 loadFamilyName()
+                // Update vitality banner state (Banner A/B) for the current user.
+                evaluateVitalityBannerState()
             }
             
             // Check for backfilled data after members are loaded
@@ -1459,13 +1463,16 @@ extension DashboardView {
                 await MainActor.run {
                     isWearableSyncing = false
                     wearableSyncStatus = result.success ? nil : result.message
-                    
+
                     if result.success {
                         print("✅ Dashboard: Vitality updated successfully")
-                        // Reload family members to show updated score
+                        // Reload family members to show updated score; banner state
+                        // is re-evaluated inside loadFamilyMembers via evaluateVitalityBannerState().
                         Task { await loadFamilyMembers() }
                     } else {
                         print("⚠️ Dashboard: Vitality update incomplete - \(result.message)")
+                        // Re-evaluate so Banner B can fire rate-limited notification if applicable.
+                        evaluateVitalityBannerState()
                     }
                 }
             } else {

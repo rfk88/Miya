@@ -24,6 +24,8 @@ enum PaywallConfig {
         static let cancelAnytimeReassurance = "Cancel anytime."
         static let finePrint = ""
         static let restoreLabel = "Restore purchases"
+        /// Restore runs Apple’s sync and may ask you to sign in with your Apple ID.
+        static let subscriptionUsesAppleIDFootnote = "Subscriptions use your Apple Media account (Settings → Media & Purchases), not your Miya email. Restore is only if access doesn’t appear after reinstall."
         /// Opens Apple’s subscription management UI (helps TestFlight / sandbox testing).
         static let manageSubscriptionLabel = "Manage subscription"
         /// App Store subscription offer codes only (system redemption sheet — not custom promo).

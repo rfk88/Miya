@@ -596,7 +596,7 @@ class DataManager: ObservableObject {
         
         do {
             // Validate wearable type matches database constraint
-            guard ["appleWatch", "whoop", "oura", "fitbit"].contains(wearableType) else {
+            guard ["appleWatch", "whoop", "oura", "fitbit", "garmin"].contains(wearableType) else {
                 throw DataError.invalidData("Invalid wearable type")
             }
             
@@ -616,6 +616,30 @@ class DataManager: ObservableObject {
         } catch {
             let userMessage = mapDataError(error)
             print("❌ DataManager: Save wearable error: \(error.localizedDescription)")
+            throw DataError.databaseError(userMessage)
+        }
+    }
+
+    /// Loads `connected_wearables` rows for the signed-in user (`is_connected == true`).
+    func fetchConnectedWearableTypesForCurrentUser() async throws -> [String] {
+        guard let userId = await currentUserId else {
+            throw DataError.notAuthenticated
+        }
+        struct Row: Decodable {
+            let wearable_type: String
+        }
+        do {
+            let rows: [Row] = try await supabase
+                .from("connected_wearables")
+                .select("wearable_type")
+                .eq("user_id", value: userId)
+                .eq("is_connected", value: true)
+                .execute()
+                .value
+            return rows.map(\.wearable_type)
+        } catch {
+            let userMessage = mapDataError(error)
+            print("❌ DataManager: fetchConnectedWearableTypesForCurrentUser error: \(error.localizedDescription)")
             throw DataError.databaseError(userMessage)
         }
     }

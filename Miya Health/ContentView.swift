@@ -331,8 +331,9 @@ struct LandingView: View {
         let onDashboard = authManager.isAuthenticated && onboardingManager.isOnboardingComplete
             && !shouldShowPaywall && !shouldShowBillingRecovery
         if onDashboard { return false }
-        return authManager.isLoading || dataManager.isLoading || authManager.isLoadingProfile
-        || shouldShowSubscriptionLoader
+        let profileLoadingBlocksChrome = authManager.hasFinishedInitialLaunchRouting && authManager.isLoadingProfile
+        return authManager.isLoading || dataManager.isLoading || profileLoadingBlocksChrome
+            || shouldShowSubscriptionLoader
     }
     
     /// Returns the view for the saved onboarding step
@@ -379,9 +380,13 @@ struct LandingView: View {
     
     var body: some View {
         Group {
-            // Startup guard: while auth/profile restoration is in progress, avoid flashing Get Started.
-            if authManager.isLoadingProfile && !authManager.isAuthenticated {
-                StartupGateView(message: "Loading your account…")
+            // Until cold-start routing finishes, keep one gate (don’t use “Syncing profile” — that’s for explicit sign-in).
+            if !authManager.hasFinishedInitialLaunchRouting {
+                StartupGateView(
+                    message: authManager.isAuthenticated
+                        ? "Restoring your session…"
+                        : "Loading your account…"
+                )
             }
             // HARD GATE: Invited members with admin-filled data awaiting their review
             else if authManager.isAuthenticated,
@@ -391,14 +396,16 @@ struct LandingView: View {
                     GuidedSetupReviewView(memberId: memberId)
                 }
             }
-            // LOADING GUARD: If authenticated but profile/step hydration is not yet done,
-            // hold the loading gate so the user never sees a flash of the wrong screen.
-            else if authManager.isAuthenticated && (authManager.isLoadingProfile || !onboardingManager.isHydrated) {
+            // LOADING GUARD: Signed-in user but profile/onboarding not hydrated yet (e.g. Log In sheet path).
+            else if authManager.isAuthenticated && !onboardingManager.isHydrated {
                 StartupGateView(message: "Syncing your profile…")
             }
             // Superadmin waiting for subscription check: show loading until entitlement is known
             else if shouldShowSubscriptionLoader {
                 StartupGateView(message: "Checking subscription…")
+                    .task {
+                        await subscriptionManager.loadProductsAndCheckEntitlements()
+                    }
             }
             // Superadmin with no active subscription: show paywall
             else if shouldShowPaywall {
@@ -534,10 +541,10 @@ struct LandingView: View {
 #if DEBUG
             do {
                 let route: String
-                if authManager.isLoadingProfile && !authManager.isAuthenticated {
-                    route = "startup-gate (loading, not authed)"
-                } else if authManager.isAuthenticated && authManager.isLoadingProfile {
-                    route = "startup-gate (authed, syncing profile)"
+                if !authManager.hasFinishedInitialLaunchRouting {
+                    route = "startup-gate (initial launch routing)"
+                } else if authManager.isAuthenticated && !onboardingManager.isHydrated {
+                    route = "startup-gate (signed-in, hydrating profile)"
                 } else if authManager.isAuthenticated && !onboardingManager.isOnboardingComplete {
                     route = "auth-entry + onboarding-resume (step=\(onboardingManager.currentStep) hydrated=\(onboardingManager.isHydrated) autoResumed=\(hasAutoResumed))"
                 } else if authManager.isAuthenticated && onboardingManager.isOnboardingComplete {
@@ -571,6 +578,16 @@ struct LandingView: View {
         // (before this view mounted). .onChange handles the rare case where hydration
         // finishes after this view is already on screen.
         .task { autoResumeOnboardingIfNeeded() }
+        /// Re-query StoreKit after Miya profile is ready (no `AppStore.sync()` — avoids Apple ID prompts right after Sign in with Apple).
+        .task(id: "\(authManager.isAuthenticated)-\(onboardingManager.isHydrated)-\(onboardingManager.isSuperAdmin)-\(onboardingManager.isOnboardingComplete)-\(onboardingManager.freshlyCompletedGetStarted)") {
+            guard authManager.isAuthenticated,
+                  onboardingManager.isHydrated,
+                  onboardingManager.isOnboardingComplete,
+                  onboardingManager.isSuperAdmin,
+                  !onboardingManager.freshlyCompletedGetStarted,
+                  !subscriptionManager.hasActiveSubscription else { return }
+            await subscriptionManager.reloadSubscriptionAfterMiyaProfileHydratedIfNeeded()
+        }
         .onChange(of: onboardingManager.isHydrated) { _, _ in autoResumeOnboardingIfNeeded() }
     }
 
@@ -684,13 +701,9 @@ struct EnterCodeView: View {
     @State private var inviteDetails: InviteDetails? = nil
     @State private var codeValidated: Bool = false
     
-    // Account creation state
+    // Account creation state (Sign in with Apple only on iOS)
     @State private var firstName: String = ""
-    @State private var email: String = ""
-    @State private var password: String = ""
-    @State private var confirmPassword: String = ""
-    @State private var showEmailSignupForm: Bool = false
-    /// Inline hint when user taps Apple/Email before entering name (no alert).
+    /// Inline hint when user taps Sign in with Apple before entering name (no alert).
     @State private var authNameInlineHint: String?
 
     // Guided setup acceptance (only for Guided Setup invites)
@@ -708,18 +721,6 @@ struct EnterCodeView: View {
         inviteCode.trimmingCharacters(in: .whitespaces).count >= 4
     }
     
-    private var passwordsMatch: Bool {
-        !password.isEmpty && !confirmPassword.isEmpty && password == confirmPassword
-    }
-    
-    private var isFormValid: Bool {
-        guard codeValidated else { return false }
-        guard !firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-        guard !email.isEmpty else { return false }
-        guard password.count >= 8 else { return false }
-        guard passwordsMatch else { return false }
-        return true
-    }
     
     var body: some View {
         ScrollView {
@@ -742,7 +743,7 @@ struct EnterCodeView: View {
                     // STEP 1: Enter invite code
                     enterCodeSection
                 } else {
-                    // STEP 2: Create account (code validated)
+                    // STEP 2: Create account (code validated) — Sign in with Apple only
                     createAccountSection
                 }
             }
@@ -858,7 +859,6 @@ struct EnterCodeView: View {
                         .font(.system(size: 20, weight: .semibold))
                         .foregroundColor(.miyaPrimary)
                     
-                    // Show onboarding type info
                     HStack(spacing: 8) {
                         Image(systemName: details.isGuidedSetup ? "checkmark.circle.fill" : "person.fill")
                             .foregroundColor(.miyaPrimary)
@@ -867,7 +867,6 @@ struct EnterCodeView: View {
                             .foregroundColor(.secondary)
                     }
                     .padding(.top, 4)
-                    
                 }
             }
             
@@ -887,126 +886,39 @@ struct EnterCodeView: View {
                     .cornerRadius(12)
             }
 
-            if !showEmailSignupForm {
-                let nameMissing = firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                let appleBlocked = isAppleSignInLoading || authManager.isLoading
+            let nameMissing = firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let appleBlocked = isAppleSignInLoading || authManager.isLoading
 
-                ZStack {
-                    SignInWithAppleButtonView { idToken, nonce, fullName in
-                        await handleAppleSignInForInvite(idToken: idToken, nonce: nonce, fullName: fullName)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: MiyaTheme.buttonH)
-                    .disabled(appleBlocked)
-
-                    if nameMissing && !appleBlocked {
-                        Color.clear
-                            .contentShape(RoundedRectangle(cornerRadius: MiyaTheme.radius, style: .continuous))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: MiyaTheme.buttonH)
-                            .onTapGesture {
-                                authNameInlineHint = "Please add your first name above before using Sign in with Apple."
-                            }
-                    }
+            ZStack {
+                SignInWithAppleButtonView { idToken, nonce, fullName in
+                    await handleAppleSignInForInvite(idToken: idToken, nonce: nonce, fullName: fullName)
                 }
+                .frame(maxWidth: .infinity)
+                .frame(height: MiyaTheme.buttonH)
+                .disabled(appleBlocked)
 
-                Button {
-                    if nameMissing {
-                        authNameInlineHint = "Please add your first name above before signing up with email."
-                    } else {
-                        showEmailSignupForm = true
-                    }
-                } label: {
-                    Text("Sign up with Email")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
+                if nameMissing && !appleBlocked {
+                    Color.clear
+                        .contentShape(RoundedRectangle(cornerRadius: MiyaTheme.radius, style: .continuous))
                         .frame(maxWidth: .infinity)
                         .frame(height: MiyaTheme.buttonH)
-                        .background(Color.miyaPrimary)
-                        .cornerRadius(MiyaTheme.radius)
-                }
-                .padding(.top, 8)
-
-                if let hint = authNameInlineHint {
-                    Text(hint)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            } else {
-                // Account creation form (email path)
-                Text("Create your account")
-                    .font(.system(size: 20, weight: .semibold))
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Email")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.secondary)
-                    TextField("your@email.com", text: $email)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.emailAddress)
-                        .autocorrectionDisabled()
-                        .padding()
-                        .background(Color(red: 0.95, green: 0.95, blue: 0.97))
-                        .cornerRadius(12)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Password")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.secondary)
-                    SecureField("At least 8 characters", text: $password)
-                        .padding()
-                        .background(Color(red: 0.95, green: 0.95, blue: 0.97))
-                        .cornerRadius(12)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Confirm Password")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.secondary)
-                    SecureField("Confirm your password", text: $confirmPassword)
-                        .padding()
-                        .background(Color(red: 0.95, green: 0.95, blue: 0.97))
-                        .cornerRadius(12)
-
-                    if !confirmPassword.isEmpty && !passwordsMatch {
-                        Text("Passwords do not match")
-                            .font(.system(size: 12))
-                            .foregroundColor(.red)
-                    }
-                }
-
-                Button {
-                    Task { await createAccountAndJoin() }
-                } label: {
-                    HStack(spacing: 8) {
-                        if authManager.isLoading {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.8)
+                        .onTapGesture {
+                            authNameInlineHint = "Please add your first name above before using Sign in with Apple."
                         }
-                        Text(authManager.isLoading ? "Creating account..." : "Join Family")
-                            .font(.system(size: 16, weight: .semibold))
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(isFormValid ? Color.miyaPrimary : Color.gray.opacity(0.3))
-                    .foregroundColor(.white)
-                    .cornerRadius(18)
                 }
-                .disabled(!isFormValid || authManager.isLoading)
-                .padding(.top, 12)
+            }
 
-                Button {
-                    showEmailSignupForm = false
-                } label: {
-                    Text("Back")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity)
-                }
+            Text("Sign in with Apple uses your Apple ID — same as your App Store subscription.")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let hint = authNameInlineHint {
+                Text(hint)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -1041,62 +953,6 @@ struct EnterCodeView: View {
         isValidatingCode = false
     }
     
-    private func createAccountAndJoin() async {
-        guard let details = inviteDetails else { return }
-        
-        showError = false
-        
-        do {
-            let normalizedCode = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
-            inviteCode = normalizedCode
-            // 1. Create the user account
-            let resolvedFirstName = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
-            let userId = try await authManager.signUp(
-                email: email,
-                password: password,
-                firstName: resolvedFirstName
-            )
-            
-            // 2. 🔥 Create initial user_profile (step 2 since they've already "joined" a family via invite)
-            try await dataManager.createInitialProfile(
-                userId: userId,
-                firstName: resolvedFirstName,
-                step: 2
-            )
-            
-            // 3. Complete the invite redemption (link user to family)
-            try await dataManager.completeInviteRedemption(
-                code: normalizedCode,
-                userId: userId
-            )
-            
-            // 4. Store info in onboarding manager
-            onboardingManager.firstName = resolvedFirstName
-            onboardingManager.email = email
-            onboardingManager.currentUserId = userId
-            onboardingManager.isInvitedUser = true  // 🔥 Mark as invited user
-            onboardingManager.familyName = details.familyName  // Store family name
-            onboardingManager.guidedSetupStatus = details.guidedSetupStatus
-            onboardingManager.invitedMemberId = details.memberId
-            onboardingManager.invitedFamilyId = details.familyId
-            
-            // 5. Routing:
-            // - Guided Setup invites: show acceptance prompt first.
-            // - Self Setup invites: proceed through standard onboarding screens.
-            if details.isGuidedSetup {
-                showGuidedAcceptancePrompt = true
-            } else {
-                wearablesIsGuidedSetupInvite = false
-                onboardingManager.setCurrentStep(2) // Wearables
-                navigateToWearables = true
-            }
-            
-        } catch {
-            errorMessage = error.localizedDescription
-            showError = true
-        }
-    }
-
     private func handleAppleSignInForInvite(idToken: String, nonce: String?, fullName: PersonNameComponents?) async {
         guard let details = inviteDetails else { return }
         showError = false
@@ -1324,60 +1180,50 @@ struct GuidedSetupPreviewView: View {
     }
 }
 
-// MARK: - Login View (existing account)
+// MARK: - Login View (existing account — Sign in with Apple)
 struct LoginView: View {
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var onboardingManager: OnboardingManager
     @EnvironmentObject var dataManager: DataManager
     @Environment(\.dismiss) private var dismiss
     
-    @State private var email: String = ""
-    @State private var password: String = ""
     @State private var errorMessage: String = ""
-    @State private var isLoading: Bool = false
     @State private var isAppleSignInLoading: Bool = false
     
     var onSuccess: () -> Void
     
     var body: some View {
         NavigationStack {
-            Form {
-                Section(header: Text("Login")) {
-                    TextField("Email", text: $email)
-                        .keyboardType(.emailAddress)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                    
-                    SecureField("Password", text: $password)
-                }
+            VStack(spacing: 24) {
+                Text("Use Sign in with Apple with the same Apple ID you use for your Miya subscription and App Store purchases.")
+                    .font(.system(size: 15))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 8)
                 
                 if !errorMessage.isEmpty {
                     Text(errorMessage)
                         .foregroundColor(.red)
                         .font(.footnote)
+                        .multilineTextAlignment(.center)
                 }
                 
-                Button {
-                    Task { await login() }
-                } label: {
-                    if isLoading {
-                        ProgressView()
-                    } else {
-                        Text("Sign In")
-                            .frame(maxWidth: .infinity)
-                    }
+                SignInWithAppleButtonView { idToken, nonce, fullName in
+                    await handleAppleSignIn(idToken: idToken, nonce: nonce, fullName: fullName)
                 }
-                .disabled(isLoading || email.isEmpty || password.isEmpty)
+                .frame(maxWidth: .infinity)
+                .frame(height: MiyaTheme.buttonH)
+                .disabled(isAppleSignInLoading)
                 
-                Section {
-                    SignInWithAppleButtonView { idToken, nonce, fullName in
-                        await handleAppleSignIn(idToken: idToken, nonce: nonce, fullName: fullName)
-                    }
-                    .disabled(isAppleSignInLoading || isLoading)
-                } header: {
-                    Text("Or sign in with")
+                if isAppleSignInLoading {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: Color.miyaPrimary))
                 }
+                
+                Spacer(minLength: 0)
             }
+            .padding(.horizontal, MiyaTheme.hPad)
+            .padding(.top, 24)
             .navigationTitle("Sign In")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1413,59 +1259,6 @@ struct LoginView: View {
                 authManager.isLoadingProfile = false
                 onboardingManager.isHydrated = true
                 errorMessage = error.localizedDescription
-            }
-        }
-    }
-    
-    private func login() async {
-        errorMessage = ""
-        isLoading = true
-        do {
-            // 1. Sign in to Supabase
-            try await authManager.signIn(email: email, password: password)
-            print("✅ LoginView: User authenticated")
-            
-            // 2. Restore currentFamilyId from UserDefaults (backup)
-            dataManager.restorePersistedState()
-            
-            #if DEBUG
-            // Ensure real accounts never inherit persisted demo mode.
-            ScreenshotDemoData.syncForAuthenticatedUser(email: email)
-            #endif
-            
-            // 3. Dismiss — set loading gate BEFORE dismiss so SwiftUI never
-            //    re-renders with isAuthenticated=true + isLoadingProfile=false.
-            await MainActor.run {
-                authManager.isLoadingProfile = true
-                onboardingManager.isHydrated = false
-                isLoading = false
-                dismiss()
-                onSuccess()
-            }
-
-            await AuthenticatedLaunchHydration.hydrateAuthenticatedUser(
-                dataManager: dataManager,
-                onboardingManager: onboardingManager
-            )
-
-            #if DEBUG
-            // Demo mode must be explicitly enabled (e.g. Try demo), never inherited by real users.
-            ScreenshotDemoData.syncForAuthenticatedUser(email: email)
-            print("✅ GUIDED_INVITEE_LOGIN: memberId=\(onboardingManager.invitedMemberId ?? "nil") status=\(onboardingManager.guidedSetupStatus?.rawValue ?? "nil") currentStep=\(onboardingManager.currentStep)")
-            #endif
-
-            print("✅ LoginView: Background profile loading complete")
-
-            await MainActor.run {
-                onboardingManager.isHydrated = true
-                authManager.isLoadingProfile = false
-            }
-
-        } catch {
-            await MainActor.run {
-                isLoading = false
-                errorMessage = error.localizedDescription
-                print("❌ LoginView: Login failed - \(error.localizedDescription)")
             }
         }
     }

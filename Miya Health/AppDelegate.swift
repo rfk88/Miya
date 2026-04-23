@@ -113,6 +113,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 NotificationCenter.default.post(
                     name: .miyaPushTapInviteJoined, object: nil
                 )
+            case "open_sidebar_resync":
+                NotificationCenter.default.post(
+                    name: .miyaOpenSidebarForResync, object: nil
+                )
             default:
                 break
             }
@@ -123,4 +127,5 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
 extension Notification.Name {
     static let miyaPushTapInviteJoined = Notification.Name("MiyaPushTapInviteJoined")
+    static let miyaOpenSidebarForResync = Notification.Name("MiyaOpenSidebarForResync")
 }
