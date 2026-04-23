@@ -41,6 +41,11 @@
      - Success metrics and risks
    - **Use this** for project planning and implementation tracking
 
+4. **[WHOOP_ROOK_OPERATOR_SETUP.md](./WHOOP_ROOK_OPERATOR_SETUP.md)**
+   - **Purpose:** Enable WHOOP in ROOK, WHOOP OAuth (BYO credentials), webhook URL, and post-link SQL checks
+   - **Contents:** Official ROOK/WHOOP links, Supabase `rook` function URL, `tools/verify_miya_rook_webhook.sh`, diagnostics SQL
+   - **Use this** when turning on WHOOP for production or debugging authorizer/webhook flow
+
 ---
 
 ## 🎯 Vitality Scoring System

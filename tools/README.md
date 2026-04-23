@@ -14,7 +14,19 @@ Or manually: `cp "Miya Health/Secrets.xcconfig.example" "Miya Health/Secrets.xcc
 
 Then edit `Miya Health/Secrets.xcconfig` and replace placeholders with your ROOK client UUID, ROOK secret key, Supabase URL, and Supabase anon key. Do **not** commit `Secrets.xcconfig` (it is in `.gitignore`).
 
+**Wearable brand logos:** The app references `WearableLogo*` images in `Miya Health/Assets.xcassets`. Replace or refresh those assets using each vendor’s official brand or partner resources and their clear-space and alteration rules; for Apple, follow [App Store marketing guidelines](https://developer.apple.com/app-store/marketing/guidelines/) and applicable Health / Apple Watch artwork rules.
+
 ## Scripts
+
+### `verify_miya_rook_webhook.sh`
+
+Checks that the deployed Supabase Edge Function `rook` answers its public `GET` health probe (used by ROOK webhooks; `verify_jwt` is off for this function).
+
+```bash
+SUPABASE_URL="https://YOUR_PROJECT_REF.supabase.co" ./tools/verify_miya_rook_webhook.sh
+```
+
+WHOOP (and other API sources) setup steps live in [docs/WHOOP_ROOK_OPERATOR_SETUP.md](../docs/WHOOP_ROOK_OPERATOR_SETUP.md).
 
 ### `auto_setup_scoring.ts`
 

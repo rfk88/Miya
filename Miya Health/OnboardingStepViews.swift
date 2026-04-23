@@ -803,8 +803,31 @@ enum WearableType: String, CaseIterable, Identifiable {
     case whoop
     case oura
     case fitbit
+    case garmin
     
     var id: String { rawValue }
+    
+    /// Order on the link screen (API sources first, Apple last).
+    static let linkScreenOrder: [WearableType] = [.whoop, .oura, .fitbit, .garmin, .appleWatch]
+    
+    /// Asset catalog image set name (`WearableLogo*` in Assets.xcassets).
+    var logoAssetName: String {
+        switch self {
+        case .appleWatch: return "WearableLogoApple"
+        case .whoop:      return "WearableLogoWhoop"
+        case .oura:       return "WearableLogoOura"
+        case .fitbit:     return "WearableLogoFitbit"
+        case .garmin:     return "WearableLogoGarmin"
+        }
+    }
+    
+    /// Secondary line under the title (Apple only, for parity with prior copy).
+    var cardSubtitle: String? {
+        switch self {
+        case .appleWatch: return "Connect via Apple Health"
+        default: return nil
+        }
+    }
     
     var displayName: String {
         switch self {
@@ -812,16 +835,18 @@ enum WearableType: String, CaseIterable, Identifiable {
         case .whoop:      return "WHOOP"
         case .oura:       return "Oura Ring"
         case .fitbit:     return "Fitbit"
+        case .garmin:     return "Garmin"
         }
     }
     
-    // Placeholder SF Symbols – later you can replace with real logo assets in Assets.xcassets
+    /// SF Symbol fallback if a catalog logo is missing at runtime.
     var systemImageName: String {
         switch self {
         case .appleWatch: return "applewatch"
         case .whoop:      return "bolt.heart"
         case .oura:       return "moon.stars"
         case .fitbit:     return "figure.walk"
+        case .garmin:     return "figure.run"
         }
     }
     
@@ -833,6 +858,7 @@ enum WearableType: String, CaseIterable, Identifiable {
         case .whoop:      return "whoop"
         case .oura:       return "oura"
         case .fitbit:     return "fitbit"
+        case .garmin:     return "garmin"
         }
     }
     
@@ -858,7 +884,6 @@ struct WearableSelectionView: View {
     
     @State private var selectedWearable: WearableType? = nil
     @State private var isConnecting: Bool = false
-    @State private var connectionProgress: Double = 0.0
     @State private var connectedWearables: Set<WearableType> = []
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
@@ -866,9 +891,14 @@ struct WearableSelectionView: View {
     @State private var authorizationDataSource: String? = nil
     @State private var authorizationDataSourceName: String? = nil
     
-    /// Shown when waiting for wearable connection to be verified (onboarding only). Never advance until connection is confirmed.
+    /// Full-screen loader (Apple Health / Rook SDK path only).
     @State private var isWaitingForConnection: Bool = false
     @State private var connectingWearableName: String? = nil
+    
+    /// After API OAuth sheet closes: poll Rook in the background while staying on the link screen.
+    @State private var isVerifyingAPIConnection: Bool = false
+    /// User tapped Cancel on the OAuth sheet — skip verification polling.
+    @State private var apiOAuthUserCancelled: Bool = false
     
     private let totalSteps: Int = 7
     private let currentStep: Int = 2
@@ -917,53 +947,21 @@ struct WearableSelectionView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, isReconnectMode ? 16 : 0)
                 
-                // Wearable list
+                // Wearable list (single card pattern; Apple uses Rook SDK path only)
                 VStack(alignment: .leading, spacing: 12) {
-                    ForEach(WearableType.allCases.filter { $0 != .appleWatch }) { wearable in
+                    ForEach(WearableType.linkScreenOrder) { wearable in
                         WearableCard(
                             wearable: wearable,
                             isSelected: selectedWearable == wearable,
                             isConnecting: isConnecting && selectedWearable == wearable,
-                            progress: connectionProgress,
                             isConnected: connectedWearables.contains(wearable)
                         ) {
-                            handleConnectTapped(for: wearable)
-                        }
-                    }
-                    
-                    // Apple Watch / Rook Connect button
-                    Button {
-                        presentRookConnect()
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "applewatch")
-                                .font(.system(size: 26))
-                                .frame(width: 36, height: 36)
-                                .foregroundColor(.miyaPrimary)
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Apple Watch")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(.miyaTextPrimary)
-                                
-                                Text("Connect via Apple Health")
-                                    .font(.system(size: 13))
-                                    .foregroundColor(.miyaTextSecondary)
+                            if wearable == .appleWatch {
+                                presentRookConnect()
+                            } else {
+                                handleConnectTapped(for: wearable)
                             }
-                            
-                            Spacer()
-                            
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(.miyaTextSecondary)
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 18)
-                                .fill(Color.white)
-                                .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 3)
-                        )
                     }
                 }
                 
@@ -1044,14 +1042,6 @@ struct WearableSelectionView: View {
                 .padding(.bottom, 16)
             }
             .padding(.horizontal, 24)
-            // Watch the animated progress to mark connection complete
-            .onChange(of: connectionProgress) { newValue in
-                if newValue >= 1.0, isConnecting {
-                    Task {
-                        await completeConnection()
-                    }
-                }
-            }
             }
         }
         .alert("Error", isPresented: $showError) {
@@ -1059,7 +1049,9 @@ struct WearableSelectionView: View {
         } message: {
             Text(errorMessage)
         }
-        .sheet(isPresented: $showAuthorizationView) {
+        .sheet(isPresented: $showAuthorizationView, onDismiss: {
+            handleOAuthSheetDismissed()
+        }) {
             if let dataSource = authorizationDataSource,
                let dataSourceName = authorizationDataSourceName {
                 NavigationStack {
@@ -1073,23 +1065,9 @@ struct WearableSelectionView: View {
                         ToolbarItem(placement: .navigationBarTrailing) {
                             Button("Cancel") {
                                 print("🟡 WearableSelectionView: User cancelled authorization")
+                                apiOAuthUserCancelled = true
                                 showAuthorizationView = false
                             }
-                        }
-                    }
-                }
-                .onDisappear {
-                    print("🟡 WearableSelectionView: Authorization view dismissed")
-                    // When returning from OAuth: show loader and poll until connection is verified (onboarding only)
-                    if !isReconnectMode, authorizationDataSource != nil {
-                        isWaitingForConnection = true
-                        connectingWearableName = authorizationDataSourceName
-                        Task {
-                            await pollUntilAPIConnectionVerified()
-                        }
-                    } else {
-                        Task {
-                            await checkAPIWearableConnectionStatus()
                         }
                     }
                 }
@@ -1128,6 +1106,30 @@ struct WearableSelectionView: View {
         }
     }
     
+    /// Runs when the Rook OAuth sheet is dismissed (any reason). Keeps user on the link screen unless they cancelled.
+    private func handleOAuthSheetDismissed() {
+        print("🟡 WearableSelectionView: OAuth sheet dismissed (cancelled=\(apiOAuthUserCancelled))")
+        if apiOAuthUserCancelled {
+            apiOAuthUserCancelled = false
+            Task { @MainActor in
+                isConnecting = false
+                isVerifyingAPIConnection = false
+                await checkAPIWearableConnectionStatus()
+            }
+            return
+        }
+        guard authorizationDataSource != nil else {
+            Task { await checkAPIWearableConnectionStatus() }
+            return
+        }
+        // Stay on link screen: card shows Connecting… while we verify in the background (no full-screen takeover).
+        isVerifyingAPIConnection = true
+        isConnecting = true
+        Task {
+            await pollUntilAPIConnectionVerified()
+        }
+    }
+    
     private func handleConnectTapped(for wearable: WearableType) {
         print("🟢 WearableSelectionView: handleConnectTapped for \(wearable.displayName)")
         
@@ -1153,6 +1155,7 @@ struct WearableSelectionView: View {
                 guard let userId = await authManager.getCurrentUserId() else {
                     print("❌ WearableSelectionView: No user ID available")
                     await MainActor.run {
+                        isConnecting = false
                         errorMessage = "Please sign in first to connect your wearable."
                         showError = true
                     }
@@ -1164,6 +1167,7 @@ struct WearableSelectionView: View {
                 guard let dataSourceId = wearable.rookDataSourceId else {
                     print("❌ WearableSelectionView: No Rook data source ID for \(wearable.displayName)")
                     await MainActor.run {
+                        isConnecting = false
                         errorMessage = "Invalid data source"
                         showError = true
                     }
@@ -1172,8 +1176,10 @@ struct WearableSelectionView: View {
                 
                 print("🟢 WearableSelectionView: Setting authorization view for \(dataSourceId)")
                 await MainActor.run {
+                    apiOAuthUserCancelled = false
                     authorizationDataSource = dataSourceId
                     authorizationDataSourceName = wearable.displayName
+                    isConnecting = true
                     showAuthorizationView = true
                     print("✅ WearableSelectionView: showAuthorizationView = true")
                 }
@@ -1184,28 +1190,6 @@ struct WearableSelectionView: View {
             print("ℹ️ WearableSelectionView: \(wearable.displayName) is SDK-based, directing to Rook Connect button")
             errorMessage = "Please use the 'Connect with Rook' button below to connect Apple Health."
             showError = true
-        }
-    }
-    
-    private func completeConnection() async {
-        guard let selected = selectedWearable else { return }
-        
-        // This function is only called for the mock animation flow
-        // API-based sources handle connection completion in checkAPIWearableConnectionStatus
-        isConnecting = false
-        connectedWearables.insert(selected)
-        
-        // Save to OnboardingManager
-        onboardingManager.connectedWearables.append(selected.rawValue)
-        
-        // Save to database
-        do {
-            try await dataManager.saveWearable(wearableType: selected.rawValue)
-        } catch {
-            errorMessage = error.localizedDescription
-            showError = true
-            // Remove from connected set if save failed
-            connectedWearables.remove(selected)
         }
     }
     
@@ -1278,13 +1262,7 @@ struct WearableSelectionView: View {
                             "userId": userId
                         ]
                     )
-                    // Onboarding: only advance when we have verified this wearable and we were waiting for it
-                    if !isReconnectMode, isWaitingForConnection, wearable.rookDataSourceId == authorizationDataSource {
-                        await MainActor.run {
-                            isWaitingForConnection = false
-                            advanceOnboardingAfterWearableConnection()
-                        }
-                    }
+                    // Stay on link screen: user taps Continue when ready (no auto-advance from API verify).
                 }
             } catch {
                 print("⚠️ WearableSelectionView: Error checking status for \(wearable.displayName): \(error.localizedDescription)")
@@ -1298,13 +1276,26 @@ struct WearableSelectionView: View {
         let delaySeconds: UInt64 = 3_000_000_000 // 3 seconds
         for _ in 0..<maxAttempts {
             await checkAPIWearableConnectionStatus()
-            let stillWaiting = await MainActor.run { isWaitingForConnection }
-            if !stillWaiting { return }
+            let done = await MainActor.run { () -> Bool in
+                if !isVerifyingAPIConnection { return true }
+                guard let ds = authorizationDataSource,
+                      let wearable = WearableType.allCases.first(where: { $0.rookDataSourceId == ds }) else {
+                    return true
+                }
+                if connectedWearables.contains(wearable) {
+                    isVerifyingAPIConnection = false
+                    isConnecting = false
+                    return true
+                }
+                return false
+            }
+            if done { return }
             try? await Task.sleep(nanoseconds: delaySeconds)
         }
         await MainActor.run {
-            if isWaitingForConnection {
-                isWaitingForConnection = false
+            if isVerifyingAPIConnection {
+                isVerifyingAPIConnection = false
+                isConnecting = false
                 errorMessage = "Connection didn’t complete. Please try again."
                 showError = true
             }
@@ -1344,7 +1335,7 @@ struct WearableSelectionView: View {
                 // 3. Request Apple Health permissions
                 DispatchQueue.main.async {
                     let permissionsManager = RookConnectPermissionsManager()
-                    print("🟢 RookConnect: Requesting Apple Health permissions (sandbox)")
+                    print("🟢 RookConnect: Requesting Apple Health permissions (production)")
                     // Onboarding: show loader so when user returns from permission sheet we show "Connecting..." until save completes
                     if !self.isReconnectMode {
                         self.isWaitingForConnection = true
@@ -1438,27 +1429,46 @@ struct WearableSelectionView: View {
     }
 }
 
+/// On-brand indeterminate “connecting” motion (card row + Apple full-screen loader).
+private struct MiyaConnectingGlyph: View {
+    var diameter: CGFloat = 28
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    
+    var body: some View {
+        Group {
+            if reduceMotion {
+                ProgressView()
+                    .tint(Color.miyaPrimary)
+                    .frame(width: diameter, height: diameter)
+            } else {
+                TimelineView(.periodic(from: .now, by: 0.032)) { context in
+                    let seconds = context.date.timeIntervalSinceReferenceDate
+                    let angle = (seconds * 220).truncatingRemainder(dividingBy: 360)
+                    ZStack {
+                        ForEach(0..<3, id: \.self) { i in
+                            Circle()
+                                .fill(Color.miyaPrimary.opacity(0.92 - Double(i) * 0.24))
+                                .frame(width: max(4, diameter * 0.19), height: max(4, diameter * 0.19))
+                                .offset(y: -(diameter * 0.38))
+                                .rotationEffect(.degrees(Double(i) * 120 + angle))
+                        }
+                    }
+                    .frame(width: diameter, height: diameter)
+                }
+            }
+        }
+    }
+}
+
 /// Full-screen animated view shown while waiting for wearable connection to be verified during onboarding.
 private struct ConnectingWearableView: View {
     let wearableName: String
-    @State private var isAnimating = false
     
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
-            ZStack {
-                // Pulsing ring
-                Circle()
-                    .stroke(Color.miyaPrimary.opacity(0.2), lineWidth: 4)
-                    .frame(width: 80, height: 80)
-                Circle()
-                    .trim(from: 0, to: 0.7)
-                    .stroke(Color.miyaPrimary, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                    .frame(width: 80, height: 80)
-                    .rotationEffect(.degrees(isAnimating ? 360 : 0))
-                    .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: isAnimating)
-            }
-            .frame(height: 100)
+            MiyaConnectingGlyph(diameter: 80)
+                .frame(height: 100)
             VStack(spacing: 8) {
                 Text("Connecting your \(wearableName)")
                     .font(.system(size: 20, weight: .semibold))
@@ -1472,7 +1482,30 @@ private struct ConnectingWearableView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { isAnimating = true }
+    }
+}
+
+/// Fixed-size catalog logo with SF Symbol fallback when the asset is absent.
+private struct WearableBrandLogoView: View {
+    let wearable: WearableType
+    
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.miyaBackground.opacity(0.45))
+            if UIImage(named: wearable.logoAssetName) != nil {
+                Image(wearable.logoAssetName)
+                    .resizable()
+                    .renderingMode(.original)
+                    .scaledToFit()
+                    .padding(5)
+            } else {
+                Image(systemName: wearable.systemImageName)
+                    .font(.system(size: 22))
+                    .foregroundColor(.miyaPrimary)
+            }
+        }
+        .frame(width: 40, height: 40)
     }
 }
 
@@ -1480,21 +1513,24 @@ struct WearableCard: View {
     let wearable: WearableType
     let isSelected: Bool
     let isConnecting: Bool
-    let progress: Double
     let isConnected: Bool
     let onConnectTapped: () -> Void
     
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                Image(systemName: wearable.systemImageName)
-                    .font(.system(size: 26))
-                    .frame(width: 36, height: 36)
-                    .foregroundColor(.miyaPrimary)
+            HStack(alignment: .center, spacing: 12) {
+                WearableBrandLogoView(wearable: wearable)
                 
-                Text(wearable.displayName)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.miyaTextPrimary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(wearable.displayName)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.miyaTextPrimary)
+                    if let subtitle = wearable.cardSubtitle {
+                        Text(subtitle)
+                            .font(.system(size: 13))
+                            .foregroundColor(.miyaTextSecondary)
+                    }
+                }
                 
                 Spacer()
             }
@@ -1514,8 +1550,7 @@ struct WearableCard: View {
                     .cornerRadius(999)
                 } else if isConnecting {
                     HStack(spacing: 10) {
-                        CircularProgressView(progress: progress)
-                            .frame(width: 24, height: 24)
+                        MiyaConnectingGlyph(diameter: 26)
                         Text("Connecting…")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(.miyaTextPrimary)
@@ -1557,21 +1592,6 @@ struct WearableCard: View {
     }
 }
 
-// Simple circular progress (0–1)
-struct CircularProgressView: View {
-    let progress: Double   // 0.0 to 1.0
-    
-    var body: some View {
-        ZStack {
-            Circle()
-                .stroke(Color.miyaBackground, lineWidth: 3)
-            Circle()
-                .trim(from: 0, to: progress)
-                .stroke(Color.miyaPrimary, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-        }
-    }
-}
 // MARK: - STEP 4: ABOUT YOU
 
 enum Gender: String, CaseIterable, Identifiable {

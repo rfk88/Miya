@@ -13,7 +13,7 @@ final class RookService {
     }
 
     private func configure() {
-        RookConnectConfigurationManager.shared.setEnvironment(.sandbox)
+        RookConnectConfigurationManager.shared.setEnvironment(.production)
         RookConnectConfigurationManager.shared.setConfiguration(
             clientUUID: RookConfig.clientUUID,
             secretKey: RookConfig.secretKey,
@@ -22,7 +22,7 @@ final class RookService {
         )
 
         RookConnectConfigurationManager.shared.initRook()
-        print("✅ RookService: Rook SDK initialized (sandbox)")
+        print("✅ RookService: Rook SDK initialized (production)")
 
         #if DEBUG
         // Helpful when diagnosing whether uploads are occurring.

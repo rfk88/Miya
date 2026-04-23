@@ -596,7 +596,7 @@ class DataManager: ObservableObject {
         
         do {
             // Validate wearable type matches database constraint
-            guard ["appleWatch", "whoop", "oura", "fitbit"].contains(wearableType) else {
+            guard ["appleWatch", "whoop", "oura", "fitbit", "garmin"].contains(wearableType) else {
                 throw DataError.invalidData("Invalid wearable type")
             }
             
