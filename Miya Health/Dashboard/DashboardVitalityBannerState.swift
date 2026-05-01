@@ -41,6 +41,10 @@ struct DashboardVitalityBannerEvaluator {
     /// True when the very first baseline has been marked complete in UserDefaults.
     /// Used to gate Banner A so it never appears again after the first successful ingest.
     let initialBaselineEverCompleted: Bool
+    /// True after `checkAndUpdateCurrentUserVitality()` has finished its first run this session
+    /// (whether or not a snapshot was produced). Until then, show Banner A immediately instead
+    /// of flashing Banner B before syncing flags are set.
+    let hasCompletedFirstBaselineAttempt: Bool
 
     // MARK: Derived properties
 
@@ -60,8 +64,9 @@ struct DashboardVitalityBannerEvaluator {
     var isInInitialIngestPhase: Bool {
         guard currentUserId != nil else { return false }
         guard !initialBaselineComplete else { return false }
-        // Still in ingest phase if syncing OR data is partially there but not yet a snapshot.
-        return isWearableSyncing || isDataInsufficient
+        // Active pipeline, partial rows without snapshot, OR still waiting for the first baseline
+        // attempt this session — so "please wait" shows on first dashboard paint, not resync.
+        return isWearableSyncing || isDataInsufficient || !hasCompletedFirstBaselineAttempt
     }
 
     // MARK: Output

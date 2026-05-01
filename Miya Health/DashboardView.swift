@@ -127,6 +127,10 @@ struct DashboardView: View {
     /// Loaded from VitalityBannerStorage on appear; drives Banner A gating.
     @State internal var initialBaselineEverCompleted: Bool = false
 
+    /// Session flag: first `checkAndUpdateCurrentUserVitality()` run finished. Until then, Banner A
+    /// shows immediately for users without vitality (avoids a false "resync" flash on load).
+    @State internal var hasCompletedFirstBaselineAttempt: Bool = false
+
     /// Evaluated banner for the current user. Recomputed whenever relevant state changes.
     internal var vitalityBanner: PrimaryVitalityBanner {
         DashboardVitalityBannerEvaluator(
@@ -134,7 +138,8 @@ struct DashboardView: View {
             me: familyMembers.first(where: { $0.isMe }),
             isWearableSyncing: isWearableSyncing,
             isDataInsufficient: isDataInsufficient,
-            initialBaselineEverCompleted: initialBaselineEverCompleted
+            initialBaselineEverCompleted: initialBaselineEverCompleted,
+            hasCompletedFirstBaselineAttempt: hasCompletedFirstBaselineAttempt
         ).banner
     }
     
@@ -275,9 +280,11 @@ struct DashboardView: View {
                     showSidebar = true
                 }
             }
-            // User switch: re-evaluate vitality banner persistence / notifications.
+            // User switch: reset first-baseline session flag, re-evaluate banners, refresh orientation eligibility.
             .onChange(of: currentUserIdString) { _, _ in
+                hasCompletedFirstBaselineAttempt = false
                 evaluateVitalityBannerState()
+                scheduleDashboardOrientationIfNeeded()
             }
     }
 
@@ -302,9 +309,6 @@ struct DashboardView: View {
             }
             .onChange(of: onboardingManager.isOnboardingComplete) { _, isComplete in
                 guard isComplete else { return }
-                scheduleDashboardOrientationIfNeeded()
-            }
-            .onChange(of: currentUserIdString) { _, _ in
                 scheduleDashboardOrientationIfNeeded()
             }
             .onChange(of: dataManager.isAIThirdPartyConsentLoaded) { _, _ in

@@ -1423,6 +1423,7 @@ extension DashboardView {
             Task { @MainActor in
                 isCheckingVitality = false
                 lastVitalityCheck = Date()
+                hasCompletedFirstBaselineAttempt = true
             }
         }
         

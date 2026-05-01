@@ -277,7 +277,8 @@ extension DashboardView {
             me: me,
             isWearableSyncing: isWearableSyncing,
             isDataInsufficient: isDataInsufficient,
-            initialBaselineEverCompleted: initialBaselineEverCompleted
+            initialBaselineEverCompleted: initialBaselineEverCompleted,
+            hasCompletedFirstBaselineAttempt: hasCompletedFirstBaselineAttempt
         )
         if evaluator.banner == .resync {
             Task {

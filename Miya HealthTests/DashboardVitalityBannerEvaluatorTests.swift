@@ -36,7 +36,8 @@ final class DashboardVitalityBannerEvaluatorTests: XCTestCase {
             me: makeMe(hasScore: false),
             isWearableSyncing: true,
             isDataInsufficient: true,
-            initialBaselineEverCompleted: false
+            initialBaselineEverCompleted: false,
+            hasCompletedFirstBaselineAttempt: false
         )
         XCTAssertEqual(e.banner, .none)
     }
@@ -49,7 +50,8 @@ final class DashboardVitalityBannerEvaluatorTests: XCTestCase {
             me: makeMe(hasScore: false),
             isWearableSyncing: true,
             isDataInsufficient: false,
-            initialBaselineEverCompleted: false
+            initialBaselineEverCompleted: false,
+            hasCompletedFirstBaselineAttempt: false
         )
         XCTAssertEqual(e.banner, .initialIngest)
     }
@@ -60,7 +62,21 @@ final class DashboardVitalityBannerEvaluatorTests: XCTestCase {
             me: makeMe(hasScore: false),
             isWearableSyncing: false,
             isDataInsufficient: true,
-            initialBaselineEverCompleted: false
+            initialBaselineEverCompleted: false,
+            hasCompletedFirstBaselineAttempt: false
+        )
+        XCTAssertEqual(e.banner, .initialIngest)
+    }
+
+    /// First dashboard paint: no sync flags yet — still show "please wait" (Banner A), not resync.
+    func test_banner_initialIngest_whenFirstBaselineAttemptNotYetRun_evenIfIdle() {
+        let e = DashboardVitalityBannerEvaluator(
+            currentUserId: uid,
+            me: makeMe(hasScore: false),
+            isWearableSyncing: false,
+            isDataInsufficient: false,
+            initialBaselineEverCompleted: false,
+            hasCompletedFirstBaselineAttempt: false
         )
         XCTAssertEqual(e.banner, .initialIngest)
     }
@@ -71,7 +87,8 @@ final class DashboardVitalityBannerEvaluatorTests: XCTestCase {
             me: makeMe(hasScore: false),
             isWearableSyncing: true,
             isDataInsufficient: true,
-            initialBaselineEverCompleted: false
+            initialBaselineEverCompleted: false,
+            hasCompletedFirstBaselineAttempt: false
         )
         XCTAssertEqual(e.banner, .initialIngest)
     }
@@ -82,7 +99,8 @@ final class DashboardVitalityBannerEvaluatorTests: XCTestCase {
             me: makeMe(hasScore: true),
             isWearableSyncing: false,
             isDataInsufficient: false,
-            initialBaselineEverCompleted: false
+            initialBaselineEverCompleted: false,
+            hasCompletedFirstBaselineAttempt: false
         )
         XCTAssertEqual(e.banner, .none)
         XCTAssertTrue(e.initialBaselineComplete)
@@ -95,7 +113,8 @@ final class DashboardVitalityBannerEvaluatorTests: XCTestCase {
             me: nil,
             isWearableSyncing: false,
             isDataInsufficient: false,
-            initialBaselineEverCompleted: true
+            initialBaselineEverCompleted: true,
+            hasCompletedFirstBaselineAttempt: false
         )
         XCTAssertEqual(e.banner, .none)
     }
@@ -108,21 +127,36 @@ final class DashboardVitalityBannerEvaluatorTests: XCTestCase {
             me: makeMe(hasScore: false),
             isWearableSyncing: false,
             isDataInsufficient: false,
-            initialBaselineEverCompleted: true
+            initialBaselineEverCompleted: true,
+            hasCompletedFirstBaselineAttempt: true
         )
         XCTAssertEqual(e.banner, .resync)
     }
 
-    /// No `me` row yet and persistence says user never finished baseline — treat as missing vitality resync.
-    func test_banner_resync_whenMeNil_andBaselineNeverPersisted() {
+    /// No `me` row yet; first baseline attempt finished — missing vitality resync.
+    func test_banner_resync_whenMeNil_andFirstAttemptFinished() {
         let e = DashboardVitalityBannerEvaluator(
             currentUserId: uid,
             me: nil,
             isWearableSyncing: false,
             isDataInsufficient: false,
-            initialBaselineEverCompleted: false
+            initialBaselineEverCompleted: false,
+            hasCompletedFirstBaselineAttempt: true
         )
         XCTAssertEqual(e.banner, .resync)
+    }
+
+    /// No `me` row yet; still waiting on first baseline attempt — stay on Banner A.
+    func test_banner_initialIngest_whenMeNil_andFirstAttemptNotFinished() {
+        let e = DashboardVitalityBannerEvaluator(
+            currentUserId: uid,
+            me: nil,
+            isWearableSyncing: false,
+            isDataInsufficient: false,
+            initialBaselineEverCompleted: false,
+            hasCompletedFirstBaselineAttempt: false
+        )
+        XCTAssertEqual(e.banner, .initialIngest)
     }
 
     // MARK: - Derived flags
@@ -134,7 +168,8 @@ final class DashboardVitalityBannerEvaluatorTests: XCTestCase {
                 me: makeMe(hasScore: false),
                 isWearableSyncing: false,
                 isDataInsufficient: false,
-                initialBaselineEverCompleted: true
+                initialBaselineEverCompleted: true,
+                hasCompletedFirstBaselineAttempt: true
             ).currentUserHasVitality
         )
         XCTAssertTrue(
@@ -143,7 +178,8 @@ final class DashboardVitalityBannerEvaluatorTests: XCTestCase {
                 me: makeMe(hasScore: true),
                 isWearableSyncing: false,
                 isDataInsufficient: false,
-                initialBaselineEverCompleted: false
+                initialBaselineEverCompleted: false,
+                hasCompletedFirstBaselineAttempt: false
             ).currentUserHasVitality
         )
     }
@@ -154,7 +190,8 @@ final class DashboardVitalityBannerEvaluatorTests: XCTestCase {
             me: makeMe(hasScore: false),
             isWearableSyncing: true,
             isDataInsufficient: true,
-            initialBaselineEverCompleted: true
+            initialBaselineEverCompleted: true,
+            hasCompletedFirstBaselineAttempt: false
         )
         XCTAssertFalse(e.isInInitialIngestPhase)
         XCTAssertEqual(e.banner, .resync)
