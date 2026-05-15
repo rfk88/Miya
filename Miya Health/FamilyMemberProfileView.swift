@@ -1,5 +1,6 @@
 import SwiftUI
 import Supabase
+import Auth
 import Charts
 
 /// Loaded from `user_profiles` alongside header vitality; pillar integers match dashboard / scoring.
@@ -866,9 +867,12 @@ private extension FamilyMemberProfileView {
     func alertSummary(metric: String, deviation: Double?, baseline: Double?, recent: Double?) -> String {
         let name = displayNameForMetricType(metric)
         guard let deviation = deviation, let baseline = baseline, let recent = recent else {
-            return "\(name) alert"
+            return isViewingOwnProfile ? "Your \(name.lowercased()) alert" : "\(name) alert"
         }
-        let percent = Int((deviation) * 100)
+        let percent = Int(abs(deviation) * 100)
+        if isViewingOwnProfile {
+            return "Your \(name.lowercased()) changed \(percent)% (recent \(formatNumber(recent)) vs your baseline \(formatNumber(baseline)))"
+        }
         return "\(name) changed \(percent)% (current \(formatNumber(recent)) vs baseline \(formatNumber(baseline)))"
     }
     

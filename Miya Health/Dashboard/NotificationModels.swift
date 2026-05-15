@@ -137,19 +137,28 @@ struct FamilyNotificationItem: Identifiable {
     }
     
     /// Single-line display for cards: "Pillar is X% below/above Name's baseline (3d)" when body has that pattern, else title.
-    var displayLine: String {
+    func displayLine(currentUserId: String? = nil) -> String {
+        let raw: String
         switch kind {
-        case .fallback(_, _, _, _, let title, _):
-            return title
+        case .fallback(_, _, let userId, _, let title, let body):
+            raw = title
+            if MemberProfileOwnVoice.isCurrentUser(memberUserId: userId, authUserId: currentUserId) {
+                return MemberProfileOwnVoice.rewriteMemberFacingCopy(memberName: memberName, text: body.isEmpty ? title : body)
+            }
+            return raw
         case .trend(let insight):
             let b = insight.body
             let hasIs = b.contains(" is ")
             let hasBelow = b.contains(" below ")
             let hasAbove = b.contains(" above ")
-            let hasBaseline = b.contains("'s baseline")
+            let hasBaseline = b.contains("'s baseline") || b.contains(" your baseline")
             guard hasIs, (hasBelow || hasAbove), hasBaseline,
                   let isRange = b.range(of: " is ") else {
-                return insight.title
+                raw = insight.title
+                if MemberProfileOwnVoice.isCurrentUser(memberUserId: memberUserId, authUserId: currentUserId) {
+                    return MemberProfileOwnVoice.rewriteMemberFacingCopy(memberName: memberName, text: raw)
+                }
+                return raw
             }
             // Stat part: substring after " is ", strip " (last …)" and trim
             var statPart = String(b[isRange.upperBound...])
@@ -171,7 +180,11 @@ struct FamilyNotificationItem: Identifiable {
                     triggerSuffix = "\n(\(token))"
                 }
             }
-            return "\(metric) is \(statPart)\(triggerSuffix)"
+            raw = "\(metric) is \(statPart)\(triggerSuffix)"
+            if MemberProfileOwnVoice.isCurrentUser(memberUserId: memberUserId, authUserId: currentUserId) {
+                return MemberProfileOwnVoice.rewriteMemberFacingCopy(memberName: memberName, text: raw)
+            }
+            return raw
         }
     }
     

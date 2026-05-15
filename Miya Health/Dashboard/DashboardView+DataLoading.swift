@@ -77,14 +77,20 @@ extension DashboardView {
         // BUG-024: Clear any previous save error when starting a new run (pull-to-refresh or retry).
         await MainActor.run { badgeSaveError = nil }
 
-        guard let familyId = dataManager.currentFamilyId else { return }
-        
+        guard let familyId = dataManager.currentFamilyId else {
+            await MainActor.run { championsData = nil }
+            return
+        }
+
         // Build member list (exclude pending and missing user ids)
         let members: [BadgeEngine.Member] = familyMembers.compactMap { m in
             guard !m.isPending, let uid = m.userId else { return nil }
             return BadgeEngine.Member(userId: uid, name: m.name)
         }
-        guard !members.isEmpty else { return }
+        guard !members.isEmpty else {
+            await MainActor.run { championsData = nil }
+            return
+        }
         
         let today = Date()
         let todayKey = utcDayKey(for: today)
@@ -284,12 +290,63 @@ extension DashboardView {
             "todayRows_count": todayRows.count
         ])
         // #endregion
+        let fmForChampions = await MainActor.run { familyMembers }
+        var championsBuilt = ChampionsSnapshotBuilder.build(
+            familyMembers: fmForChampions,
+            thisWeekRows: thisWeekRows,
+            prevWeekRows: prevWeekRows,
+            validMapped: validMapped,
+            weekStartKey: weekStartKey,
+            weekEndKey: weekEndKey
+        )
+        if let built = championsBuilt, built.categories.isEmpty {
+            championsBuilt = ChampionsSnapshotBuilder.buildFallbackFromWeeklyWinners(
+                familyMembers: fmForChampions,
+                weeklyWinners: weeklyWinners,
+                weekStartKey: weekStartKey,
+                weekEndKey: weekEndKey
+            )
+        } else if championsBuilt == nil,
+                  fmForChampions.filter({ !$0.isPending && $0.userId != nil }).count >= 2,
+                  !weeklyWinners.isEmpty {
+            championsBuilt = ChampionsSnapshotBuilder.buildFallbackFromWeeklyWinners(
+                familyMembers: fmForChampions,
+                weeklyWinners: weeklyWinners,
+                weekStartKey: weekStartKey,
+                weekEndKey: weekEndKey
+            )
+        }
+        let championsMoment: ChampionsChangeMoment? = await MainActor.run {
+            guard let championsBuilt else { return nil }
+            return ChampionsChangeMomentStore.consumeMomentIfNeeded(
+                current: championsBuilt,
+                currentUserId: currentUserIdString,
+                vitalityFactors: vitalityFactors
+            )
+        }
+
         // Atomic update: apply all badge state and clear computing flag in one MainActor block
         await MainActor.run {
             weeklyBadgeWeekStart = weekStartKey
             weeklyBadgeWeekEnd = weekEndKey
             dailyBadgeWinners = dailyWinners
             weeklyBadgeWinners = weeklyWinners
+            championsData = championsBuilt
+            if championsBuilt == nil {
+                isChampionsSheetOpen = false
+            }
+            if let championsMoment {
+                let mid = championsMoment.id
+                let t = championsMoment.title
+                let msg = championsMoment.message
+                Task {
+                    await DashboardChampionsLocalNotifications.schedule(
+                        momentId: mid,
+                        title: t,
+                        body: msg
+                    )
+                }
+            }
             isComputingBadges = false
         }
     }
@@ -309,6 +366,54 @@ extension DashboardView {
         } else {
             resolvedFamilyName = familyName
         }
+    }
+
+    @MainActor
+    private func markDashboardRefreshCompleted() {
+        let completedAt = Date()
+        lastDashboardRefreshDate = completedAt
+        DashboardRefreshPersistence.markCompleted(at: completedAt)
+    }
+
+    internal func runDashboardBackgroundRefresh() async {
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled { return }
+        #endif
+        await dataManager.refreshAIThirdPartyConsentFromServer()
+        async let fourWeek = loadFamilyVitalityFourWeekTrend()
+        async let snapRpc = refreshFamilyVitalitySnapshotsIfPossible()
+        await fourWeek
+        await snapRpc
+        if shouldCheckVitality() {
+            await checkAndUpdateCurrentUserVitality()
+        }
+        await computeAndStoreFamilySnapshot()
+        await computeTrendInsights()
+        await computeFamilyBadgesIfNeeded()
+        await MainActor.run {
+            evaluateLegacyAITransparencyIfNeeded()
+        }
+    }
+
+    /// After Rook/API reports a wearable connected, re-hydrate server state and vitality in the background.
+    internal func handleWearableConnectedNotification() async {
+        #if DEBUG
+        if ScreenshotDemoData.isScreenshotModeEnabled { return }
+        #endif
+        async let wearables: Void = {
+            if let types = try? await dataManager.fetchConnectedWearableTypesForCurrentUser() {
+                await MainActor.run { onboardingManager.connectedWearables = types }
+            }
+        }()
+        async let snapRpc = refreshFamilyVitalitySnapshotsIfPossible()
+        await wearables
+        await snapRpc
+        if shouldCheckVitality() {
+            await checkAndUpdateCurrentUserVitality()
+        }
+        await loadFamilyMembers()
+        await loadFamilyVitality()
+        await computeAndStoreFamilySnapshot()
     }
     
     /// Consolidated dashboard initialization logic (extracted from .task for compiler performance)
@@ -336,7 +441,7 @@ extension DashboardView {
         defer {
             Task { @MainActor in
                 isRefreshingDashboard = false
-                lastDashboardRefreshDate = Date()
+                markDashboardRefreshCompleted()
             }
         }
 
@@ -348,6 +453,13 @@ extension DashboardView {
             loadDismissedGuidedMembers(for: uid)
             // Hydrate persisted vitality banner flag so Banner A/B are correct immediately.
             initialBaselineEverCompleted = VitalityBannerStorage.hasCompletedInitialBaseline(userId: uid)
+        }
+        Task(priority: .utility) { await loadBellNotifications() }
+        if (!familyMembers.isEmpty || familyVitalityScore != nil),
+           !DashboardRefreshPersistence.isStale(threshold: 5 * 60) {
+            lastDashboardRefreshDate = DashboardRefreshPersistence.lastCompletedAt
+            Task(priority: .utility) { await dataManager.refreshAIThirdPartyConsentFromServer() }
+            return
         }
         #if DEBUG
         if ScreenshotDemoData.isScreenshotModeEnabled {
@@ -388,10 +500,7 @@ extension DashboardView {
             await loadFamilyVitality()
             WeeklyVitalityScheduler.shared.markRefreshed()
         }
-        await checkAndUpdateCurrentUserVitality()
-        await computeAndStoreFamilySnapshot()
-        await computeTrendInsights()
-        await computeFamilyBadgesIfNeeded()
+        Task(priority: .utility) { await runDashboardBackgroundRefresh() }
         // #region agent log
         dbgLog("onDashboardAppear END", hyp: "H1", runId: "initial", data: [
             "familyMembers_count_after": familyMembers.count,
@@ -403,19 +512,16 @@ extension DashboardView {
         // #endregion
         print("DashboardView .task finished, familyVitalityScore=\(String(describing: familyVitalityScore))")
 
-        await dataManager.refreshAIThirdPartyConsentFromServer()
-        await MainActor.run {
-            evaluateLegacyAITransparencyIfNeeded()
-        }
-
         if serverPatternAlerts.isEmpty && trendInsights.isEmpty && !familyMembers.isEmpty {
             print("⚠️ Dashboard: Empty notifications on initial load — retrying member+trend pipeline after delay")
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            await loadFamilyMembers()
-            await loadServerPatternAlerts()
-            await computeAndStoreFamilySnapshot()
-            await computeTrendInsights()
-            print("🔁 Dashboard: Retry complete — serverAlerts=\(serverPatternAlerts.count) trendInsights=\(trendInsights.count)")
+            Task(priority: .utility) {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                await loadFamilyMembers()
+                await loadServerPatternAlerts()
+                await computeAndStoreFamilySnapshot()
+                await computeTrendInsights()
+                print("🔁 Dashboard: Retry complete — serverAlerts=\(serverPatternAlerts.count) trendInsights=\(trendInsights.count)")
+            }
         }
     }
     
@@ -440,10 +546,18 @@ extension DashboardView {
         defer {
             Task { @MainActor in
                 isRefreshingDashboard = false
-                lastDashboardRefreshDate = Date()
+                isSoftRefreshingDashboard = false
+                markDashboardRefreshCompleted()
             }
         }
         print("🔄 Dashboard: soft refresh (foreground resume)")
+        await MainActor.run {
+            if !familyMembers.isEmpty || familyVitalityScore != nil || !serverPatternAlerts.isEmpty {
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    isSoftRefreshingDashboard = true
+                }
+            }
+        }
         await loadFamilyMembers()
         await loadServerPatternAlerts()
         await loadFamilyVitality()
@@ -464,7 +578,7 @@ extension DashboardView {
         defer {
             Task { @MainActor in
                 isRefreshingDashboard = false
-                lastDashboardRefreshDate = Date()
+                markDashboardRefreshCompleted()
             }
         }
         #if DEBUG
@@ -491,6 +605,7 @@ extension DashboardView {
         await loadFamilyMembers()
         await loadServerPatternAlerts()
         await loadFamilyVitality()
+        Task { await loadFamilyVitalityFourWeekTrend() }
         if WeeklyVitalityScheduler.shared.shouldRefreshFamilyVitality() {
             await refreshFamilyVitalitySnapshotsIfPossible()
             await loadFamilyVitality()
@@ -605,54 +720,53 @@ extension DashboardView {
                 } else {
                     print("🔍 Dashboard: Fetching user_profiles for \(userIds.count) user_ids: \(userIds.prefix(3).joined(separator: ", "))...")
                     
-                    // Query each user individually and combine (most reliable approach)
-                    // This avoids .or()/.in() syntax issues with Supabase Swift client
                     var allProfiles: [VitalityProfileRow] = []
-                    for userId in userIds {
-                        try Task.checkCancellation()
-                        do {
-                            // Try with new progress_score column first (if migration has run)
-                            let userProfiles: [VitalityProfileRow] = try await supabase
+                    do {
+                        allProfiles = try await supabase
+                            .from("user_profiles")
+                            .select("user_id, vitality_score_current, vitality_score_updated_at, optimal_vitality_target, vitality_progress_score_current, vitality_sleep_pillar_score, vitality_movement_pillar_score, vitality_stress_pillar_score")
+                            .in("user_id", values: userIds)
+                            .execute()
+                            .value
+                    } catch {
+                        if isCancellation(error) { throw error }
+                        let errorStr = error.localizedDescription.lowercased()
+                        if errorStr.contains("vitality_progress_score_current") || errorStr.contains("does not exist") {
+                            let legacyProfiles: [VitalityProfileRowLegacy] = try await supabase
                                 .from("user_profiles")
-                                .select("user_id, vitality_score_current, vitality_score_updated_at, optimal_vitality_target, vitality_progress_score_current, vitality_sleep_pillar_score, vitality_movement_pillar_score, vitality_stress_pillar_score")
-                                .eq("user_id", value: userId)
-                                .limit(1)
+                                .select("user_id, vitality_score_current, vitality_score_updated_at, optimal_vitality_target, vitality_sleep_pillar_score, vitality_movement_pillar_score, vitality_stress_pillar_score")
+                                .in("user_id", values: userIds)
                                 .execute()
                                 .value
-                            allProfiles.append(contentsOf: userProfiles)
-                        } catch {
-                            // Propagate cancellation so the outer catch can bail cleanly.
-                            if isCancellation(error) { throw error }
-                            // Fallback: if new column doesn't exist (migration not run), try without it
-                            let errorStr = error.localizedDescription.lowercased()
-                            if errorStr.contains("vitality_progress_score_current") || errorStr.contains("does not exist") {
+                            allProfiles = legacyProfiles.map { p in
+                                VitalityProfileRow(
+                                    user_id: p.user_id,
+                                    vitality_score_current: p.vitality_score_current,
+                                    vitality_score_updated_at: p.vitality_score_updated_at,
+                                    optimal_vitality_target: p.optimal_vitality_target,
+                                    vitality_progress_score_current: nil,
+                                    vitality_sleep_pillar_score: p.vitality_sleep_pillar_score,
+                                    vitality_movement_pillar_score: p.vitality_movement_pillar_score,
+                                    vitality_stress_pillar_score: p.vitality_stress_pillar_score
+                                )
+                            }
+                        } else {
+                            print("⚠️ Dashboard: Batched user_profiles fetch failed; falling back to per-member reads: \(error.localizedDescription)")
+                            for userId in userIds {
+                                try Task.checkCancellation()
                                 do {
-                                    let legacyProfiles: [VitalityProfileRowLegacy] = try await supabase
+                                    let userProfiles: [VitalityProfileRow] = try await supabase
                                         .from("user_profiles")
-                                        .select("user_id, vitality_score_current, vitality_score_updated_at, optimal_vitality_target, vitality_sleep_pillar_score, vitality_movement_pillar_score, vitality_stress_pillar_score")
+                                        .select("user_id, vitality_score_current, vitality_score_updated_at, optimal_vitality_target, vitality_progress_score_current, vitality_sleep_pillar_score, vitality_movement_pillar_score, vitality_stress_pillar_score")
                                         .eq("user_id", value: userId)
                                         .limit(1)
                                         .execute()
                                         .value
-                                    // Map to VitalityProfileRow with nil progress_score
-                                    allProfiles.append(contentsOf: legacyProfiles.map { p in
-                                        VitalityProfileRow(
-                                            user_id: p.user_id,
-                                            vitality_score_current: p.vitality_score_current,
-                                            vitality_score_updated_at: p.vitality_score_updated_at,
-                                            optimal_vitality_target: p.optimal_vitality_target,
-                                            vitality_progress_score_current: nil,
-                                            vitality_sleep_pillar_score: p.vitality_sleep_pillar_score,
-                                            vitality_movement_pillar_score: p.vitality_movement_pillar_score,
-                                            vitality_stress_pillar_score: p.vitality_stress_pillar_score
-                                        )
-                                    })
+                                    allProfiles.append(contentsOf: userProfiles)
                                 } catch {
                                     if isCancellation(error) { throw error }
-                                    print("⚠️ Dashboard: Failed to fetch profile for user_id=\(userId) (fallback): \(error.localizedDescription)")
+                                    print("⚠️ Dashboard: Failed to fetch profile for user_id=\(userId): \(error.localizedDescription)")
                                 }
-                            } else {
-                                print("⚠️ Dashboard: Failed to fetch profile for user_id=\(userId): \(error.localizedDescription)")
                             }
                         }
                     }
@@ -683,27 +797,52 @@ extension DashboardView {
                 }
 
                 if !userIds.isEmpty {
-                    for userId in userIds {
-                        try Task.checkCancellation()
-                        do {
-                            let rows: [LatestMovementRow] = try await supabase
-                                .from("vitality_scores")
-                                .select("user_id, vitality_movement_pillar_score, score_date")
-                                .eq("user_id", value: userId)
-                                .order("score_date", ascending: false)
-                                .limit(1)
-                                .execute()
-                                .value
-                            if let row = rows.first,
-                               let uid = row.user_id,
-                               let movement = row.vitality_movement_pillar_score {
-                                latestMovementByUserId[uid.lowercased()] = movement
+                    do {
+                        let rows: [LatestMovementRow] = try await supabase
+                            .from("vitality_scores")
+                            .select("user_id, vitality_movement_pillar_score, score_date")
+                            .in("user_id", values: userIds)
+                            .order("score_date", ascending: false)
+                            .limit(max(userIds.count * 7, userIds.count))
+                            .execute()
+                            .value
+
+                        for row in rows {
+                            guard let uid = row.user_id,
+                                  let movement = row.vitality_movement_pillar_score
+                            else { continue }
+                            let key = uid.lowercased()
+                            if latestMovementByUserId[key] == nil {
+                                latestMovementByUserId[key] = movement
                             }
-                        } catch {
-                            if isCancellation(error) { throw error }
-                            #if DEBUG
-                            print("⚠️ Dashboard: Failed to load latest movement pillar score for user_id=\(userId): \(error.localizedDescription)")
-                            #endif
+                        }
+                    } catch {
+                        if isCancellation(error) { throw error }
+                        #if DEBUG
+                        print("⚠️ Dashboard: Batched latest movement fetch failed; falling back to per-member reads: \(error.localizedDescription)")
+                        #endif
+                        for userId in userIds {
+                            try Task.checkCancellation()
+                            do {
+                                let rows: [LatestMovementRow] = try await supabase
+                                    .from("vitality_scores")
+                                    .select("user_id, vitality_movement_pillar_score, score_date")
+                                    .eq("user_id", value: userId)
+                                    .order("score_date", ascending: false)
+                                    .limit(1)
+                                    .execute()
+                                    .value
+                                if let row = rows.first,
+                                   let uid = row.user_id,
+                                   let movement = row.vitality_movement_pillar_score {
+                                    latestMovementByUserId[uid.lowercased()] = movement
+                                }
+                            } catch {
+                                if isCancellation(error) { throw error }
+                                #if DEBUG
+                                print("⚠️ Dashboard: Failed to load latest movement pillar score for user_id=\(userId): \(error.localizedDescription)")
+                                #endif
+                            }
                         }
                     }
                 }
@@ -1016,7 +1155,14 @@ extension DashboardView {
             BadgeEngine.Winner(badgeType: "weekly_vitality_mvp", winnerUserId: ScreenshotDemoData.simonUserId, winnerName: "Simon", metadata: ["percentIncrease": 8.0, "thisAvg": 74.0, "prevAvg": 68.0, "delta": 6.0, "thisWeekDays": 7, "prevWeekDays": 7]),
             BadgeEngine.Winner(badgeType: "weekly_sleep_mvp", winnerUserId: ScreenshotDemoData.sarahUserId, winnerName: "Sarah", metadata: ["percentIncrease": 5.0, "thisAvg": 80.0, "prevAvg": 76.0]),
             BadgeEngine.Winner(badgeType: "weekly_movement_mvp", winnerUserId: ScreenshotDemoData.emmaUserId, winnerName: "Emma", metadata: ["percentIncrease": 7.0, "thisAvg": 72.0, "prevAvg": 67.0]),
+            BadgeEngine.Winner(badgeType: "weekly_stressfree_mvp", winnerUserId: ScreenshotDemoData.liamUserId, winnerName: "Liam", metadata: ["percentIncrease": 6.0, "thisAvg": 68.0, "prevAvg": 64.0, "thisWeekDays": 7, "prevWeekDays": 7]),
         ]
+        let championsSnap = ChampionsSnapshotBuilder.buildFallbackFromWeeklyWinners(
+            familyMembers: ordered,
+            weeklyWinners: weeklyWinners,
+            weekStartKey: weekStartKey,
+            weekEndKey: weekEndKey
+        )
         let shouldAnimate = DashboardResumeFlags.demoAnimationsEnabled && DashboardResumeFlags.sectionAnimationsEnabled
         await MainActor.run {
             if shouldAnimate { resetSectionAnimationState() }
@@ -1026,6 +1172,7 @@ extension DashboardView {
             familyVitalityScore = 71
             familyVitalityMembersWithData = 4
             familyVitalityMembersTotal = 4
+            familyVitalityFourWeekDelta = 3
             vitalityFactors = factors
             trendInsights = []
             familyMembersRefreshID = UUID()
@@ -1035,6 +1182,7 @@ extension DashboardView {
             weeklyBadgeWeekEnd = weekEndKey
             dailyBadgeWinners = dailyWinners
             weeklyBadgeWinners = weeklyWinners
+            championsData = championsSnap
             isComputingBadges = false
         }
         if shouldAnimate {
@@ -1103,7 +1251,91 @@ extension DashboardView {
             print("loadFamilyVitality() caught error: \(error)")
         }
     }
-    
+
+    /// Fetch the last 28 days of family vitality scores and compute the
+    /// difference between this week's family average and the prior 3 weeks'
+    /// average. Powers the small "+N vs last 4 weeks" indicator on the hero card.
+    ///
+    /// - Sets `familyVitalityFourWeekDelta` to a signed integer when both
+    ///   windows have at least 3 days of family-level data, otherwise `nil`.
+    /// - Never throws; falls back to `nil` and preserves previously shown delta
+    ///   on cancellation, mirroring `loadFamilyVitality` behaviour.
+    internal func loadFamilyVitalityFourWeekTrend() async {
+        guard let familyId = dataManager.currentFamilyId else {
+            await MainActor.run { familyVitalityFourWeekDelta = nil }
+            return
+        }
+
+        let today = Date()
+        let todayKey = utcDayKey(for: today)
+        // Last 7 days inclusive of today = this week's window
+        let thisWeekStart = dateByAddingDays(-6, to: today)
+        // 21 days before that = baseline window
+        let baselineEnd = dateByAddingDays(-1, to: thisWeekStart)
+        let baselineStart = dateByAddingDays(-20, to: baselineEnd)
+        let baselineStartKey = utcDayKey(for: baselineStart)
+
+        let rows: [DataManager.FamilyVitalityScoreRow]
+        do {
+            rows = try await dataManager.fetchFamilyVitalityScores(
+                familyId: familyId,
+                startDate: baselineStartKey,
+                endDate: todayKey
+            )
+        } catch {
+            if isCancellation(error) { return }
+            #if DEBUG
+            print("⚠️ loadFamilyVitalityFourWeekTrend: fetch failed: \(error.localizedDescription)")
+            #endif
+            await MainActor.run { familyVitalityFourWeekDelta = nil }
+            return
+        }
+
+        // Group by day → mean of member total_scores for that day = family avg that day.
+        var perDayScores: [String: [Int]] = [:]
+        for row in rows {
+            guard let total = row.totalScore else { continue }
+            perDayScores[row.scoreDate, default: []].append(total)
+        }
+        let dailyFamilyAverages: [(dayKey: String, avg: Double)] = perDayScores.compactMap { (key, scores) in
+            guard !scores.isEmpty else { return nil }
+            let avg = Double(scores.reduce(0, +)) / Double(scores.count)
+            return (key, avg)
+        }
+
+        let thisWeekStartKey = utcDayKey(for: thisWeekStart)
+        let baselineEndKey = utcDayKey(for: baselineEnd)
+
+        let thisWeekVals = dailyFamilyAverages
+            .filter { isDayKey($0.dayKey, greaterThanOrEqualTo: thisWeekStartKey) && isDayKey($0.dayKey, lessThanOrEqualTo: todayKey) }
+            .map { $0.avg }
+        let baselineVals = dailyFamilyAverages
+            .filter { isDayKey($0.dayKey, greaterThanOrEqualTo: baselineStartKey) && isDayKey($0.dayKey, lessThanOrEqualTo: baselineEndKey) }
+            .map { $0.avg }
+
+        // Require at least 3 days in each window so the delta isn't noise.
+        guard thisWeekVals.count >= 3, baselineVals.count >= 3 else {
+            await MainActor.run { familyVitalityFourWeekDelta = nil }
+            #if DEBUG
+            print("ℹ️ loadFamilyVitalityFourWeekTrend: insufficient coverage (thisWeek=\(thisWeekVals.count), baseline=\(baselineVals.count))")
+            #endif
+            return
+        }
+
+        let thisWeekAvg = thisWeekVals.reduce(0, +) / Double(thisWeekVals.count)
+        let baselineAvg = baselineVals.reduce(0, +) / Double(baselineVals.count)
+        let delta = Int((thisWeekAvg - baselineAvg).rounded())
+
+        await MainActor.run {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                familyVitalityFourWeekDelta = delta
+            }
+        }
+        #if DEBUG
+        print("✅ loadFamilyVitalityFourWeekTrend: thisWeekAvg=\(Int(thisWeekAvg.rounded())) baselineAvg=\(Int(baselineAvg.rounded())) delta=\(delta)")
+        #endif
+    }
+
     /// Check for backfilled data across family members and update banner status
     internal func checkDataBackfillStatus() async {
         // Only check active members (those present in familyMembers, which comes from the live DB query)
@@ -1230,14 +1462,31 @@ extension DashboardView {
                 }
             }
             
-            // Exclude current user from family insights to avoid seeing yourself as "needs help"
+            // Family insights: prefer other eligible members so the current user is not cast as
+            // "needs support" in this strip. If nobody else is eligible yet but the current user is,
+            // include `me` so solo households and "partner still syncing" homes still get insights.
             let others = familyMembers.filter { !$0.isMe }
-            let total = familyVitalityMembersTotal ?? others.count
+            let eligibleOthers = others.filter(\.isEligibleForFamilyVitalitySnapshot)
+            let me = familyMembers.first(where: \.isMe)
+            let householdMode: FamilyVitalitySnapshotHouseholdMode
+            let membersForSnapshot: [FamilyMemberScore]
+            if !eligibleOthers.isEmpty {
+                membersForSnapshot = eligibleOthers
+                householdMode = .standard
+            } else if let me, me.isEligibleForFamilyVitalitySnapshot {
+                membersForSnapshot = [me]
+                householdMode = others.isEmpty ? .standard : .selfFallbackMultiMemberHome
+            } else {
+                membersForSnapshot = others
+                householdMode = .standard
+            }
+            let total = max(1, familyVitalityMembersTotal ?? familyMembers.count)
             let snapshot = FamilyVitalitySnapshotEngine.compute(
-                members: others,
+                members: membersForSnapshot,
                 familyAverage: familyVitalityScore,
                 pillarAverages: pillarAverages,
-                membersTotal: total
+                membersTotal: total,
+                householdMode: householdMode
             )
             familySnapshot = snapshot
             
@@ -1310,11 +1559,15 @@ extension DashboardView {
     }
     
     /// Start a recommended 7-day challenge for a family member based on a notification.
-    /// This calls the `create_challenge` RPC, which enforces that only admins can start
-    /// challenges and that at most one active/pending challenge exists per member.
-    /// Returns true if the challenge was created successfully and the intervention was recorded.
+    /// Calls `create_challenge` with the pattern alert id, then records the alert intervention.
+    /// Returns true if the challenge was created successfully.
     @discardableResult
     internal func startRecommendedChallenge(for notification: FamilyNotificationItem) async -> Bool {
+        if notification.myChallengeStatus == "active" || notification.myChallengeStatus == "pending_invite" {
+            print("ℹ️ startRecommendedChallenge: challenge already \(notification.myChallengeStatus ?? "in progress")")
+            return false
+        }
+
         guard let memberUserId = notification.memberUserId,
               UUID(uuidString: memberUserId) != nil else {
             print("❌ startRecommendedChallenge: Missing or invalid memberUserId")
@@ -1337,23 +1590,12 @@ extension DashboardView {
             pillarKey = "stress"
         }
         
-        struct CreateChallengeResult: Decodable {
-            let success: Bool
-            let challenge_id: String?
-            let error: String?
-        }
-        
         do {
-            let supabase = SupabaseConfig.client
-            
-            let result: CreateChallengeResult = try await supabase
-                .rpc("create_challenge", params: [
-                    "member_user_id": AnyJSON.string(memberUserId),
-                    "pillar": AnyJSON.string(pillarKey),
-                    "source_alert_state_id": AnyJSON.string(notification.id)
-                ])
-                .execute()
-                .value
+            let result = try await dataManager.createChallengeForMember(
+                memberUserId: memberUserId,
+                pillar: pillarKey,
+                sourceAlertStateId: notification.id
+            )
             
             if result.success {
                 print("✅ Created challenge \(result.challenge_id ?? "") for member \(memberUserId) pillar \(pillarKey)")
@@ -1369,6 +1611,8 @@ extension DashboardView {
                         print("⚠️ recordAlertIntervention failed: \(error.localizedDescription)")
                     }
                 }
+                await loadServerPatternAlerts()
+                await loadActiveMemberChallenge()
                 return true
             } else {
                 print("❌ Failed to create challenge: \(result.error ?? "unknown_error")")
@@ -1378,6 +1622,36 @@ extension DashboardView {
             print("❌ startRecommendedChallenge RPC failed: \(error.localizedDescription)")
             return false
         }
+    }
+
+    internal func handleSupportMessageSent(
+        _ notification: FamilyNotificationItem,
+        message: String,
+        platform: MessageTemplatesSheet.MessagePlatform
+    ) {
+        switch platform {
+        case .whatsapp:
+            openWhatsApp(with: message)
+        case .imessage, .sms:
+            openMessages(with: message)
+        }
+
+        Task {
+            do {
+                try await dataManager.recordAlertIntervention(
+                    alertId: notification.id,
+                    interventionType: "reach_out",
+                    challengeId: nil
+                )
+                await loadServerPatternAlerts()
+            } catch {
+                print("⚠️ record reach_out intervention failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    internal func confirmSupportChallenge(for notification: FamilyNotificationItem) async -> Bool {
+        await startRecommendedChallenge(for: notification)
     }
 
     /// Best-effort: refresh user_profiles vitality snapshot values from latest vitality_scores.
@@ -1635,12 +1909,22 @@ extension DashboardView {
                 
                 let patternDesc = row.pattern_type?.contains("rise") == true ? "above" : "below"
                 let levelDesc = "\(row.current_level)d"
-                
-                let title = "\(metricDisplay) \(patternDesc) baseline"
+                let authUserId = currentUserIdString
+
+                let title = MemberProfileOwnVoice.patternAlertTitle(
+                    metricDisplay: metricDisplay,
+                    patternDesc: patternDesc
+                )
                 let deviationText = row.deviation_percent.map { String(format: "%.0f%%", abs($0 * 100)) } ?? ""
-                let body = deviationText.isEmpty ? 
-                    "\(metricDisplay) has been \(patternDesc) \(memberName)'s baseline for \(levelDesc)." :
-                    "\(metricDisplay) is \(deviationText) \(patternDesc) \(memberName)'s baseline (last \(levelDesc))."
+                let body = MemberProfileOwnVoice.patternAlertBody(
+                    metricDisplay: metricDisplay,
+                    patternDesc: patternDesc,
+                    deviationText: deviationText,
+                    levelDesc: levelDesc,
+                    firstName: memberName,
+                    memberUserId: row.member_user_id,
+                    authUserId: authUserId
+                )
                 
                 // Create a TrendInsight to store the server pattern data with debugWhy
                 let debugWhy = "serverPattern metric=\(row.metric_type) pattern=\(row.pattern_type ?? "unknown") level=\(row.current_level) severity=\(row.severity ?? "watch") deviation=\(row.deviation_percent ?? 0) alertStateId=\(row.id) activeSince=\(row.active_since ?? "unknown")"
@@ -1662,7 +1946,14 @@ extension DashboardView {
                 let careState: CareState? = row.care_state.flatMap { CareState(rawValue: $0) }
                 let actedAt: Date? = row.acted_at.flatMap { ISO8601DateFormatter().date(from: $0) }
                 let followUpDueDate: Date? = row.follow_up_due_date.flatMap { (Self.dayKeyFormatter.date(from: $0)) }
-                
+
+                let outcomeMessage: String? = row.outcome_message.map { msg in
+                    if MemberProfileOwnVoice.isCurrentUser(memberUserId: row.member_user_id, authUserId: authUserId) {
+                        return MemberProfileOwnVoice.rewriteMemberFacingCopy(memberName: memberName, text: msg)
+                    }
+                    return msg
+                }
+
                 let item = FamilyNotificationItem(
                     id: row.id,
                     kind: .trend(insight),
@@ -1675,7 +1966,7 @@ extension DashboardView {
                     actedByUserId: row.acted_by_user_id,
                     actedAt: actedAt,
                     followUpDueDate: followUpDueDate,
-                    outcomeMessage: row.outcome_message,
+                    outcomeMessage: outcomeMessage,
                     cycleCount: row.cycle_count ?? 0,
                     lastInterventionType: row.last_intervention_type,
                     myChallengeStatus: row.my_challenge_status
@@ -1796,7 +2087,8 @@ extension DashboardView {
             // may pick "Me" as the coverage representative and suppress insights (0 days).
             let result = FamilyVitalityTrendEngine.computeTrends(
                 members: familyMembers.filter { !$0.isMe },
-                history: history
+                history: history,
+                authUserId: currentUserIdString
             )
             
             await MainActor.run {

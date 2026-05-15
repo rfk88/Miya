@@ -17,6 +17,7 @@
 import SwiftUI
 import Combine
 import Supabase
+import Auth
 import Foundation
 
 @MainActor
@@ -3885,7 +3886,19 @@ extension BellNotification {
             
         case "care_outcome":
             let alertStateId = row.alertStateId
-            let outcomeMessage = string("outcome_message") ?? "Update on this alert."
+            let rawOutcome = string("outcome_message") ?? "Update on this alert."
+            let memberFirstName = string("member_first_name")
+                ?? string("first_name")
+                ?? "Family member"
+            let outcomeMessage: String
+            if isForSelf {
+                outcomeMessage = MemberProfileOwnVoice.rewriteMemberFacingCopy(
+                    memberName: memberFirstName,
+                    text: rawOutcome
+                )
+            } else {
+                outcomeMessage = rawOutcome
+            }
             self.id = row.id
             self.createdAt = row.createdAt
             self.memberUserId = memberId
@@ -4169,6 +4182,34 @@ extension DataManager {
         }
     }
     
+    /// Result payload from the `create_challenge` RPC (7-day family pillar challenge).
+    struct CreateChallengeRPCResult: Decodable {
+        let success: Bool
+        let challenge_id: String?
+        let error: String?
+    }
+
+    /// Create a 7-day challenge for a family member. Pass `sourceAlertStateId: nil` for manual starts from Family Challenges (no alert link, no `recordAlertIntervention`).
+    func createChallengeForMember(
+        memberUserId: String,
+        pillar: String,
+        sourceAlertStateId: String?
+    ) async throws -> CreateChallengeRPCResult {
+        var params: [String: AnyJSON] = [
+            "member_user_id": .string(memberUserId),
+            "pillar": .string(pillar),
+        ]
+        if let sid = sourceAlertStateId, UUID(uuidString: sid) != nil {
+            params["source_alert_state_id"] = .string(sid)
+        } else {
+            params["source_alert_state_id"] = .null
+        }
+        return try await supabase
+            .rpc("create_challenge", params: params)
+            .execute()
+            .value
+    }
+
     /// Fetch all challenges for the current user (as challenger or challengee). For Family Challenges tab.
     func fetchFamilyChallenges() async throws -> [FamilyChallenge] {
         guard let familyId = currentFamilyId else { return [] }
@@ -4220,6 +4261,139 @@ extension DataManager {
         if !result.success {
             throw DataError.invalidData("join_challenge returned success: false")
         }
+    }
+
+    // MARK: - Competitive challenges (Phase B)
+
+    /// Decoded response from `create_competitive_challenge` / `respond_competitive_invite`.
+    struct CompetitiveChallengeRPCResult: Decodable {
+        let success: Bool
+        let error: String?
+        let challenge_id: String?
+        let mode: String?
+        let participant_count: Int?
+        let status: String?
+        let all_accepted: Bool?
+    }
+
+    /// Create a BIG (competitive) challenge. The caller is auto-accepted; each invitee receives an invite push.
+    /// Returns the new challenge id on success, or a structured error code the UI maps to friendly copy.
+    @discardableResult
+    func createCompetitiveChallenge(
+        focus: ChallengeFocus,
+        inviteeUserIds: [String]
+    ) async throws -> CompetitiveChallengeRPCResult {
+        let cleaned = Array(Set(inviteeUserIds.map { $0.lowercased() }))
+        let inviteeArray = AnyJSON.array(cleaned.map { .string($0) })
+        return try await supabase
+            .rpc("create_competitive_challenge", params: [
+                "focus": AnyJSON.string(focus.dbKey),
+                "invitee_user_ids": inviteeArray
+            ])
+            .execute()
+            .value
+    }
+
+    /// Accept or decline a competitive-challenge invite. Returns the resulting status payload.
+    @discardableResult
+    func respondToCompetitiveChallengeInvite(
+        challengeId: String,
+        action: CompetitiveInviteAction
+    ) async throws -> CompetitiveChallengeRPCResult {
+        return try await supabase
+            .rpc("respond_competitive_invite", params: [
+                "p_challenge_id": AnyJSON.string(challengeId),
+                "p_action": AnyJSON.string(action.rawValue)
+            ])
+            .execute()
+            .value
+    }
+
+    enum CompetitiveInviteAction: String { case accept, decline }
+
+    /// Lightweight list row used by Family Challenges → Competitive tab.
+    struct CompetitiveChallengeListRow: Decodable {
+        let id: String
+        let family_id: String
+        let mode: String
+        let focus: String
+        let status: String
+        let start_date: String?
+        let end_date: String?
+        let created_at: String
+        let completed_at: String?
+        let created_by: String?
+        let winner_user_id: String?
+        let tie_break_used: Bool?
+        let my_invite_status: String?
+        let participant_count: Int
+        let accepted_count: Int
+        let pending_count: Int
+    }
+
+    func fetchCompetitiveChallengesForFamily() async throws -> [CompetitiveChallengeListRow] {
+        guard let familyId = currentFamilyId else { return [] }
+        let rows: [CompetitiveChallengeListRow] = try await supabase
+            .rpc("get_competitive_challenges_for_family", params: ["p_family_id": AnyJSON.string(familyId)])
+            .execute()
+            .value
+        return rows
+    }
+
+    /// One row per participant, with aggregate / best-day / daily JSON. Sorted client-side.
+    struct CompetitiveChallengeDetailRow: Decodable {
+        let challenge_id: String
+        let family_id: String
+        let mode: String
+        let focus: String
+        let status: String
+        let start_date: String?
+        let end_date: String?
+        let created_at: String
+        let activated_at: String?
+        let completed_at: String?
+        let created_by: String?
+        let winner_user_id: String?
+        let tie_break_used: Bool?
+        let participant_user_id: String
+        let participant_first_name: String?
+        let participant_invite_status: String
+        let participant_accepted_at: String?
+        let participant_aggregate: Double?
+        let participant_best_day: Double?
+        let participant_daily: [DailyEntry]?
+
+        struct DailyEntry: Decodable {
+            let local_date: String?
+            let pillar_score: Double?
+            let steps: Double?
+        }
+    }
+
+    func fetchCompetitiveChallengeDetail(challengeId: String) async throws -> [CompetitiveChallengeDetailRow] {
+        let rows: [CompetitiveChallengeDetailRow] = try await supabase
+            .rpc("get_competitive_challenge_detail", params: ["p_challenge_id": AnyJSON.string(challengeId)])
+            .execute()
+            .value
+        return rows
+    }
+
+    /// Decoded response for `resolve_competitive_challenge_tie_break`.
+    struct CompetitiveTieBreakResult: Decodable {
+        let success: Bool
+        let error: String?
+        let winner_user_id: String?
+        let tie_break_used: Bool?
+        let changed: Bool?
+    }
+
+    /// Settle a drawn competitive challenge with the highest-single-day tie-break rule.
+    /// Returns success=false with `error: "still_tied"` when the best-day value is also shared.
+    func resolveCompetitiveChallengeTieBreak(challengeId: String) async throws -> CompetitiveTieBreakResult {
+        return try await supabase
+            .rpc("resolve_competitive_challenge_tie_break", params: ["p_challenge_id": AnyJSON.string(challengeId)])
+            .execute()
+            .value
     }
 }
 

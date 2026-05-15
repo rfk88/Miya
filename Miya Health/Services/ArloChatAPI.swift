@@ -1,5 +1,6 @@
 import Foundation
 import Supabase
+import Auth
 
 enum ArloChatAPI {
 
@@ -14,10 +15,46 @@ enum ArloChatAPI {
         let content: String
     }
 
+    struct DashboardContext: Encodable {
+        struct Pillar: Encodable {
+            let name: String
+            let score: Int
+            let label: String
+            let freshMemberCount: Int
+            let staleMemberCount: Int
+            let missingMemberCount: Int
+        }
+
+        struct ActiveAlert: Encodable {
+            let memberName: String
+            let pillar: String
+            let durationDays: Int?
+            let relevanceState: String
+        }
+
+        let generatedAt: String
+        let familyScore: Int?
+        let familyScoreLabel: String
+        let memberCount: Int
+        let freshMemberCount: Int
+        let staleMemberCount: Int
+        let activeAlerts: [ActiveAlert]
+        let pillars: [Pillar]
+        let dataFreshnessSummary: String
+    }
+
+    private struct ChatPayload: Encodable {
+        let messages: [APIMessage]
+        let firstName: String
+        let openingLine: String
+        let dashboardContext: DashboardContext?
+    }
+
     static func send(
         messages: [APIMessage],
         firstName: String,
-        openingLine: String
+        openingLine: String,
+        dashboardContext: DashboardContext? = nil
     ) async throws -> String {
         #if DEBUG
         if ScreenshotDemoData.isScreenshotModeEnabled {
@@ -31,11 +68,12 @@ enum ArloChatAPI {
         }
 
         // 2) Payload
-        let payload: [String: Any] = [
-            "messages": messages.map { ["role": $0.role, "content": $0.content] },
-            "firstName": firstName,
-            "openingLine": openingLine
-        ]
+        let payload = ChatPayload(
+            messages: messages,
+            firstName: firstName,
+            openingLine: openingLine,
+            dashboardContext: dashboardContext
+        )
 
         // 3) Get the CURRENT signed-in session from the shared client
         let client = SupabaseConfig.client
@@ -65,7 +103,7 @@ enum ArloChatAPI {
         // CRITICAL: forward USER JWT (not anon key)
         request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
 
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        request.httpBody = try JSONEncoder().encode(payload)
 
         // 5) Execute
         let (data, response) = try await URLSession.shared.data(for: request)

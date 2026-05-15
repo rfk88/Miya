@@ -15,6 +15,24 @@ enum DashboardResumeFlags {
     static let demoAnimationsEnabled = false
 }
 
+enum DashboardRefreshPersistence {
+    private static let lastCompletedKey = "miya.dashboard.lastRefreshCompletedAt"
+
+    static var lastCompletedAt: Date? {
+        get { UserDefaults.standard.object(forKey: lastCompletedKey) as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: lastCompletedKey) }
+    }
+
+    static func isStale(threshold: TimeInterval, now: Date = Date()) -> Bool {
+        guard let lastCompletedAt else { return true }
+        return now.timeIntervalSince(lastCompletedAt) > threshold
+    }
+
+    static func markCompleted(at date: Date = Date()) {
+        lastCompletedAt = date
+    }
+}
+
 // AUDIT REPORT (guided onboarding status-driven admin dashboard)
 // - Compile audit: Cannot run `xcodebuild` in this environment (no Xcode). Verified compile-safety via lints/type checks in Cursor.
 // - State integrity: Admin "Guided setup" UI reads only from `FamilyMemberRecord.guidedSetupStatus` (canonical DB field)
@@ -42,6 +60,37 @@ struct MemberPillarNavigation: Identifiable, Hashable {
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
+    }
+}
+
+private struct DashboardSoftRefreshIndicator: View {
+    @State private var pulse = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(Color.miyaHeroAccentTeal)
+                .frame(width: 8, height: 8)
+                .scaleEffect(pulse ? 1.25 : 0.75)
+                .opacity(pulse ? 0.35 : 0.95)
+                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
+
+            Text("Updating dashboard")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.miyaDashboardTextSecond)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.miyaCardWhite.opacity(0.92))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.miyaHeroAccentTeal.opacity(0.14), lineWidth: 1)
+        )
+        .shadow(color: Color.miyaHeroAccentTeal.opacity(0.12), radius: 10, x: 0, y: 5)
+        .onAppear { pulse = true }
     }
 }
 
@@ -100,11 +149,16 @@ struct DashboardView: View {
     @State internal var familySnapshot: FamilyVitalitySnapshot? = nil
     @State internal var familyVitalityMembersWithData: Int? = nil
     @State internal var familyVitalityMembersTotal: Int? = nil
+    /// 4-week trend: difference between this week's family avg score and the prior 3 weeks' avg.
+    /// `nil` when there isn't enough history yet (need at least a few days in each window).
+    @State internal var familyVitalityFourWeekDelta: Int? = nil
     @State internal var trendInsights: [TrendInsight] = []
     @State internal var trendCoverage: TrendCoverageStatus? = nil
     @State internal var isComputingTrendInsights: Bool = false
     @State internal var serverPatternAlerts: [FamilyNotificationItem] = []
     @State internal var selectedFamilyNotification: FamilyNotificationItem? = nil
+    @State internal var selectedSupportMessage: AlertSupportSelection? = nil
+    @State internal var selectedSupportChallenge: AlertSupportSelection? = nil
     @State internal var dataBackfillStatus: DataBackfillStatus? = nil
     @State internal var showBackfillDetailSheet: Bool = false
     @State internal var activeMemberChallenge: ActiveChallenge? = nil
@@ -167,6 +221,9 @@ struct DashboardView: View {
     @State internal var weeklyBadgeWeekStart: String? = nil
     @State internal var weeklyBadgeWeekEnd: String? = nil
     @State internal var selectedBadge: BadgeEngine.Winner? = nil
+    @State internal var championsData: ChampionsData? = nil
+    @State internal var isChampionsSheetOpen: Bool = false
+    @State internal var championsSheetDrag: CGFloat = 0
     /// When non-nil, weekly Champions save failed; show banner with message and Try again (BUG-024).
     @State internal var badgeSaveError: String? = nil
     
@@ -190,6 +247,7 @@ struct DashboardView: View {
 
     /// Prevents overlapping full-pipeline refreshes (foreground bounce, .task re-fire, pull-to-refresh).
     @State internal var isRefreshingDashboard: Bool = false
+    @State internal var isSoftRefreshingDashboard: Bool = false
     /// Tracks when the last full dashboard refresh completed (for staleness checks).
     @State internal var lastDashboardRefreshDate: Date? = nil
 
@@ -198,12 +256,16 @@ struct DashboardView: View {
     @State internal var sectionAppearVitality: Bool = false
     @State internal var sectionAppearNotifications: Bool = false
     @State internal var sectionAppearBadges: Bool = false
+
+    // Session-only state for the redesigned alert cards.
+    @State internal var dismissedAlertMemberIds: Set<String> = []
+    @State internal var expandedAlertMemberIds: Set<String> = []
     
     internal var displayedNotifications: [FamilyNotificationItem] {
         // Server pattern alerts come directly from the DB — they don't require a local snapshot
         // or trend computation. Show them as soon as they are loaded.
-        if !serverPatternAlerts.isEmpty {
-            return filterByCurrentUser(serverPatternAlerts)
+        if !relevantServerPatternAlerts.isEmpty {
+            return filterByCurrentUser(relevantServerPatternAlerts)
         }
         
         // Trend/fallback notifications require a full family snapshot and finished trend insight
@@ -259,25 +321,38 @@ struct DashboardView: View {
                     #if DEBUG
                     if ScreenshotDemoData.isScreenshotModeEnabled { return }
                     #endif
-                    if shouldCheckVitality() {
-                        await checkAndUpdateCurrentUserVitality()
-                    }
                     if DashboardResumeFlags.softRefreshOnForeground {
                         let staleThreshold: TimeInterval = 5 * 60
-                        let isStale = lastDashboardRefreshDate.map {
-                            Date().timeIntervalSince($0) > staleThreshold
-                        } ?? true
-                        if isStale && !isRefreshingDashboard {
+                        let shouldRefresh = DashboardRefreshPersistence.isStale(threshold: staleThreshold)
+                        if shouldRefresh && !isRefreshingDashboard {
                             await softRefreshDashboard()
+                            Task(priority: .utility) {
+                                await runDashboardBackgroundRefresh()
+                            }
+                        } else {
+                            Task(priority: .utility) {
+                                await dataManager.refreshAIThirdPartyConsentFromServer()
+                            }
                         }
                     }
-                    await dataManager.refreshAIThirdPartyConsentFromServer()
                 }
             }
             // Deep link: notification tap → open sidebar for resync (current user only)
             .onReceive(NotificationCenter.default.publisher(for: .miyaOpenSidebarForResync)) { _ in
                 withAnimation(.easeInOut(duration: 0.25)) {
                     showSidebar = true
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .miyaOpenChampions)) { _ in
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+                    if championsData != nil {
+                        isChampionsSheetOpen = true
+                    }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .apiWearableConnected)) { _ in
+                Task {
+                    await handleWearableConnectedNotification()
                 }
             }
             // User switch: reset first-baseline session flag, re-evaluate banners, refresh orientation eligibility.
@@ -326,6 +401,14 @@ struct DashboardView: View {
             .onChange(of: weeklyBadgeWinners.count) { _, _ in
                 triggerSectionEntranceAnimations()
             }
+            .onChange(of: isComputingBadges) { _, computing in
+                if !computing {
+                    triggerSectionEntranceAnimations()
+                }
+            }
+            .onChange(of: isChampionsSheetOpen) { _, open in
+                if open { championsSheetDrag = 0 }
+            }
     }
 
     /// Main dashboard layers (no sheets) — isolated for Swift type-check performance.
@@ -338,6 +421,20 @@ struct DashboardView: View {
                 dashboardTopBar
                 mainScrollContent
             }
+            .scaleEffect(isChampionsSheetOpen ? 0.93 : 1.0, anchor: UnitPoint(x: 0.5, y: 0))
+            .offset(y: isChampionsSheetOpen ? -10 : 0)
+            .animation(.spring(response: 0.5, dampingFraction: 0.85), value: isChampionsSheetOpen)
+            .overlay(alignment: .bottomTrailing) {
+                MiyaChatFAB(onTap: {
+                    Task { await presentArloChat() }
+                })
+                .padding(.trailing, 24)
+                .padding(.bottom, 24)
+                .opacity(isChampionsSheetOpen ? 0 : 1)
+                .animation(.easeInOut(duration: 0.2), value: isChampionsSheetOpen)
+            }
+
+            championsOverlayLayer
 
             if showNotifications {
                 notificationsOverlay
@@ -354,6 +451,32 @@ struct DashboardView: View {
                 .transition(.opacity)
                 .zIndex(5)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var championsOverlayLayer: some View {
+        if let d = championsData {
+            ZStack(alignment: .bottom) {
+                Color.black
+                    .opacity(isChampionsSheetOpen ? 0.45 : 0)
+                    .ignoresSafeArea()
+                    .animation(.easeInOut(duration: 0.35), value: isChampionsSheetOpen)
+                    .onTapGesture {
+                        withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+                            isChampionsSheetOpen = false
+                        }
+                    }
+
+                ChampionsBottomSheet(
+                    data: d,
+                    isPresented: $isChampionsSheetOpen,
+                    dragOffset: $championsSheetDrag
+                )
+                .offset(y: isChampionsSheetOpen ? championsSheetDrag : UIScreen.main.bounds.height)
+                .animation(.spring(response: 0.5, dampingFraction: 0.85), value: isChampionsSheetOpen)
+            }
+            .allowsHitTesting(isChampionsSheetOpen)
         }
     }
 
@@ -404,6 +527,26 @@ struct DashboardView: View {
         .sheet(item: $selectedFamilyNotification) { item in
             let liveItem = serverPatternAlerts.first(where: { $0.id == item.id }) ?? item
             familyNotificationSheet(liveItem)
+        }
+        .sheet(item: $selectedSupportMessage) { selection in
+            MessageTemplatesSheet(
+                item: selection.item,
+                suggestedMessages: selection.presentation.suggestedMessages,
+                onSendMessage: { message, platform in
+                    handleSupportMessageSent(selection.item, message: message, platform: platform)
+                }
+            )
+            .environmentObject(dataManager)
+        }
+        .sheet(item: $selectedSupportChallenge) { selection in
+            SupportChallengeComposerSheet(
+                item: selection.item,
+                alert: selection.alert,
+                presentation: selection.presentation,
+                onConfirm: {
+                    await confirmSupportChallenge(for: selection.item)
+                }
+            )
         }
         .sheet(isPresented: $showFamilyChallenges) {
             FamilyChallengesView()
@@ -554,7 +697,7 @@ struct DashboardView: View {
             }
         }
         // Champions can be empty on first load; keep the card visible instead of hidden.
-        let shouldShowBadges = !dailyBadgeWinners.isEmpty || !weeklyBadgeWinners.isEmpty || !isComputingBadges
+        let shouldShowBadges = championsData != nil || !dailyBadgeWinners.isEmpty || !weeklyBadgeWinners.isEmpty || !isComputingBadges
         if shouldShowBadges && !sectionAppearBadges {
             withAnimation(.easeOut(duration: 0.3).delay(baseDelay * 3)) {
                 sectionAppearBadges = true
@@ -637,6 +780,7 @@ struct DashboardView: View {
                 familyId: familyId,
                 firstName: currentUserFirstNameForGreeting(),
                 openingLine: arloVitalityBand(for: familyVitalityScore).sentence,
+                dashboardContext: arloDashboardContext(),
                 onNeedAIConsentSettings: {
                     isArloChatPresented = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
@@ -716,7 +860,9 @@ struct DashboardView: View {
     }
     
     internal func familyNotificationSheet(_ item: FamilyNotificationItem) -> some View {
-        FamilyNotificationDetailSheet(
+        let key = item.memberUserId?.lowercased() ?? item.memberName.lowercased()
+        let consolidated = consolidatedAlerts().first { $0.id == key }
+        return FamilyNotificationDetailSheet(
             item: item,
             onStartRecommendedChallenge: {
                 let success = await startRecommendedChallenge(for: item)
@@ -727,7 +873,9 @@ struct DashboardView: View {
                 }
                 return success
             },
-            dataManager: dataManager
+            dataManager: dataManager,
+            siblingActivePillars: consolidated?.pillars,
+            siblingMaxDurationDays: consolidated?.maxDurationDays
         )
     }
     
@@ -754,6 +902,7 @@ struct DashboardView: View {
     internal var allNotificationsSheet: some View {
         AllNotificationsView(
             notifications: displayedNotifications,
+            currentUserId: currentUserIdString,
             onTap: { [self] notification in
                 showAllNotifications = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -867,17 +1016,10 @@ struct DashboardView: View {
         }
         
         internal var dashboardTopBar: some View {
-                DashboardTopBar(
+            MiyaDashboardTopBar(
                 familyName: resolvedFamilyName.isEmpty ? familyName : resolvedFamilyName,
                 notificationCount: bellNotifications.count,
-                onShareTapped: {
-                    // 1) Build the share text
-                    prepareShareText()
-                    // 2) Show the native share sheet
-                    isShareSheetPresented = true
-                },
                 onMenuTapped: {
-                    // Open sidebar
                     withAnimation(.easeInOut(duration: 0.25)) {
                         showSidebar = true
                     }
@@ -886,7 +1028,7 @@ struct DashboardView: View {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
                         showNotifications.toggle()
                     }
-                    
+
                     if showNotifications {
                         Task {
                             await loadBellNotifications()
@@ -1296,28 +1438,31 @@ struct DashboardView: View {
         internal var mainScrollContent: some View {
             let animate = DashboardResumeFlags.sectionAnimationsEnabled
             return ScrollView {
-                VStack(alignment: .leading, spacing: DashboardDesign.sectionSpacing) {
+                VStack(alignment: .leading, spacing: 28) {
                     dataBackfillBanner
+                    if isSoftRefreshingDashboard {
+                        DashboardSoftRefreshIndicator()
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
                     // Current-user-only vitality banner (Banner A: first ingest / Banner B: resync)
                     // Appears near the top so users see it without scrolling.
                     dataGuidanceBannerSection
                     familyMembersSection
                         .opacity(animate ? (sectionAppearMembers ? 1 : 0) : 1)
                         .offset(y: animate ? (sectionAppearMembers ? 0 : 12) : 0)
-                    guidedSetupSection
-                    missingWearableSection
+                        .padding(.bottom, -10)
                     familyVitalitySection
                         .opacity(animate ? (sectionAppearVitality ? 1 : 0) : 1)
                         .offset(y: animate ? (sectionAppearVitality ? 0 : 12) : 0)
                     notificationsSection
                         .opacity(animate ? (sectionAppearNotifications ? 1 : 0) : 1)
                         .offset(y: animate ? (sectionAppearNotifications ? 0 : 12) : 0)
+                    suggestedSection
+                    guidedSetupSection
                     if let challenge = activeMemberChallenge {
                         MyChallengeView(challenge: challenge)
                     }
-                    ChatWithArloCard(onTap: {
-                        Task { await presentArloChat() }
-                    })
                     badgeSaveErrorBanner
                     badgesSection
                         .opacity(animate ? (sectionAppearBadges ? 1 : 0) : 1)
@@ -1484,9 +1629,12 @@ struct DashboardView: View {
                 if isLoadingFamilyMembers {
                     DashboardInlineLoaderCard(title: "Family members")
                 } else {
-                    // Use initials immediately for all members; avoid delayed remote avatar pop-in on first load.
-                    FamilyMembersStrip(members: familyMembers, familyId: dataManager.currentFamilyId, currentUserAvatarURL: nil)
-                        .id(familyMembersRefreshID)
+                    FamilyMembersStripV2(
+                        members: familyMembers,
+                        familyId: dataManager.currentFamilyId,
+                        alertMemberIds: alertMemberIdSet
+                    )
+                    .id(familyMembersRefreshID)
                 }
             }
             .padding(.top, 8)
@@ -1578,39 +1726,109 @@ struct DashboardView: View {
         
         @ViewBuilder
         internal var notificationsSection: some View {
-            let notifications = displayedNotifications
-            
-            if !notifications.isEmpty {
-                FamilyNotificationsCard(
-                    items: notifications,
-                    onTap: { item in
-                        selectedFamilyNotification = item
-                    },
-                    onSeeAll: {
-                        showAllNotifications = true
-                    },
-                    onSnooze: { item, days in
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            serverPatternAlerts.removeAll { $0.id == item.id }
+            let visibleAlerts = consolidatedAlerts().filter {
+                !dismissedAlertMemberIds.contains($0.id)
+            }
+
+            if !visibleAlerts.isEmpty {
+                VStack(spacing: 10) {
+                    ForEach(visibleAlerts) { alert in
+                        if let representative = serverPatternAlerts.first(where: { $0.id == alert.representativeItemId }) {
+                            let presentation = DashboardAlertSupportPolicy.presentation(
+                                for: representative,
+                                alert: alert,
+                                authUserId: currentUserIdString
+                            )
+                            MemberAlertCard(
+                                alert: alert,
+                                representativeItem: representative,
+                                supportPresentation: presentation,
+                                isExpanded: expandedAlertMemberIds.contains(alert.id),
+                                currentUserId: currentUserIdString,
+                                actedByName: nil,
+                                onDismiss: { alert in
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        _ = dismissedAlertMemberIds.insert(alert.id)
+                                    }
+                                },
+                                onToggleExpand: { alert in
+                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                        if expandedAlertMemberIds.contains(alert.id) {
+                                            _ = expandedAlertMemberIds.remove(alert.id)
+                                        } else {
+                                            _ = expandedAlertMemberIds.insert(alert.id)
+                                        }
+                                    }
+                                },
+                                onSnooze: { item, days in
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        serverPatternAlerts.removeAll { $0.id == item.id }
+                                    }
+                                    Task { await snoozeNotification(item, days: days) }
+                                },
+                                onSendMessage: { item, presentation in
+                                    selectedSupportMessage = AlertSupportSelection(
+                                        item: item,
+                                        alert: alert,
+                                        presentation: presentation
+                                    )
+                                },
+                                onStartSupportChallenge: { item, presentation in
+                                    selectedSupportChallenge = AlertSupportSelection(
+                                        item: item,
+                                        alert: alert,
+                                        presentation: presentation
+                                    )
+                                },
+                                onOpenAlertChat: { _ in
+                                    selectedFamilyNotification = representative
+                                }
+                            )
                         }
-                        Task { await snoozeNotification(item, days: days) }
                     }
-                )
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Family insights")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(DashboardDesign.primaryTextColor)
-                    Text("No alerts yet. As your family syncs more health data, insights will show up here.")
-                        .font(.system(size: 13))
-                        .foregroundColor(DashboardDesign.secondaryTextColor)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(DashboardDesign.cardPadding)
-                .background(DashboardDesign.glassCardBackground(tint: .white))
+            } else {
+                EmptyView()
             }
         }
         
+        @ViewBuilder
+        internal var suggestedSection: some View {
+            let raw = suggestedFeed()
+            let padContext = SuggestedFeedInsightContext(
+                familySnapshot: familySnapshot,
+                vitalityFactors: vitalityFactors,
+                familyVitalityScore: familyVitalityScore,
+                familyVitalityFourWeekDelta: familyVitalityFourWeekDelta,
+                trendCoverage: trendCoverage,
+                familyMembers: familyMembers,
+                familyDisplayName: resolvedFamilyName.isEmpty ? familyName : resolvedFamilyName,
+                viewerUserId: currentUserIdString
+            )
+            let feed = SuggestedFeedInsightPad.padIfNeeded(raw, context: padContext)
+            SuggestedCard(
+                feed: feed,
+                familyId: dataManager.currentFamilyId,
+                onOpenMemberDetail: { _, _ in
+                    // Fallback path when no familyId/uid pair is available.
+                    // The card uses NavigationLink directly when both are present.
+                },
+                onOpenMiyaChat: { _, _ in
+                    // TODO: dashboard-redesign: open Miya chat pre-loaded with
+                    // member context once helpCard CTAs carry that wiring.
+                    Task { await presentArloChat() }
+                },
+                onOpenWearableSetup: { userId in
+                    let key = userId?.lowercased()
+                    if let match = missingWearableNotifications.first(where: {
+                        ($0.memberUserId?.lowercased()) == key
+                    }) {
+                        selectedMissingWearableNotification = match
+                    }
+                }
+            )
+        }
+
         @ViewBuilder
         internal var missingWearableSection: some View {
             if !missingWearableNotifications.isEmpty {
@@ -1681,24 +1899,19 @@ struct DashboardView: View {
             if isLoadingFamilyVitality && familyVitalityScore == nil {
                 FamilyVitalityLoadingCard()
             } else if let score = familyVitalityScore {
-                FamilyVitalityCard(
-                    score: score,
-                    label: vitalityLabel(for: score),
-                    factors: vitalityFactors,
-                    includedMembersText: {
-                        if let withData = familyVitalityMembersWithData, let total = familyVitalityMembersTotal {
-                            return "Included members: \(withData)/\(total)"
-                        }
-                        return nil
-                    }(),
-                    progressScore: familyVitalityProgressScore,
-                    onFactorTapped: { tappedFactor in
-                        selectedFactor = tappedFactor
-                    },
-                    onFamilyChallenges: {
-                        showFamilyChallenges = true
-                    }
-                )
+                NavigationLink {
+                    familyVitalityOverviewDestination(for: score)
+                } label: {
+                    FamilyVitalityHeroCard(
+                        score: score,
+                        verdict: vitalityLabel(for: score),
+                        membersWithData: familyVitalityMembersWithData,
+                        membersTotal: familyVitalityMembersTotal,
+                        factors: vitalityFactors,
+                        fourWeekDelta: familyVitalityFourWeekDelta
+                    )
+                }
+                .buttonStyle(.plain)
             } else {
                 FamilyVitalityPlaceholderCard()
             }
@@ -1792,14 +2005,24 @@ struct DashboardView: View {
         }
         
         internal var badgesSection: some View {
-            FamilyBadgesCard(
-                daily: dailyBadgeWinners,
-                weekly: weeklyBadgeWinners,
-                weekStart: weeklyBadgeWeekStart,
-                weekEnd: weeklyBadgeWeekEnd,
-                isLoading: isComputingBadges,
-                onBadgeTapped: { selectedBadge = $0 }
-            )
+            let eligibleChampionsMembers = familyMembers.filter { !$0.isPending && $0.userId != nil }.count
+            return VStack(alignment: .leading, spacing: DashboardDesign.cardSpacing) {
+                if eligibleChampionsMembers >= 2, isComputingBadges || championsData != nil {
+                    ChampionsDashboardCard(
+                        data: championsData,
+                        isLoading: isComputingBadges,
+                        onTap: {
+                            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+                                isChampionsSheetOpen = true
+                            }
+                        }
+                    )
+                }
+                ChampionsDailyBadgesStrip(
+                    daily: dailyBadgeWinners,
+                    onBadgeTapped: { selectedBadge = $0 }
+                )
+            }
         }
     
     

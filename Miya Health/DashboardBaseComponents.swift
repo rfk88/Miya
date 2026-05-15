@@ -343,3 +343,43 @@ struct PillarStatusIndicator: View {
         }
     }
 }
+
+// MARK: - Vitality score track (0–100)
+
+/// Horizontal 0–100 progress track for family vitality overview / pillar rows (shared with dashboard styling).
+struct VitalityScoreTrack: View {
+    /// Displayed level 0...100 when `showsFill` is true.
+    let percent0To100: Int
+    /// When false, shows an empty track (no score / stale / no data).
+    let showsFill: Bool
+    var height: CGFloat = 7
+    /// Fill gradient; default matches member profile vitality bar.
+    var fillGradient: [Color] = [Color.miyaPrimary, Color.miyaTealLight]
+
+    private var progress: CGFloat {
+        guard showsFill else { return 0 }
+        return CGFloat(max(0, min(100, percent0To100))) / 100.0
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: height / 2)
+                    .fill(Color.miyaSurfaceGrey)
+                if progress > 0 {
+                    RoundedRectangle(cornerRadius: height / 2)
+                        .fill(
+                            LinearGradient(
+                                colors: fillGradient,
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: max(height * 0.5, geo.size.width * progress))
+                }
+            }
+        }
+        .frame(height: height)
+        .accessibilityLabel(showsFill ? "Score \(percent0To100) out of 100" : "No score")
+    }
+}

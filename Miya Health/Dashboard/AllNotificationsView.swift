@@ -9,6 +9,7 @@ struct AllNotificationsView: View {
     @State private var localNotifications: [FamilyNotificationItem] = []
     
     let notifications: [FamilyNotificationItem]
+    let currentUserId: String?
     let onTap: (FamilyNotificationItem) -> Void
     let onSnooze: (FamilyNotificationItem, Int?) -> Void
     
@@ -225,7 +226,7 @@ struct AllNotificationsView: View {
             }
             
             VStack(alignment: .leading, spacing: 4) {
-                Text(notification.displayLine)
+                Text(notification.displayLine(currentUserId: currentUserId))
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(DashboardDesign.secondaryTextColor)
                     .lineLimit(2)
@@ -398,6 +399,7 @@ struct AllNotificationsView: View {
 #Preview {
     AllNotificationsView(
         notifications: [],
+        currentUserId: nil,
         onTap: { _ in },
         onSnooze: { _, _ in }
     )

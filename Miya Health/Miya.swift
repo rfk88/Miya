@@ -76,3 +76,24 @@ extension Color {
     static let miyaEmerald = miyaTeal              // legacy alias → modern teal
     static let miyaSecondary = miyaAmber          // Keep amber as secondary
 }
+
+// MARK: - Dashboard Redesign Palette
+extension Color {
+    static let miyaDashboardBg = Color(hex: "FAF8F4")
+    static let miyaDashboardTextPrimary = Color(hex: "111827")
+    static let miyaDashboardTextSecond = Color(hex: "687083")
+
+    static let miyaHeroTealStart = Color(hex: "067B93")
+    static let miyaHeroTealMid = Color(hex: "04A3B5")
+    static let miyaHeroTealEnd = Color(hex: "00748F")
+    static let miyaHeroAccentTeal = Color(hex: "087F9B")
+
+    static let miyaSleepAccent = Color(hex: "9B5CFF")
+    static let miyaActivityAccent = Color(hex: "20BFA9")
+    static let miyaRecoveryAccent = Color(hex: "F5A623")
+
+    static let miyaAlertCoral = Color(hex: "E5584F")
+    static let miyaAlertSurface = Color(hex: "FFF7F4")
+    static let miyaAlertPillBg = Color(hex: "FFE6E1")
+    static let miyaAlertBorder = Color(hex: "F0D2CC")
+}

@@ -148,8 +148,11 @@ struct TrendInsight: Identifiable {
     let confidence: Double
     
     /// CTA label for the insight
-    var ctaLabel: String {
-        "View \(firstName)'s \(pillar.displayName.lowercased())"
+    func ctaLabel(viewerUserId: String? = nil) -> String {
+        if MemberProfileOwnVoice.isCurrentUser(memberUserId: memberUserId, authUserId: viewerUserId) {
+            return "View your \(pillar.displayName.lowercased())"
+        }
+        return "View \(firstName)'s \(pillar.displayName.lowercased())"
     }
     
     private var firstName: String {
@@ -214,7 +217,8 @@ struct FamilyVitalityTrendEngine {
     /// - Returns: (insights, coverage) where coverage reflects last 21d availability
     static func computeTrends(
         members: [FamilyMemberScore],
-        history: [String: [DailyScore]]
+        history: [String: [DailyScore]],
+        authUserId: String? = nil
     ) -> (insights: [TrendInsight], coverage: TrendCoverageStatus) {
         
         // Only analyze active, fresh members
@@ -296,7 +300,12 @@ struct FamilyVitalityTrendEngine {
             print("  ✅ Analyzing '\(member.name)' (userId: \(userId), \(scores.count) rows, \(daysAvailable) unique days)")
             
             // Analyze each pillar using per-member coverage
-            let pillarInsights = analyzeMemberPillars(member: member, scores: scores, daysAvailable: daysAvailable)
+            let pillarInsights = analyzeMemberPillars(
+                member: member,
+                scores: scores,
+                daysAvailable: daysAvailable,
+                authUserId: authUserId
+            )
             allInsights.append(contentsOf: pillarInsights)
             print("    Generated \(pillarInsights.count) insights for this member")
         }
@@ -349,14 +358,21 @@ struct FamilyVitalityTrendEngine {
     private static func analyzeMemberPillars(
         member: FamilyMemberScore,
         scores: [DailyScore],
-        daysAvailable: Int
+        daysAvailable: Int,
+        authUserId: String?
     ) -> [TrendInsight] {
         
         var insights: [TrendInsight] = []
         
         // Analyze each pillar
         for pillar in VitalityPillar.allCases {
-            if let insight = analyzePillar(pillar, member: member, scores: scores, daysAvailable: daysAvailable) {
+            if let insight = analyzePillar(
+                pillar,
+                member: member,
+                scores: scores,
+                daysAvailable: daysAvailable,
+                authUserId: authUserId
+            ) {
                 insights.append(insight)
             }
         }
@@ -368,7 +384,8 @@ struct FamilyVitalityTrendEngine {
         _ pillar: VitalityPillar,
         member: FamilyMemberScore,
         scores: [DailyScore],
-        daysAvailable: Int
+        daysAvailable: Int,
+        authUserId: String?
     ) -> TrendInsight? {
         
         // Extract pillar points and aligned dayKeys from history (only days with this pillar non-nil)
@@ -400,7 +417,10 @@ struct FamilyVitalityTrendEngine {
             let parts = member.name.split(separator: " ")
             return parts.first.map(String.init) ?? member.name
         }()
-        
+        let memberUserId = member.userId?.lowercased() ?? ""
+        let isSelf = member.isMe || MemberProfileOwnVoice.isCurrentUser(memberUserId: memberUserId, authUserId: authUserId)
+        let titlePrefix = isSelf ? "Your" : firstName
+
         // Split into recent (last 3 days) and baseline (previous 7 days)
         let recentCount = min(3, pillarPoints.count)
         let recent = Array(pillarPoints.suffix(recentCount))
@@ -421,11 +441,13 @@ struct FamilyVitalityTrendEngine {
         if allRecentInBottomQuartile && recent.count >= requiredConsecutiveForStreak && longestStreak >= requiredConsecutiveForStreak {
             return TrendInsight(
                 memberName: member.name,
-                memberUserId: member.userId?.lowercased() ?? "",
+                memberUserId: memberUserId,
                 pillar: pillar,
                 severity: .attention,
-                title: "\(firstName) · \(pillar.displayName)",
-                body: "\(pillar.displayName) has been in the lower range for 3 days. \(actionSuggestion(for: pillar))",
+                title: "\(titlePrefix) · \(pillar.displayName)",
+                body: isSelf
+                    ? "Your \(pillar.displayName.lowercased()) has been in the lower range for 3 days. \(actionSuggestion(for: pillar))"
+                    : "\(pillar.displayName) has been in the lower range for 3 days. \(actionSuggestion(for: pillar))",
                 debugWhy: "3-day streak in bottom quartile (threshold: \(bottomQuartileThreshold), recent: \(recent))",
                 windowDays: windowDays,
                 requiredDays: requiredMinDaysForAnyInsight,
@@ -438,13 +460,20 @@ struct FamilyVitalityTrendEngine {
         if baseline.count >= 5 && baselineAvg > 0 && recent.count >= 3 {
             let dropPercent = (baselineAvg - recentAvg) / baselineAvg
             if dropPercent >= 0.20 {
+                let possessive = MemberProfileOwnVoice.possessive(
+                    firstName: firstName,
+                    memberUserId: memberUserId,
+                    authUserId: authUserId
+                )
                 return TrendInsight(
                     memberName: member.name,
-                    memberUserId: member.userId?.lowercased() ?? "",
+                    memberUserId: memberUserId,
                     pillar: pillar,
                     severity: .attention,
-                    title: "\(firstName) · \(pillar.displayName)",
-                    body: "\(pillar.displayName) recovery is below \(firstName)'s recent norm. \(actionSuggestion(for: pillar))",
+                    title: "\(titlePrefix) · \(pillar.displayName)",
+                    body: isSelf
+                        ? "Your \(pillar.displayName.lowercased()) is below your recent norm. \(actionSuggestion(for: pillar))"
+                        : "\(pillar.displayName) is below \(possessive) recent norm. \(actionSuggestion(for: pillar))",
                     debugWhy: "20%+ drop (baseline: \(Int(baselineAvg)), recent: \(Int(recentAvg)), drop: \(Int(dropPercent * 100))%)",
                     windowDays: windowDays,
                     requiredDays: requiredMinDaysForAnyInsight,
@@ -458,13 +487,20 @@ struct FamilyVitalityTrendEngine {
         if baseline.count >= 5 && baselineAvg > 0 && recent.count >= 3 {
             let gainPercent = (recentAvg - baselineAvg) / baselineAvg
             if gainPercent >= 0.15 {
+                let possessive = MemberProfileOwnVoice.possessive(
+                    firstName: firstName,
+                    memberUserId: memberUserId,
+                    authUserId: authUserId
+                )
                 return TrendInsight(
                     memberName: member.name,
-                    memberUserId: member.userId?.lowercased() ?? "",
+                    memberUserId: memberUserId,
                     pillar: pillar,
                     severity: .celebrate,
-                    title: "\(firstName) · \(pillar.displayName)",
-                    body: "\(firstName)'s \(pillar.displayName.lowercased()) is improving! Keep the momentum going.",
+                    title: "\(titlePrefix) · \(pillar.displayName)",
+                    body: isSelf
+                        ? "Your \(pillar.displayName.lowercased()) is improving! Keep the momentum going."
+                        : "\(possessive.capitalized) \(pillar.displayName.lowercased()) is improving! Keep the momentum going.",
                     debugWhy: "15%+ rebound (baseline: \(Int(baselineAvg)), recent: \(Int(recentAvg)), gain: \(Int(gainPercent * 100))%)",
                     windowDays: windowDays,
                     requiredDays: requiredMinDaysForAnyInsight,

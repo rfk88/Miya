@@ -7,6 +7,7 @@
 
 import Foundation
 import Supabase
+import Auth
 
 enum AuthenticatedLaunchHydration {
     // MARK: - Session readiness (after signInWithIdToken / signIn)
@@ -155,6 +156,7 @@ enum AuthenticatedLaunchHydration {
         }
 
         await onboardingManager.refreshGuidedContextFromDB(dataManager: dataManager)
+        onboardingManager.applyGuidedInvitedHealthStepClamp()
         await dataManager.refreshAIThirdPartyConsentFromServer()
     }
 }

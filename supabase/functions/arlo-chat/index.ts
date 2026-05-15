@@ -143,6 +143,56 @@ function buildFamilySnapshotMessage(snapshot: FamilySnapshot | null): ChatMessag
   return { role: "system", content: lines.join("\n") };
 }
 
+function buildDashboardContextMessage(raw: unknown): ChatMessage | null {
+  if (!raw || typeof raw !== "object") return null;
+  const ctx = raw as Record<string, any>;
+  const lines: string[] = [
+    "Current Dashboard Context (preferred source of truth for this reply; use this before any backend snapshot and do not invent missing health facts):",
+  ];
+
+  if (typeof ctx.familyScore === "number") {
+    lines.push(`Family vitality score: ${Math.round(ctx.familyScore)}/100.`);
+  }
+  if (typeof ctx.familyScoreLabel === "string" && ctx.familyScoreLabel.trim()) {
+    lines.push(`Family vitality label: ${ctx.familyScoreLabel.trim()}.`);
+  }
+  if (typeof ctx.dataFreshnessSummary === "string" && ctx.dataFreshnessSummary.trim()) {
+    lines.push(`Data freshness: ${ctx.dataFreshnessSummary.trim()}`);
+  }
+  if (typeof ctx.memberCount === "number") {
+    lines.push(`Members loaded: ${Math.round(ctx.memberCount)}.`);
+  }
+
+  if (Array.isArray(ctx.pillars) && ctx.pillars.length > 0) {
+    lines.push("Pillars:");
+    for (const p of ctx.pillars.slice(0, 6)) {
+      if (!p || typeof p !== "object") continue;
+      const name = String(p.name ?? "").trim() || "Unknown";
+      const score = typeof p.score === "number" ? `${Math.round(p.score)}/100` : "unknown score";
+      const label = String(p.label ?? "").trim() || "Unknown";
+      lines.push(`- ${name}: ${score}, ${label}.`);
+    }
+  }
+
+  if (Array.isArray(ctx.activeAlerts) && ctx.activeAlerts.length > 0) {
+    lines.push("Active relevant alerts:");
+    for (const alert of ctx.activeAlerts.slice(0, 5)) {
+      if (!alert || typeof alert !== "object") continue;
+      const memberName = String(alert.memberName ?? "").trim() || "A family member";
+      const pillar = String(alert.pillar ?? "").trim() || "a pillar";
+      const days =
+        typeof alert.durationDays === "number"
+          ? ` for ${Math.round(alert.durationDays)} days`
+          : "";
+      lines.push(`- ${memberName}: ${pillar}${days}.`);
+    }
+  } else {
+    lines.push("Active relevant alerts: none.");
+  }
+
+  return { role: "system", content: lines.join("\n") };
+}
+
 async function fetchFamilySnapshotFromSupabase(opts: {
   supabaseUrl: string;
   serviceRoleKey: string;
@@ -278,10 +328,10 @@ You are Miya: a warm, trustworthy family wellbeing coach (British English). You 
 
 TRUST CONTRACT (always follow):
 1) Acknowledge the human concern first in plain language when the user sounds worried or frustrated (one short sentence).
-2) Say what you can see from the Family Snapshot when it is present. If the snapshot is missing or thin, say clearly that your view is limited and avoid guessing.
+2) Say what you can see from the Current Dashboard Context or Family Snapshot when present. If the available context is missing or thin, say clearly that your view is limited and avoid guessing.
 3) Never invent raw numbers, lab results, diagnoses, or medical certainty. Do not diagnose conditions or imply you examined someone.
-4) You MAY use overview labels and trends from the snapshot: Excellent / Good / Okay / Could be improved, and improving / steady / slipping. Do not show raw scores unless the user explicitly asks for numbers.
-5) If the user asks "who", "which", or "most" and per-member lines appear in the snapshot notes, compare members fairly and specifically. If those lines are absent, say you don't have member-level detail in what you can see.
+4) You MAY use overview labels, pillar states, and trends from the current context: Excellent / Good / Okay / Could be improved, and improving / steady / slipping. Do not show raw scores unless the user explicitly asks for numbers.
+5) If the user asks "who", "which", or "most" and per-member or active-alert lines appear in the current context, compare members fairly and specifically. If those lines are absent, say you don't have member-level detail in what you can see.
 6) Offer one realistic next step the family could try in the next 24 hours when it fits — small, kind, and specific.
 7) If you need to learn more, end with at most ONE question, as the last sentence. Do not ask two questions in one reply.
 8) Vary your wording; avoid repeating the same stock phrases every turn (e.g. "7-day plan", "deep dive") unless the user asks.
@@ -312,6 +362,7 @@ Deno.serve(async (req) => {
     const messages = (body?.messages ?? []) as ChatMessage[];
     const firstName = String(body?.firstName ?? "");
     const openingLine = String(body?.openingLine ?? "");
+    const dashboardContext = body?.dashboardContext ?? null;
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return new Response(JSON.stringify({ error: "Missing messages array." }), {
@@ -385,11 +436,17 @@ Deno.serve(async (req) => {
       });
     }
 
+    const dashboardContextSystem = buildDashboardContextMessage(dashboardContext);
+
     let familySnapshot: FamilySnapshot | null = null;
-    const ts0 = Date.now();
-    console.log("arlo-chat: fetching family snapshot");
-    familySnapshot = await fetchFamilySnapshotFromSupabase({ supabaseUrl, serviceRoleKey, jwt });
-    console.log("arlo-chat: snapshot present", !!familySnapshot, "ms", Date.now() - ts0);
+    if (!dashboardContextSystem) {
+      const ts0 = Date.now();
+      console.log("arlo-chat: fetching family snapshot");
+      familySnapshot = await fetchFamilySnapshotFromSupabase({ supabaseUrl, serviceRoleKey, jwt });
+      console.log("arlo-chat: snapshot present", !!familySnapshot, "ms", Date.now() - ts0);
+    } else {
+      console.log("arlo-chat: using client dashboard context");
+    }
 
     const system: ChatMessage = {
       role: "system",
@@ -399,7 +456,12 @@ Deno.serve(async (req) => {
     const contextBits: string[] = [];
     if (firstName.trim()) contextBits.push(`User first name: ${firstName.trim()}.`);
     if (openingLine.trim()) contextBits.push(`Opening context from the app: ${openingLine.trim()}.`);
-    if (!familySnapshot) {
+    if (dashboardContextSystem) {
+      contextBits.push(
+        "Use the Current Dashboard Context as the most current truth. If it says there are no active relevant alerts, do not imply a current warning.",
+      );
+    }
+    if (!dashboardContextSystem && !familySnapshot) {
       contextBits.push(
         "No Family Snapshot is available for this reply — say so briefly and avoid fabricating family metrics.",
       );
@@ -417,6 +479,7 @@ Deno.serve(async (req) => {
 
     const input: ChatMessage[] = [
       system,
+      ...(dashboardContextSystem ? [dashboardContextSystem] : []),
       ...(snapshotSystem ? [snapshotSystem] : []),
       ...(contextSystem ? [contextSystem] : []),
       ...recentMessages,

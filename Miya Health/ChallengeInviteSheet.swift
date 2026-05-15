@@ -24,11 +24,11 @@ struct ChallengeInviteSheet: View {
     private var bodyCopy: String {
         switch pillar {
         case .sleep:
-            return "Small wins each night. Miya will track your progress."
+            return "Goal: protect your sleep window for 5 of the next 7 nights. Miya will track your progress."
         case .movement:
-            return "Small steps add up. Miya will track your progress."
+            return "Goal: hit your movement target or add a 10-minute walk for 5 of the next 7 days. Miya will track your progress."
         case .stress:
-            return "A few minutes of calm each day. Miya will track your progress."
+            return "Goal: keep the last hour lighter for 5 of the next 7 days. Miya will track your progress."
         }
     }
     
@@ -41,7 +41,7 @@ struct ChallengeInviteSheet: View {
                     .font(.system(size: 48))
                     .foregroundStyle(Color.miyaPrimary)
                 
-                Text("\(senderName) started a 7-day \(pillar.displayName) challenge for you.")
+                Text("\(senderName) invited you to a 7-day \(pillar.displayName.lowercased()) reset.")
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundColor(.primary)
                     .multilineTextAlignment(.center)
@@ -86,7 +86,7 @@ struct ChallengeInviteSheet: View {
                     Button {
                         declineTapped()
                     } label: {
-                        Text("Decline")
+                        Text("Not for me")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundColor(.red.opacity(0.9))
                     }

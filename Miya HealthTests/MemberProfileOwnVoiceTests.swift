@@ -112,4 +112,86 @@ final class MemberProfileOwnVoiceTests: XCTestCase {
             "What am I doing well?"
         )
     }
+
+    // MARK: - possessive / patternAlertBody
+
+    private let joshId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    private let emmaId = "11111111-1111-1111-1111-111111111111"
+
+    func test_possessive_selfReturnsYour() {
+        XCTAssertEqual(
+            MemberProfileOwnVoice.possessive(firstName: "Josh", memberUserId: joshId, authUserId: joshId),
+            "your"
+        )
+    }
+
+    func test_possessive_otherReturnsNamePossessive() {
+        XCTAssertEqual(
+            MemberProfileOwnVoice.possessive(firstName: "Josh", memberUserId: emmaId, authUserId: joshId),
+            "Josh's"
+        )
+    }
+
+    func test_possessive_nameEndingInS() {
+        XCTAssertEqual(
+            MemberProfileOwnVoice.possessiveThirdPerson(firstName: "James"),
+            "James'"
+        )
+    }
+
+    func test_patternAlertBody_selfUsesYourBaseline() {
+        let body = MemberProfileOwnVoice.patternAlertBody(
+            metricDisplay: "Resting HR",
+            patternDesc: "below",
+            deviationText: "12%",
+            levelDesc: "7d",
+            firstName: "Josh",
+            memberUserId: joshId,
+            authUserId: joshId
+        )
+        XCTAssertTrue(body.contains("your baseline"), "got: \(body)")
+        XCTAssertFalse(body.localizedCaseInsensitiveContains("josh's"))
+    }
+
+    func test_patternAlertBody_otherUsesNameBaseline() {
+        let body = MemberProfileOwnVoice.patternAlertBody(
+            metricDisplay: "Resting HR",
+            patternDesc: "below",
+            deviationText: "12%",
+            levelDesc: "7d",
+            firstName: "Emma",
+            memberUserId: emmaId,
+            authUserId: joshId
+        )
+        XCTAssertTrue(body.contains("Emma's baseline"), "got: \(body)")
+    }
+
+    func test_metricBelowBaselineSummary_self() {
+        XCTAssertEqual(
+            MemberProfileOwnVoice.metricBelowBaselineSummary(
+                pillarLabels: ["Sleep"],
+                firstName: "Josh",
+                memberUserId: joshId,
+                authUserId: joshId
+            ),
+            "Your Sleep low"
+        )
+    }
+
+    func test_metricBelowBaselineSummary_other() {
+        XCTAssertEqual(
+            MemberProfileOwnVoice.metricBelowBaselineSummary(
+                pillarLabels: ["Sleep", "Recovery"],
+                firstName: "Josh",
+                memberUserId: emmaId,
+                authUserId: joshId
+            ),
+            "Josh's Sleep & Recovery low"
+        )
+    }
+
+    func test_isCurrentUser_nilIds() {
+        XCTAssertFalse(MemberProfileOwnVoice.isCurrentUser(memberUserId: nil, authUserId: joshId))
+        XCTAssertFalse(MemberProfileOwnVoice.isCurrentUser(memberUserId: joshId, authUserId: nil))
+    }
 }

@@ -8,6 +8,7 @@
 import SwiftUI
 import Combine
 import Supabase
+import Auth
 import Foundation
 
 @MainActor

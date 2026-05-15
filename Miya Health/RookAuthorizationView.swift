@@ -129,33 +129,37 @@ struct RookAuthorizationFlowView: View {
                         .foregroundColor(.miyaTextSecondary)
                 }
             } else if let error = errorMessage {
-                VStack(spacing: 24) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 48))
-                        .foregroundColor(.orange)
-                    
-                    Text("Authorization Error")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundColor(.miyaTextPrimary)
-                    
-                    Text(error)
-                        .font(.system(size: 15))
-                        .foregroundColor(.miyaTextSecondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    
-                    Button {
-                        dismiss()
-                    } label: {
-                        Text("Close")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .background(Color.miyaPrimary)
-                            .cornerRadius(14)
+                ScrollView {
+                    VStack(spacing: 24) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 48))
+                            .foregroundColor(.orange)
+                        
+                        Text("Authorization Error")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundColor(.miyaTextPrimary)
+                        
+                        Text(error)
+                            .font(.system(size: 15))
+                            .foregroundColor(.miyaTextSecondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                        
+                        Button {
+                            dismiss()
+                        } label: {
+                            Text("Close")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(Color.miyaPrimary)
+                                .cornerRadius(14)
+                        }
+                        .padding(.horizontal, 24)
                     }
-                    .padding(.horizontal, 24)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
                 }
             } else if let url = authorizationURL {
                 // Present ASWebAuthenticationSession

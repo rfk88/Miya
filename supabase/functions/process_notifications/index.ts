@@ -237,6 +237,17 @@ function formatPillar(pillar: string): string {
   return map[pillar] ?? pillar;
 }
 
+// Display label for a competitive-challenge focus key (mirrors ChallengeFocus.displayName on iOS).
+function formatCompetitiveFocus(focus: string): string {
+  const map: Record<string, string> = {
+    sleep: "Sleep",
+    movement: "Activity",
+    stress: "Recovery",
+    steps: "Steps",
+  };
+  return map[focus] ?? "Challenge";
+}
+
 function driftBand(payload: any): "moderate" | "marked" {
   const p = payload.deviation_percent;
   if (p == null || typeof p !== "number" || !Number.isFinite(p)) return "moderate";
@@ -467,6 +478,85 @@ function buildAlert(
         body:
           `${memberName} didn’t jump in this time—that’s okay. A gentle real-life hello might feel better than another ping.`,
       };
+
+    case "competitive_challenge_invite": {
+      const focusLabel = formatCompetitiveFocus(payload.focus ?? "");
+      const modeLabel = payload.mode === "family_brawl" ? "family brawl" : "head-to-head";
+      return {
+        title: `${memberName} called you out — ${focusLabel}`,
+        body: `${modeLabel} this week. Highest ${focusLabel.toLowerCase()} wins. Open Miya to accept.`,
+      };
+    }
+
+    case "competitive_challenge_invite_accepted": {
+      const focusLabel = formatCompetitiveFocus(payload.focus ?? "");
+      const pendingCount = Number(payload.pending_count ?? 0);
+      return {
+        title: `${memberName} is in`,
+        body: pendingCount > 0
+          ? `Just ${pendingCount} more ${pendingCount === 1 ? "person" : "people"} to go before the ${focusLabel.toLowerCase()} week kicks off.`
+          : `Everyone’s ready. The challenge is starting.`,
+      };
+    }
+
+    case "competitive_challenge_started": {
+      const focusLabel = formatCompetitiveFocus(payload.focus ?? "");
+      return {
+        title: `Game on — ${focusLabel} challenge starts now`,
+        body: `Mon–Sun. Best score wins. Open Miya to see the matchup.`,
+      };
+    }
+
+    case "competitive_challenge_declined": {
+      return {
+        title: `${memberName} sat this one out`,
+        body: `Challenge cancelled for everyone — no hard feelings. Start a fresh one whenever you’re ready.`,
+      };
+    }
+
+    case "competitive_challenge_lead_change": {
+      const focusLabel = formatCompetitiveFocus(payload.focus ?? "");
+      const leaderName = (payload.leader_name as string | undefined) ?? memberName;
+      const youAhead = !!payload.you_ahead;
+      return youAhead
+        ? {
+            title: `You’re leading the ${focusLabel.toLowerCase()} challenge`,
+            body: `Hold the lead through Sunday — open Miya to see by how much.`,
+          }
+        : {
+            title: `${leaderName} just took the lead`,
+            body: `Still anyone’s week. Open Miya to see the gap.`,
+          };
+    }
+
+    case "competitive_challenge_final_push": {
+      const focusLabel = formatCompetitiveFocus(payload.focus ?? "");
+      return {
+        title: `One day left — ${focusLabel} challenge`,
+        body: `It’s close enough to flip. Open Miya for the final tally.`,
+      };
+    }
+
+    case "competitive_challenge_result": {
+      const focusLabel = formatCompetitiveFocus(payload.focus ?? "");
+      const youWon = !!payload.you_won;
+      const draw = payload.outcome === "draw";
+      if (draw) {
+        return {
+          title: `Photo finish — ${focusLabel.toLowerCase()} challenge tied`,
+          body: `Decide it with a tie-break or run it back. Open Miya to choose.`,
+        };
+      }
+      return youWon
+        ? {
+            title: `You won the ${focusLabel.toLowerCase()} challenge`,
+            body: `Champions points earned. Open Miya to see the breakdown.`,
+          }
+        : {
+            title: `${memberName} took the ${focusLabel.toLowerCase()} challenge`,
+            body: `Open Miya to see the final scores — and run it back if you want.`,
+          };
+    }
 
     case "challenge_daily_member": {
       const d = daysEval != null ? String(daysEval) : "?";

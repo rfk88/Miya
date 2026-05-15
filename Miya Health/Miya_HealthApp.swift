@@ -9,6 +9,7 @@
 import SwiftUI
 import RookSDK
 import Supabase
+import Auth
 import Combine
 import UIKit
 
@@ -87,6 +88,7 @@ struct Miya_HealthApp: App {
                     // the next session in the same launch can stay on “Syncing your profile…” forever.
                     onboardingManager.isHydrated = true
                     UserDefaults.standard.removeObject(forKey: "miya.hasSeenFamilyIntro")
+                    UserDefaults.standard.removeObject(forKey: "miya.pendingApnsDeviceToken")
                     appSessionId = UUID()
                     print("🔄 App: Session reset complete (logout)")
                 }
@@ -106,6 +108,10 @@ struct Miya_HealthApp: App {
                         // after extended background time.
                         Task {
                             await reconcileOnForeground()
+                        }
+                        PushNotificationRegistration.registerIfAuthorized()
+                        Task {
+                            await PushNotificationRegistration.retryPendingTokenUpload()
                         }
                     }
                 }
@@ -139,7 +145,8 @@ extension Miya_HealthApp {
 #endif
 
         if authManager.isAuthenticated {
-            UIApplication.shared.registerForRemoteNotifications()
+            PushNotificationRegistration.registerIfAuthorized()
+            await PushNotificationRegistration.retryPendingTokenUpload()
             await subscriptionManager.refreshForCurrentSession()
         }
 
@@ -218,6 +225,7 @@ extension Miya_HealthApp {
         do {
             _ = try await SupabaseConfig.client.auth.session
             await dataManager.refreshAIThirdPartyConsentFromServer()
+            await PushNotificationRegistration.retryPendingTokenUpload()
         } catch {
 #if DEBUG
             print("⚠️ ForegroundReconcile: session invalid after foreground — \(error.localizedDescription)")

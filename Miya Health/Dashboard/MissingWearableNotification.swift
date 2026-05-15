@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Supabase
+import Auth
 
 // MARK: - Missing Wearable Notification Model
 

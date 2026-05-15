@@ -750,127 +750,134 @@ struct WearableSelectionView: View {
                 // Full-screen animated loading until connection is verified; keeps user engaged
                 ConnectingWearableView(wearableName: connectingWearableName ?? "wearable")
             } else {
-            VStack(spacing: 24) {
-                
-                // Progress bar: Step 3 of 8 (only show in onboarding mode)
-                if !isReconnectMode {
-                    OnboardingProgressBar(currentStep: currentStep, totalSteps: totalSteps)
-                        .padding(.top, 16)
-                }
-                
-                // Title + subtitle
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(isReconnectMode ? "Reconnect Wearables" : "Link your health tech")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.miyaTextPrimary)
-                    
-                    Text(isReconnectMode
-                         ? "Reconnect your wearables to refresh your vitality data and recalculate your baseline."
-                         : (isGuidedSetupInvite
-                            ? "Connect a wearable so we can calculate your vitality while your admin completes the rest of your health profile."
-                            : "We’ll sync automatically — set it and forget it ✨"))
-                        .font(.system(size: 15))
-                        .foregroundColor(.miyaTextSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, isReconnectMode ? 16 : 0)
-                
-                // Wearable list (single card pattern; Apple uses Rook SDK path only)
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(WearableType.linkScreenOrder) { wearable in
-                        WearableCard(
-                            wearable: wearable,
-                            isSelected: selectedWearable == wearable,
-                            isConnecting: isConnecting && selectedWearable == wearable,
-                            isConnected: connectedWearables.contains(wearable)
-                        ) {
-                            if wearable == .appleWatch {
-                                presentRookConnect()
-                            } else {
-                                handleConnectTapped(for: wearable)
+                VStack(spacing: 0) {
+                    ScrollView {
+                        VStack(spacing: 24) {
+                            // Progress bar: Step 3 of 8 (only show in onboarding mode)
+                            if !isReconnectMode {
+                                OnboardingProgressBar(currentStep: currentStep, totalSteps: totalSteps)
+                                    .padding(.top, 16)
+                            }
+                            
+                            // Title + subtitle
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(isReconnectMode ? "Reconnect Wearables" : "Link your health tech")
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundColor(.miyaTextPrimary)
+                                
+                                Text(isReconnectMode
+                                     ? "Reconnect your wearables to refresh your vitality data and recalculate your baseline."
+                                     : (isGuidedSetupInvite
+                                        ? "Connect a wearable so we can calculate your vitality while your admin completes the rest of your health profile."
+                                        : "We’ll sync automatically — set it and forget it ✨"))
+                                    .font(.system(size: 15))
+                                    .foregroundColor(.miyaTextSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, isReconnectMode ? 16 : 0)
+                            
+                            // Wearable list (single card pattern; Apple uses Rook SDK path only)
+                            VStack(alignment: .leading, spacing: 12) {
+                                ForEach(WearableType.linkScreenOrder) { wearable in
+                                    WearableCard(
+                                        wearable: wearable,
+                                        isSelected: selectedWearable == wearable,
+                                        isConnecting: isConnecting && selectedWearable == wearable,
+                                        isConnected: connectedWearables.contains(wearable)
+                                    ) {
+                                        if wearable == .appleWatch {
+                                            presentRookConnect()
+                                        } else {
+                                            handleConnectTapped(for: wearable)
+                                        }
+                                    }
+                                }
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 8)
                     }
-                }
-                
-                Spacer()
-                
-                // Back + Continue / Done
-                HStack(spacing: 12) {
-                    if !isReconnectMode {
-                        Button {
-                            OnboardingBackAction.perform(
-                                behavior: onboardingBackBehavior,
-                                resumeStepBack: onboardingResumeStepBack,
-                                dismiss: dismiss,
-                                hideKeyboardFirst: false
-                            )
-                        } label: {
-                            Text("Back")
-                                .font(.system(size: 15, weight: .medium))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(Color.clear)
-                                .foregroundColor(.miyaTextSecondary)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .stroke(Color.miyaBackground, lineWidth: 1)
+                    .scrollDismissesKeyboard(.interactively)
+                    
+                    // Back + Continue / Done (pinned so always reachable on small screens)
+                    HStack(spacing: 12) {
+                        if !isReconnectMode {
+                            Button {
+                                OnboardingBackAction.perform(
+                                    behavior: onboardingBackBehavior,
+                                    resumeStepBack: onboardingResumeStepBack,
+                                    dismiss: dismiss,
+                                    hideKeyboardFirst: false
                                 )
-                        }
-                    }
-                    
-                    // In reconnect mode, just show Done button
-                    if isReconnectMode {
-                        Button {
-                            dismiss()
-                        } label: {
-                            Text("Done")
-                                .font(.system(size: 16, weight: .semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(Color.miyaPrimary)
-                                .foregroundColor(.white)
-                                .cornerRadius(16)
-                        }
-                    } else {
-                        // Navigation depends on whether this is a guided setup invite
-                        if isGuidedSetupInvite {
-                            // Guided Setup: After wearables, take them directly to onboarding complete (dashboard).
-                            NavigationLink {
-                                OnboardingCompleteView(membersCount: 0)
-                                    .environmentObject(onboardingManager)
-                                    .environmentObject(dataManager)
                             } label: {
-                                Text("Continue")
+                                Text("Back")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(Color.clear)
+                                    .foregroundColor(.miyaTextSecondary)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(Color.miyaBackground, lineWidth: 1)
+                                    )
+                            }
+                        }
+                        
+                        // In reconnect mode, just show Done button
+                        if isReconnectMode {
+                            Button {
+                                dismiss()
+                            } label: {
+                                Text("Done")
                                     .font(.system(size: 16, weight: .semibold))
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 12)
-                                    .background(canContinue ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
+                                    .background(Color.miyaPrimary)
                                     .foregroundColor(.white)
                                     .cornerRadius(16)
                             }
-                            .disabled(!canContinue)
                         } else {
-                            // Normal flow: Go to Step 4 (AboutYouView)
-                            NavigationLink {
-                                AboutYouView()
-                            } label: {
-                                Text("Continue")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 12)
-                                    .background(canContinue ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
-                                    .foregroundColor(.white)
-                                    .cornerRadius(16)
+                            // Navigation depends on whether this is a guided setup invite
+                            if isGuidedSetupInvite {
+                                // Guided Setup: After wearables, take them directly to onboarding complete (dashboard).
+                                NavigationLink {
+                                    OnboardingCompleteView(membersCount: 0)
+                                        .environmentObject(onboardingManager)
+                                        .environmentObject(dataManager)
+                                } label: {
+                                    Text("Continue")
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 12)
+                                        .background(canContinue ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
+                                        .foregroundColor(.white)
+                                        .cornerRadius(16)
+                                }
+                                .disabled(!canContinue)
+                            } else {
+                                // Normal flow: Go to Step 4 (AboutYouView)
+                                NavigationLink {
+                                    AboutYouView()
+                                } label: {
+                                    Text("Continue")
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 12)
+                                        .background(canContinue ? Color.miyaPrimary : Color.miyaPrimary.opacity(0.5))
+                                        .foregroundColor(.white)
+                                        .cornerRadius(16)
+                                }
+                                .disabled(!canContinue)
                             }
-                            .disabled(!canContinue)
                         }
                     }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 8)
+                    .padding(.bottom, 16)
+                    .background(Color.miyaBackground)
                 }
-                .padding(.bottom, 16)
-            }
-            .padding(.horizontal, 24)
             }
         }
         .alert("Error", isPresented: $showError) {

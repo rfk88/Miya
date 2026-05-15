@@ -1,13 +1,95 @@
 import Foundation
 
-/// First-person vs third-person copy for the family member profile and overview chat. Pure helpers — unit tested.
+/// First-person vs third-person copy for alerts, notifications, profile, and chat. Pure helpers — unit tested.
 enum MemberProfileOwnVoice {
 
     /// `true` when the profile row said “me”, or when `memberUserId` matches the signed-in auth id (covers missing/wrong `isMe` on the family payload).
     static func isViewingOwnProfile(isCurrentUser: Bool, memberUserId: String, authUserId: String?) -> Bool {
         if isCurrentUser { return true }
-        guard let auth = authUserId?.lowercased(), !auth.isEmpty, !memberUserId.isEmpty else { return false }
+        return isCurrentUser(memberUserId: memberUserId, authUserId: authUserId)
+    }
+
+    /// `true` when `memberUserId` matches the signed-in auth user.
+    static func isCurrentUser(memberUserId: String?, authUserId: String?) -> Bool {
+        guard let memberUserId, !memberUserId.isEmpty,
+              let auth = authUserId?.lowercased(), !auth.isEmpty else { return false }
         return auth == memberUserId.lowercased()
+    }
+
+    /// Possessive for copy: `"your"` when self, else `"Josh's"` / `"James'"` for names ending in s.
+    static func possessive(firstName: String, memberUserId: String?, authUserId: String?) -> String {
+        if isCurrentUser(memberUserId: memberUserId, authUserId: authUserId) {
+            return "your"
+        }
+        return possessiveThirdPerson(firstName: firstName)
+    }
+
+    /// Third-person possessive only (e.g. `"Josh's"`, `"James'"`).
+    static func possessiveThirdPerson(firstName: String) -> String {
+        let name = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return "their" }
+        let first = name.split(separator: " ").first.map(String.init) ?? name
+        if first.lowercased().hasSuffix("s") {
+            return "\(first)'"
+        }
+        return "\(first)'s"
+    }
+
+    /// `"your baseline"` or `"Josh's baseline"`.
+    static func baselinePhrase(firstName: String, memberUserId: String?, authUserId: String?) -> String {
+        "\(possessive(firstName: firstName, memberUserId: memberUserId, authUserId: authUserId)) baseline"
+    }
+
+    /// Pattern-alert title: e.g. `"Resting HR below baseline"`.
+    static func patternAlertTitle(metricDisplay: String, patternDesc: String) -> String {
+        "\(metricDisplay) \(patternDesc) baseline"
+    }
+
+    /// Pattern-alert body for dashboard / notifications.
+    static func patternAlertBody(
+        metricDisplay: String,
+        patternDesc: String,
+        deviationText: String,
+        levelDesc: String,
+        firstName: String,
+        memberUserId: String?,
+        authUserId: String?
+    ) -> String {
+        let baseline = baselinePhrase(firstName: firstName, memberUserId: memberUserId, authUserId: authUserId)
+        if deviationText.isEmpty {
+            return "\(metricDisplay) has been \(patternDesc) \(baseline) for \(levelDesc)."
+        }
+        return "\(metricDisplay) is \(deviationText) \(patternDesc) \(baseline) (last \(levelDesc))."
+    }
+
+    /// Grouped notification summary: `"Your Sleep low"` vs `"Josh's Sleep low"`.
+    static func metricBelowBaselineSummary(
+        pillarLabels: [String],
+        firstName: String,
+        memberUserId: String?,
+        authUserId: String?
+    ) -> String {
+        let poss = possessive(firstName: firstName, memberUserId: memberUserId, authUserId: authUserId)
+        let joined: String
+        if pillarLabels.isEmpty {
+            joined = "Check in"
+        } else if pillarLabels.count == 1 {
+            joined = pillarLabels[0]
+        } else if pillarLabels.count == 2 {
+            joined = "\(pillarLabels[0]) & \(pillarLabels[1])"
+        } else {
+            joined = "Multiple pillars"
+        }
+        let prefix = poss == "your" ? "Your" : poss
+        return "\(prefix) \(joined) low"
+    }
+
+    /// Subject reference: `"you"` or first name.
+    static func subjectRef(firstName: String, memberUserId: String?, authUserId: String?) -> String {
+        if isCurrentUser(memberUserId: memberUserId, authUserId: authUserId) {
+            return "you"
+        }
+        return firstName.split(separator: " ").first.map(String.init) ?? firstName
     }
 
     /// Rewrites common third-person phrases using `memberName` for the signed-in member’s own profile/chat.

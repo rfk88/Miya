@@ -85,3 +85,37 @@ struct MyChallengeView: View {
         )
     }
 }
+
+#Preview("My challenge — sleep") {
+    MyChallengeView(
+        challenge: ActiveChallenge(
+            id: "preview-challenge",
+            pillar: "sleep",
+            status: "active",
+            startDate: "2026-05-01",
+            endDate: "2026-05-11",
+            daysSucceeded: 4,
+            daysEvaluated: 5,
+            requiredSuccessDays: 5
+        )
+    )
+    .padding()
+    .background(Color.miyaCreamBg)
+}
+
+#Preview("My challenge — movement") {
+    MyChallengeView(
+        challenge: ActiveChallenge(
+            id: "preview-challenge-2",
+            pillar: "movement",
+            status: "active",
+            startDate: nil,
+            endDate: "2026-05-15",
+            daysSucceeded: 2,
+            daysEvaluated: 7,
+            requiredSuccessDays: 5
+        )
+    )
+    .padding()
+    .background(Color.miyaCreamBg)
+}

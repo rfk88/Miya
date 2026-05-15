@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftUIX
 import Supabase
+import Auth
 
 // MARK: - Notification System Components
 // Extracted from DashboardView.swift - Phase 8 of refactoring
@@ -17,6 +18,11 @@ struct FamilyNotificationDetailSheet: View {
     let item: FamilyNotificationItem
     let onStartRecommendedChallenge: () async -> Bool
     let dataManager: DataManager // Changed from @EnvironmentObject to parameter
+    /// Pillars with active alerts for this member (from consolidated dashboard card).
+    /// When 2+ entries, the notification chat opener lists all of them.
+    var siblingActivePillars: [VitalityPillar]? = nil
+    /// Longest pattern duration across consolidated alerts for this member.
+    var siblingMaxDurationDays: Int? = nil
     
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var authManager: AuthManager
@@ -1591,41 +1597,119 @@ struct FamilyNotificationDetailSheet: View {
         ]
     }
     
-    private func generateOpeningMessage(currentUserId: String?) -> String {
-        let firstName = item.memberName.split(separator: " ").first.map(String.init) ?? item.memberName
-        let pillar = item.pillar
-        let severity = severityLabel.lowercased()
-        
-        // Get relationship-aware references
-        let (memberRef, memberPossessive) = getRelationshipReferences(currentUserId: currentUserId)
-        
-        // Get duration from item (parse from debugWhy or use default)
-        let duration = parseDuration(from: item.debugWhy)
-        let metricName = config.displayName.lowercased()
-        
-        // Opening messages that escalate based on duration (severity is secondary)
-        // Duration is the primary factor - match on duration ranges first
-        switch duration {
-        // 3-day patterns (early warning)
-        case 1...3:
-            return "Hey — I noticed \(memberPossessive) \(metricName) has dropped over the last \(duration) days. This is an early warning. Let's talk about it so we can see how you can best support \(memberRef)."
-        
-        // 7-day patterns (needs attention)
-        case 4...7:
-            return "Hey — \(memberPossessive) pattern of lower \(metricName) has been going on for \(duration) days. I can see a drop in their baseline. Let's talk about this pattern and reach out to \(memberRef) so we can fix it before it grows."
-        
-        // 14-day patterns (critical)
-        case 8...14:
-            return "Hey — \(memberPossessive) \(metricName) has been below baseline for \(duration) days now. This needs attention. Let's figure out what's going on and how to help \(memberRef) get back on track."
-        
-        // 21+ day patterns (urgent - long-standing issue)
-        case 15...:
-            return "Hey — \(memberPossessive) \(metricName) has been below baseline for \(duration) days. This pattern has been going on for a while and needs your attention. Let's figure out what's happening and how to best support \(memberRef)."
-        
-        // Fallback (shouldn't reach here, but just in case)
+    private func viewerGreetingName() -> String {
+        onboardingManager.firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isViewingSelfInDetail: Bool {
+        MemberProfileOwnVoice.isCurrentUser(
+            memberUserId: item.memberUserId,
+            authUserId: SupabaseConfig.client.auth.currentUser?.id.uuidString
+        )
+    }
+
+    private var analyzingHealthPatternsLabel: String {
+        isViewingSelfInDetail
+            ? "Analyzing your health patterns..."
+            : "Analyzing \(item.memberName)'s health patterns..."
+    }
+
+    private var analyzingDataLabel: String {
+        isViewingSelfInDetail
+            ? "Miya is analyzing your data..."
+            : "Miya is analyzing \(item.memberName)'s data..."
+    }
+
+    /// Human-readable list: "A and B" or "A, B, and C" using dashboard pillar labels.
+    private func formattedPillarList(_ pillars: [VitalityPillar]) -> String {
+        let names = pillars.map { $0.dashboardDisplayName }
+        guard !names.isEmpty else { return "" }
+        switch names.count {
+        case 1:
+            return names[0]
+        case 2:
+            return "\(names[0]) and \(names[1])"
         default:
-            return "Hey — I noticed \(memberPossessive) \(metricName) has been off lately for about \(duration) days. Let's talk about what's going on and how you can support \(memberRef)."
+            let head = names.dropLast().joined(separator: ", ")
+            return "\(head), and \(names.last!)"
         }
+    }
+
+    private func generateOpeningMessage(currentUserId: String?) -> String {
+        let viewer = viewerGreetingName()
+        let greetingLead = viewer.isEmpty ? "Hey —" : "Hey \(viewer) —"
+
+        let memberFirstName = item.memberName.split(separator: " ").first.map(String.init) ?? item.memberName
+        let (memberRef, memberPossessive) = getRelationshipReferences(currentUserId: currentUserId)
+
+        let isSelf: Bool = {
+            guard let currentUserId,
+                  let mid = item.memberUserId else { return false }
+            return mid.lowercased() == currentUserId.lowercased()
+        }()
+
+        let duration = siblingMaxDurationDays ?? parseDuration(from: item.debugWhy)
+        let dayWord = duration == 1 ? "day" : "days"
+
+        let pillarsForCopy: [VitalityPillar] = {
+            if let s = siblingActivePillars, !s.isEmpty { return s }
+            return [item.pillar]
+        }()
+
+        let introLine: String
+        if isSelf {
+            introLine = "\(greetingLead) quick heads up."
+        } else {
+            introLine = "\(greetingLead) quick heads up about \(memberFirstName)."
+        }
+
+        if pillarsForCopy.count >= 2 {
+            let list = formattedPillarList(pillarsForCopy)
+            let middle = """
+
+            I'm currently seeing \(list) all running lower than we'd like for about \(duration) \(dayWord). When several signals move together, there's often one underlying driver — things like a stressful week, sleep getting thrown off, a minor illness, or day-to-day routines quietly drifting.
+            """
+            let outro: String
+            if isSelf {
+                outro = """
+
+                Want me to show you the numbers, walk through why this might be happening, or suggest a gentle next step?
+                """
+            } else {
+                outro = """
+
+                Want me to show you the numbers, walk through why this might be happening, or help you reach out to \(memberRef)?
+                """
+            }
+            return introLine + middle + outro
+        }
+
+        let metricLabel = config.displayName.lowercased()
+        let middle: String
+        if isSelf {
+            middle = """
+
+            I'm seeing your \(metricLabel) running lower than usual for about \(duration) \(dayWord). Patterns like this often come from disrupted sleep timing, less daily movement, or mounting stress — usually nothing to panic about, but worth catching early.
+            """
+        } else {
+            middle = """
+
+            I'm seeing \(memberPossessive) \(metricLabel) running lower than usual for about \(duration) \(dayWord). Patterns like this often come from disrupted sleep timing, less daily movement, or mounting stress — usually nothing to panic about, but worth catching early.
+            """
+        }
+        let outro: String
+        if isSelf {
+            outro = """
+
+            Want me to show you the numbers, dig into why this might be happening, or help you plan a small next step?
+            """
+        } else {
+            outro = """
+
+            Want me to show you the numbers, dig into why this might be happening, or help you reach out to \(memberRef)?
+            """
+        }
+        return introLine + middle + outro
     }
     
     private func getRelationshipReferences(currentUserId: String?) -> (memberRef: String, memberPossessive: String) {
@@ -2184,7 +2268,7 @@ struct FamilyNotificationDetailSheet: View {
                 HStack(spacing: 12) {
                     ProgressView()
                         .scaleEffect(0.9)
-                    Text("Analyzing \(item.memberName)'s health patterns...")
+                    Text(analyzingHealthPatternsLabel)
                         .font(.system(size: 16, weight: .medium))
                         .foregroundColor(.miyaTextPrimary)
                 }
@@ -2666,7 +2750,7 @@ struct FamilyNotificationDetailSheet: View {
                 .animated(true)
                 .style(.large)
             
-            Text("Miya is analyzing \(item.memberName)'s data...")
+            Text(analyzingDataLabel)
                 .font(.system(size: 16))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -2748,7 +2832,10 @@ struct FamilyNotificationDetailSheet: View {
     @ViewBuilder
     private var careContextBanner: some View {
         if let msg = item.outcomeMessage, !msg.isEmpty {
-            Text(msg)
+            let displayMsg = isViewingSelfInDetail
+                ? MemberProfileOwnVoice.rewriteMemberFacingCopy(memberName: item.memberName, text: msg)
+                : msg
+            Text(displayMsg)
                 .font(.system(size: 13))
                 .foregroundColor(.miyaTextSecondary)
                 .padding(10)

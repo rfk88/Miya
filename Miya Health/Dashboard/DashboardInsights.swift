@@ -11,6 +11,7 @@ struct FamilyVitalityInsightsCard: View {
     let trendCoverage: TrendCoverageStatus?
     let membersWithData: Int?
     let membersTotal: Int?
+    let viewerUserId: String?
     let onStartChallenge: (VitalityPillar) -> Void
 
     // MARK: - Pillar Visual Mapping
@@ -64,136 +65,139 @@ struct FamilyVitalityInsightsCard: View {
         trendInsights.first?.pillar ?? snapshot.focusPillar
     }
 
+    private var hasTrendCoverage: Bool {
+        trendCoverage?.hasMinimumCoverage == true
+    }
+
+    /// Middle column: trends, snapshot insights, or (intentionally) nothing—never misleading “connect wearable” copy.
+    private var hasInsightBody: Bool {
+        if hasTrendCoverage { return true }
+        return snapshot.membersIncluded > 0
+    }
+
+    private var hasRecommendationsFooter: Bool {
+        hasTrendCoverage && !recommendations.isEmpty
+    }
+
+    private var shouldRenderCard: Bool {
+        hasInsightBody || hasRecommendationsFooter
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            
-            // SECTION HEADER
-            if hasTrendInsights {
-                Text("What needs attention this week")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.secondary)
-            }
-            
-            // TREND INSIGHT CARDS (highest priority - only show if we have trend data)
-            if trendCoverage?.hasMinimumCoverage == true && hasTrendInsights {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(trendInsights.prefix(2)) { insight in
-                        TrendInsightCard(insight: insight) {
-                            onStartChallenge(insight.pillar)
+        Group {
+            if shouldRenderCard {
+                VStack(alignment: .leading, spacing: 20) {
+
+                    // SECTION HEADER
+                    if hasTrendInsights {
+                        Text("What needs attention this week")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.secondary)
+                    }
+
+                    // TREND INSIGHT CARDS (highest priority - only show if we have trend data)
+                    if hasTrendCoverage && hasTrendInsights {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(trendInsights.prefix(2)) { insight in
+                                TrendInsightCard(insight: insight) {
+                                    onStartChallenge(insight.pillar)
+                                }
+                            }
                         }
-                    }
-                }
-            } else if trendCoverage?.hasMinimumCoverage == true && !hasTrendInsights {
-                // Have trend data but no insights detected
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("No patterns detected")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.miyaTextPrimary)
-                    Text("We'll alert you when a meaningful change appears.")
-                        .font(.system(size: 13))
-                        .foregroundColor(.secondary)
-                }
-            } else if snapshot.membersIncluded == 0 {
-                // No members with data at all
-                HStack(alignment: .top, spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color.gray.opacity(0.15))
-                            .frame(width: 48, height: 48)
-                        
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundColor(.gray)
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("No recent data yet")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-                        
-                        Text("Connect wearables and sync data to see family insights.")
-                            .font(.system(size: 13))
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Spacer()
-                }
-            } else {
-                // FALLBACK: Show snapshot-based insights (from current member scores)
-                // This shows even when we don't have trend data yet
-                
-                // Show coverage message as informational context (not a blocker)
-                if let cov = coverageState {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(cov.title)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-                        Text(cov.subtitle)
-                            .font(.system(size: 13))
-                            .foregroundColor(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                
-                // Show snapshot headline and help cards
-                HStack(alignment: .top, spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(pillarColor(for: primaryPillar).opacity(0.15))
-                            .frame(width: 48, height: 48)
-                        
-                        Image(systemName: pillarIcon(for: primaryPillar))
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundColor(pillarColor(for: primaryPillar))
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(snapshot.headline)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.miyaTextPrimary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        
-                        if let sub = snapshot.subheadline {
-                            Text(sub)
+                    } else if hasTrendCoverage && !hasTrendInsights {
+                        // Have trend data but no insights detected
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("No patterns detected")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.miyaTextPrimary)
+                            Text("We'll alert you when a meaningful change appears.")
                                 .font(.system(size: 13))
                                 .foregroundColor(.secondary)
                         }
+                    } else if snapshot.membersIncluded == 0 {
+                        EmptyView()
+                    } else {
+                        // FALLBACK: Show snapshot-based insights (from current member scores)
+                        // This shows even when we don't have trend data yet
+
+                        // Show coverage message as informational context (not a blocker)
+                        if let cov = coverageState {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(cov.title)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(.miyaTextPrimary)
+                                Text(cov.subtitle)
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+
+                        // Show snapshot headline and help cards
+                        HStack(alignment: .top, spacing: 12) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(pillarColor(for: primaryPillar).opacity(0.15))
+                                    .frame(width: 48, height: 48)
+
+                                Image(systemName: pillarIcon(for: primaryPillar))
+                                    .font(.system(size: 22, weight: .semibold))
+                                    .foregroundColor(pillarColor(for: primaryPillar))
+                            }
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                if !snapshot.headline(viewerUserId: viewerUserId).isEmpty {
+                                    Text(snapshot.headline(viewerUserId: viewerUserId))
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .foregroundColor(.miyaTextPrimary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+
+                                if let sub = snapshot.subheadline {
+                                    Text(sub)
+                                        .font(.system(size: 13))
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+
+                            Spacer()
+                        }
+
+                        // Show help cards from snapshot (member-based insights)
+                        if !snapshot.helpCards.isEmpty {
+                            VStack(alignment: .leading, spacing: 12) {
+                                ForEach(snapshot.helpCards.prefix(2)) { card in
+                                    FamilyHelpActionCard(card: card) {
+                                        onStartChallenge(card.focusPillar)
+                                    }
+                                }
+                            }
+                        }
                     }
-                    
-                    Spacer()
-                }
-                
-                // Show help cards from snapshot (member-based insights)
-                if !snapshot.helpCards.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(snapshot.helpCards.prefix(2)) { card in
-                            FamilyHelpActionCard(card: card) {
-                                onStartChallenge(card.focusPillar)
+
+                    // ACTIONABLE RECOMMENDATIONS (if coverage ok and insights exist)
+                    if hasRecommendationsFooter {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("What to do this week")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(.secondary)
+
+                            ForEach(recommendations.prefix(2)) { row in
+                                RecommendationRowView(row: row, onTap: {
+                                    onStartChallenge(row.pillar)
+                                })
                             }
                         }
                     }
                 }
-            }
-            
-            // ACTIONABLE RECOMMENDATIONS (if coverage ok and insights exist)
-            if trendCoverage?.hasMinimumCoverage == true && !recommendations.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("What to do this week")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.secondary)
-                    
-                    ForEach(recommendations.prefix(2)) { row in
-                        RecommendationRowView(row: row, onTap: {
-                            onStartChallenge(row.pillar)
-                        })
-                    }
-                }
+                .padding(16)
+                .background(Color.white)
+                .cornerRadius(24)
+                .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
+            } else {
+                EmptyView()
             }
         }
-        .padding(16)
-        .background(Color.white)
-        .cornerRadius(24)
-        .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
     }
 }
 

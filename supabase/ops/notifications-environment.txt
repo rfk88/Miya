@@ -9,6 +9,10 @@ Miya notifications — deployment checklist (run in Supabase Dashboard / CI)
 2) Schedule POST to process_notifications
    - Example: every 1–5 minutes, POST { "batchSize": 50, "maxAge": 72 }
    - URL: https://<project>.supabase.co/functions/v1/process_notifications
+   - Or apply migration 20260517120000_process_notifications_cron.sql and set:
+       alter database postgres set app.miya_admin_secret = '<MIYA_ADMIN_SECRET>';
+       alter database postgres set app.process_notifications_url =
+         'https://<project-ref>.supabase.co/functions/v1/process_notifications';
 
 3) Pattern alerts (rook / patterns)
    - MIYA_PATTERN_SHADOW_MODE: set to "false" for production enqueueing (explicit "true" = shadow only)
@@ -19,3 +23,13 @@ Miya notifications — deployment checklist (run in Supabase Dashboard / CI)
 5) Smoke test
    - GET process_notifications → { ok: true, message: "process_notifications worker alive" }
    - POST with admin secret on a pending row → device receives push (after APNs configured)
+
+6) Xcode Debug device verification (lock-screen push)
+   - Physical device (not Simulator); clean build after adding Push capability
+   - Delete app, reinstall; allow notifications in iOS Settings
+   - Xcode console: "PushRegistration: APNs device token received" and "Device token registered"
+   - Supabase SQL:
+       select device_token, is_active from device_tokens where user_id = '<uuid>';
+       select notify_push from user_profiles where user_id = '<uuid>';
+   - Kill app (swipe away); enqueue a push (pattern alert or manual notification_queue row with channel push)
+   - Worker runs → row status sent; banner appears on lock screen without opening app

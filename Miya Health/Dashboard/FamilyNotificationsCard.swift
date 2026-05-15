@@ -5,6 +5,7 @@ import SwiftUI
 
 struct FamilyNotificationsCard: View {
     let items: [FamilyNotificationItem]
+    let currentUserId: String?
     let onTap: (FamilyNotificationItem) -> Void
     let onSeeAll: () -> Void
     let onSnooze: (FamilyNotificationItem, Int?) -> Void
@@ -17,6 +18,7 @@ struct FamilyNotificationsCard: View {
         let id: String
         let memberInitials: String
         let memberName: String
+        let memberUserId: String?
         var pillars: [VitalityPillar]
         let overallSeverity: TrendSeverity
         let windowDays: Int?
@@ -49,6 +51,7 @@ struct FamilyNotificationsCard: View {
                         id: existing.id,
                         memberInitials: existing.memberInitials,
                         memberName: existing.memberName,
+                        memberUserId: existing.memberUserId,
                         pillars: existing.pillars,
                         overallSeverity: severity,
                         windowDays: existing.windowDays ?? item.triggerWindowDays,
@@ -62,6 +65,7 @@ struct FamilyNotificationsCard: View {
                     id: key,
                     memberInitials: item.memberInitials,
                     memberName: item.memberName,
+                    memberUserId: item.memberUserId,
                     pillars: [item.pillar],
                     overallSeverity: severity,
                     windowDays: item.triggerWindowDays,
@@ -385,28 +389,19 @@ struct FamilyNotificationsCard: View {
     
     private func summaryLabel(for group: GroupedNotification) -> String {
         let firstName = group.memberName.components(separatedBy: " ").first ?? group.memberName
-        let possessive = firstName.hasSuffix("s") ? "\(firstName)'" : "\(firstName)'s"
-
-        let names = group.pillars.map { pillar -> String in
+        let pillarLabels = group.pillars.map { pillar -> String in
             switch pillar {
             case .sleep: return "Sleep"
             case .movement: return "Activity"
             case .stress: return "Recovery"
             }
         }
-        
-        let joined: String
-        if names.isEmpty {
-            joined = "Check in"
-        } else if names.count == 1 {
-            joined = names[0]
-        } else if names.count == 2 {
-            joined = "\(names[0]) & \(names[1])"
-        } else {
-            joined = "Multiple pillars"
-        }
-        
-        return "\(possessive) \(joined) low"
+        return MemberProfileOwnVoice.metricBelowBaselineSummary(
+            pillarLabels: pillarLabels,
+            firstName: firstName,
+            memberUserId: group.memberUserId,
+            authUserId: currentUserId
+        )
     }
 }
 
@@ -434,6 +429,7 @@ private extension View {
 #Preview("FamilyNotificationsCard") {
     FamilyNotificationsCard(
         items: [],
+        currentUserId: nil,
         onTap: { _ in },
         onSeeAll: {},
         onSnooze: { _, _ in }

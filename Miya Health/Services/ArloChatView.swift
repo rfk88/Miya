@@ -20,8 +20,23 @@ struct ArloChatView: View {
 
     let firstName: String
     let openingLine: String
+    let dashboardContext: ArloChatAPI.DashboardContext?
     /// Parent can close chat and push Edit Profile (e.g. when user taps Open Settings on consent sheet).
     var onNeedAIConsentSettings: (() -> Void)? = nil
+
+    init(
+        familyId: UUID,
+        firstName: String,
+        openingLine: String,
+        dashboardContext: ArloChatAPI.DashboardContext? = nil,
+        onNeedAIConsentSettings: (() -> Void)? = nil
+    ) {
+        self.familyId = familyId
+        self.firstName = firstName
+        self.openingLine = openingLine
+        self.dashboardContext = dashboardContext
+        self.onNeedAIConsentSettings = onNeedAIConsentSettings
+    }
 
     @State private var messages: [ChatMessage] = []
     @State private var inputText: String = ""
@@ -603,7 +618,8 @@ struct ArloChatView: View {
             let reply = try await ArloChatAPI.send(
                 messages: payloadMessages,
                 firstName: firstName,
-                openingLine: openingLine
+                openingLine: openingLine,
+                dashboardContext: dashboardContext
             )
 
             await MainActor.run {

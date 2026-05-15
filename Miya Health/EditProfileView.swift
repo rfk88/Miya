@@ -387,7 +387,17 @@ struct EditProfileView: View {
                 Toggle("In-app notifications", isOn: $vm.notifyInApp)
                     .onChange(of: vm.notifyInApp) { _ in vm.fieldDidChange() }
                 Toggle("Push notifications", isOn: $vm.notifyPush)
-                    .onChange(of: vm.notifyPush) { _ in vm.fieldDidChange() }
+                    .onChange(of: vm.notifyPush) { _, enabled in
+                        vm.fieldDidChange()
+                        if enabled {
+                            Task {
+                                let granted = await PushNotificationRegistration.requestAuthorizationAndRegister()
+                                if !granted {
+                                    vm.notifyPush = false
+                                }
+                            }
+                        }
+                    }
                 Toggle("Email notifications", isOn: $vm.notifyEmail)
                     .onChange(of: vm.notifyEmail) { _ in vm.fieldDidChange() }
 
@@ -654,6 +664,11 @@ struct EditProfileView: View {
                 "notify_email": .bool(vm.notifyEmail)
             ]
             try await dataManager.updateUserProfile(notificationPayload)
+
+            if vm.notifyPush {
+                _ = await PushNotificationRegistration.requestAuthorizationAndRegister()
+                await PushNotificationRegistration.retryPendingTokenUpload()
+            }
 
             if vm.showFamilyPatternRecipientSettings, !vm.patternAlertFamilyPeers.isEmpty {
                 try await dataManager.setPatternAlertExcludedRecipients(

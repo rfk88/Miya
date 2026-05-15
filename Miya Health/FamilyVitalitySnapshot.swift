@@ -43,10 +43,9 @@ struct FamilyVitalitySnapshot {
     let membersTotal: Int
 
     // MARK: - Snapshot copy
-    var headline: String {
-        // No recent data
+    func headline(viewerUserId: String? = nil) -> String {
         if membersIncluded == 0 {
-            return "No recent data yet. Connect wearables to start building your family score."
+            return ""
         }
 
         // Helper lookups
@@ -65,11 +64,17 @@ struct FamilyVitalitySnapshot {
 
         // One needs support
         if supportMembers.count == 1, let first = supportMembers.first {
+            if MemberProfileOwnVoice.isCurrentUser(memberUserId: first.memberUserId, authUserId: viewerUserId) {
+                return "You're below your personal target. Focus on \(focus) this week."
+            }
             return "\(firstName(first.memberName)) is below their personal target. Focus on \(focus) this week."
         }
 
         // At least one to celebrate
         if let firstCelebrate = celebrateMembers.first {
+            if MemberProfileOwnVoice.isCurrentUser(memberUserId: firstCelebrate.memberUserId, authUserId: viewerUserId) {
+                return "Nice work — you're near your personal target. Keep momentum in \(strength)."
+            }
             return "Nice work — \(firstName(firstCelebrate.memberName)) is near their personal target. Keep momentum in \(strength)."
         }
 
@@ -162,6 +167,13 @@ struct PillarData {
 
 // MARK: - Computation Engine
 
+/// How the caller scoped members for `FamilyVitalitySnapshotEngine.compute`.
+enum FamilyVitalitySnapshotHouseholdMode: Equatable {
+    case standard
+    /// Current user is the only eligible member while other household members exist; avoid self-targeting support/help cards.
+    case selfFallbackMultiMemberHome
+}
+
 struct FamilyVitalitySnapshotEngine {
     
     /// Compute family vitality snapshot from current member data.
@@ -170,12 +182,14 @@ struct FamilyVitalitySnapshotEngine {
     ///   - familyAverage: Family average vitality score (from RPC or computed)
     ///   - pillarAverages: Family averages per pillar (sleep, movement, stress)
     ///   - membersTotal: Total family members (for context)
+    ///   - householdMode: When `.selfFallbackMultiMemberHome`, omit support + help cards so the current user is not shamed while others are not yet eligible.
     /// - Returns: Computed snapshot with insights
     static func compute(
         members: [FamilyMemberScore],
         familyAverage: Int?,
         pillarAverages: [VitalityPillar: Int],  // e.g., [.sleep: 72, .movement: 86, .stress: 64]
-        membersTotal: Int
+        membersTotal: Int,
+        householdMode: FamilyVitalitySnapshotHouseholdMode = .standard
     ) -> FamilyVitalitySnapshot {
         
         // Filter to members eligible for insight calculations:
@@ -218,14 +232,23 @@ struct FamilyVitalitySnapshotEngine {
         let strengthPillar = byValueAscending.last?.key
         
         // 5. Support members (neutral, supportive framing)
-        let supportMembers = computeSupportMembers(members: activeMembers)
-        
+        let supportMembersRaw = computeSupportMembers(members: activeMembers)
+
         // 6. Celebrate members (neutral, celebratory framing)
         let celebrateMembers = computeCelebrateMembers(members: activeMembers)
 
         // 7. Member help cards from supportMembers (max 2)
-        let helpCards = buildHelpCards(from: supportMembers, focusPillarFallback: focusPillar)
-        
+        let supportMembers: [MemberInsight]
+        let helpCards: [MemberHelpCard]
+        switch householdMode {
+        case .selfFallbackMultiMemberHome:
+            supportMembers = []
+            helpCards = []
+        case .standard:
+            supportMembers = supportMembersRaw
+            helpCards = buildHelpCards(from: supportMembersRaw, focusPillarFallback: focusPillar)
+        }
+
         return FamilyVitalitySnapshot(
             familyStateLabel: familyState,
             alignmentLevel: alignment,
@@ -305,7 +328,15 @@ struct FamilyVitalitySnapshotEngine {
             
             // Neutral, supportive message (no blame, no comparison)
             let message: String
-            if member.currentScore < 40 {
+            if member.isMe {
+                if member.currentScore < 40 {
+                    message = "You have room to build healthy habits."
+                } else if member.currentScore < 60 {
+                    message = "You're working on your wellness goals."
+                } else {
+                    message = "You're making progress toward your vitality goals."
+                }
+            } else if member.currentScore < 40 {
                 message = "\(member.name) has room to build healthy habits."
             } else if member.currentScore < 60 {
                 message = "\(member.name) is working on wellness goals."
@@ -343,7 +374,15 @@ struct FamilyVitalitySnapshotEngine {
             
             // Neutral, celebratory message (no comparison, no judgment)
             let message: String
-            if member.currentScore >= 80 {
+            if member.isMe {
+                if member.currentScore >= 80 {
+                    message = "You're showing strong vitality."
+                } else if member.currentScore >= 70 {
+                    message = "You're maintaining good wellness patterns."
+                } else {
+                    message = "You're making positive progress."
+                }
+            } else if member.currentScore >= 80 {
                 message = "\(member.name) is showing strong vitality."
             } else if member.currentScore >= 70 {
                 message = "\(member.name) is maintaining good wellness patterns."

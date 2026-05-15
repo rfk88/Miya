@@ -228,6 +228,9 @@ fileprivate func previousResumeStep(for m: OnboardingManager) -> Int? {
     if m.guidedSetupStatus == .dataCompletePendingReview, m.invitedMemberId != nil {
         return nil
     }
+    if m.isInvitedGuidedSetupMember, (3...5).contains(m.currentStep) {
+        return nil
+    }
     let step = m.currentStep
     let invited = m.isInvitedUser
     if invited && step <= 1 {
@@ -344,17 +347,21 @@ struct LandingView: View {
         if onboardingManager.guidedSetupStatus == .dataCompletePendingReview,
            let memberId = onboardingManager.invitedMemberId {
             GuidedSetupReviewView(memberId: memberId)
+        } else if onboardingManager.isInvitedGuidedSetupMember,
+                  (3...5).contains(onboardingManager.currentStep) {
+            // Safety net if step was not clamped yet: guided invitees never use self-serve health steps 3–5.
+            WearableSelectionView(isGuidedSetupInvite: true)
         } else {
         // Invited users should never be routed into superadmin-only onboarding screens (family creation / inviting others).
         // This is a deterministic guard against cross-account persisted steps.
         if onboardingManager.isInvitedUser && onboardingManager.currentStep <= 1 {
-            WearableSelectionView()
+            WearableSelectionView(isGuidedSetupInvite: onboardingManager.isInvitedGuidedSetupMember)
         } else {
         switch onboardingManager.currentStep {
         case 1:
             SuperadminOnboardingView()
         case 2:
-            WearableSelectionView()
+            WearableSelectionView(isGuidedSetupInvite: onboardingManager.isInvitedUser && onboardingManager.isInvitedGuidedSetupMember)
         case 3:
             AboutYouView()
         case 4:
@@ -712,7 +719,6 @@ struct EnterCodeView: View {
     
     // Navigation and error state
     @State private var navigateToWearables: Bool = false
-    @State private var navigateToFullOnboarding: Bool = false
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
     @State private var isAppleSignInLoading: Bool = false
@@ -782,9 +788,6 @@ struct EnterCodeView: View {
         // Invited members use the standard onboarding flow screens (role-tailored)
         .navigationDestination(isPresented: $navigateToWearables) {
             WearableSelectionView(isGuidedSetupInvite: wearablesIsGuidedSetupInvite)
-        }
-        .navigationDestination(isPresented: $navigateToFullOnboarding) {
-            AboutYouView()  // Skip to AboutYou since they're already in a family
         }
     }
     
@@ -938,6 +941,7 @@ struct EnterCodeView: View {
             
             // Store in onboarding manager
             onboardingManager.firstName = details.firstName
+            onboardingManager.invitedMemberOnboardingType = details.onboardingType
             onboardingManager.guidedSetupStatus = details.guidedSetupStatus
             onboardingManager.invitedMemberId = details.memberId
             onboardingManager.invitedFamilyId = details.familyId
@@ -968,6 +972,7 @@ struct EnterCodeView: View {
             onboardingManager.currentUserId = userId
             onboardingManager.isInvitedUser = true
             onboardingManager.familyName = details.familyName
+            onboardingManager.invitedMemberOnboardingType = details.onboardingType
             onboardingManager.guidedSetupStatus = details.guidedSetupStatus
             onboardingManager.invitedMemberId = details.memberId
             onboardingManager.invitedFamilyId = details.familyId
@@ -1014,6 +1019,7 @@ struct EnterCodeView: View {
         do {
             try await dataManager.switchToSelfSetup(memberId: details.memberId)
             onboardingManager.guidedSetupStatus = nil
+            onboardingManager.invitedMemberOnboardingType = "Self Setup"
             
             // Standard onboarding
             wearablesIsGuidedSetupInvite = false

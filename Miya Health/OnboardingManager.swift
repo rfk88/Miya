@@ -5,7 +5,7 @@
 //  AUDIT REPORT (guided onboarding status-driven routing)
 //  - Compile audit: Cannot run `xcodebuild` in this environment (no Xcode). Verified compile-safety via lints/type checks in Cursor.
 //  - State integrity: Added canonical invite/guided fields:
-//      `guidedSetupStatus`, `invitedMemberId`, `invitedFamilyId`, and computed `canAdminEditData`
+//      `guidedSetupStatus`, `invitedMemberId`, `invitedFamilyId`, `invitedMemberOnboardingType`, and computed `canAdminEditData`
 //    so guided behavior is derived from `guided_setup_status`, not inferred UI booleans.
 //  - DB transition correctness: These fields are populated from `InviteDetails` during invite redemption.
 //  - Known limitations: `guidedSetupStatus` is stored as String for compatibility with DB values; stricter enum typing can be layered later.
@@ -45,10 +45,28 @@ class OnboardingManager: ObservableObject {
     
     /// For invited users: family ID they joined via invite.
     @Published var invitedFamilyId: String? = nil
-    
+
+    /// `family_members.onboarding_type` for the current user (`Guided Setup` vs `Self Setup`). Hydrated from DB in `refreshGuidedContextFromDB`; also set during invite redemption in `EnterCodeView`.
+    @Published var invitedMemberOnboardingType: String? = nil
+
     /// True when the admin has an actionable step to fill guided data (status-driven; no inference).
     var canAdminEditData: Bool {
         guidedSetupStatus == .acceptedAwaitingData
+    }
+
+    /// Invitee whose family row is still Guided Setup (excludes Self Setup and after “fill myself”).
+    var isInvitedGuidedSetupMember: Bool {
+        isInvitedUser && invitedMemberOnboardingType == "Guided Setup"
+    }
+
+    /// If a guided invitee’s persisted step points at the self-serve health questionnaire (3–5), snap back to wearables. Call after `refreshGuidedContextFromDB` during hydration.
+    func applyGuidedInvitedHealthStepClamp() {
+        guard isInvitedGuidedSetupMember else { return }
+        guard (3...5).contains(currentStep) else { return }
+        setCurrentStep(2)
+#if DEBUG
+        print("🔧 OnboardingManager: applyGuidedInvitedHealthStepClamp → step 2 (guided invitee)")
+#endif
     }
     
     /// Refresh guided context from database for authenticated user.
@@ -61,11 +79,14 @@ class OnboardingManager: ObservableObject {
         
         do {
             guard let rec = try await dataManager.fetchMyFamilyMemberRecord() else {
+                invitedMemberOnboardingType = nil
                 #if DEBUG
                 print("🔄 refreshGuidedContextFromDB: No family_members row for current user")
                 #endif
                 return
             }
+
+            invitedMemberOnboardingType = rec.onboardingType
             
             // Set canonical state
             invitedMemberId = rec.id.uuidString
@@ -238,6 +259,7 @@ class OnboardingManager: ObservableObject {
         guidedSetupStatus = nil
         invitedMemberId = nil
         invitedFamilyId = nil
+        invitedMemberOnboardingType = nil
 
         // Step 1: Account
         firstName = ""

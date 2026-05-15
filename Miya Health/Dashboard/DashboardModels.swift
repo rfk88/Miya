@@ -34,6 +34,11 @@ struct FamilyMemberScore: Identifiable {
         return max(0.0, min(ratio, 1.0))
     }
     
+    /// Eligible for family vitality snapshot / insights (matches `FamilyVitalitySnapshotEngine` filters).
+    var isEligibleForFamilyVitalitySnapshot: Bool {
+        !isPending && hasScore && isScoreFresh && optimalScore > 0
+    }
+
     var isPending: Bool {
         // BUG 2 FIX: Guided members are pending until reviewed_complete
         if onboardingType == "Guided Setup" {

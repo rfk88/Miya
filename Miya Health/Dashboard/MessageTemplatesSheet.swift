@@ -1,5 +1,6 @@
 import SwiftUI
 import Supabase
+import Auth
 
 // MARK: - Message Templates Sheet
 // Extracted from DashboardNotifications.swift for better compilation performance

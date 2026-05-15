@@ -288,4 +288,25 @@ extension DashboardView {
             DashboardVitalityLocalNotifications.cancelMissingVitality()
         }
     }
+
+    // MARK: - Family Vitality Overview (hero navigation)
+
+    /// Builds the pushed overview screen. Kept on `DashboardView`’s extension so `DashboardView.swift`
+    /// does not need a direct type reference (avoids “Cannot find … in scope” when the IDE splits type-checking).
+    @ViewBuilder
+    internal func familyVitalityOverviewDestination(for score: Int) -> some View {
+        FamilyVitalityOverviewView(
+            familyScore: score,
+            verdict: vitalityLabel(for: score),
+            membersWithData: familyVitalityMembersWithData,
+            membersTotal: familyVitalityMembersTotal,
+            vitalityFactors: vitalityFactors,
+            fourWeekDelta: familyVitalityFourWeekDelta,
+            familySnapshot: familySnapshot,
+            trendInsights: trendInsights,
+            trendCoverage: trendCoverage,
+            familyMembers: familyMembers,
+            alertMemberIds: alertMemberIdSet
+        )
+    }
 }
